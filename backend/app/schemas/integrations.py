@@ -1,0 +1,37 @@
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class GitHubConfigRequest(BaseModel):
+    repository_url: str = Field(min_length=1)
+    branch_target: str = "main"
+    personal_access_token: str = ""
+    oauth_connected: bool = False
+
+
+class JiraConfigRequest(BaseModel):
+    site_url: str = Field(min_length=1)
+    project_keys: str = ""
+    api_token: str = ""
+
+
+class IntegrationConfigResponse(BaseModel):
+    source: Literal["github", "jira"]
+    configured: bool
+    message: str
+
+
+class IntegrationSyncResponse(BaseModel):
+    source: str
+    cognee_dataset: str
+    documents_ingested: int
+    graph_nodes_created: int
+    graph_edges_created: int
+    narrative_preview: str
+
+
+class GlobalSyncResponse(BaseModel):
+    results: list[IntegrationSyncResponse]
+    total_nodes_created: int
+    total_edges_created: int

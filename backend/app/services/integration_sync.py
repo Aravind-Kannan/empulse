@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import SkipValidation
+from sqlalchemy.orm import Session
+
+from cognee.infrastructure.engine import DataPoint
+from cognee.infrastructure.engine.models.Edge import Edge
+from cognee.tasks.storage import add_data_points
+
+from app.config import get_settings, run_cognee_add_and_cognify
+from app.models.operational import Component, Employee
+from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
+from app.schemas.org import ACME_ORG_CHART
+from app.services.integration_telemetry import (
+    apply_github_telemetry,
+    apply_jira_telemetry,
+    get_telemetry_snapshot,
+)
+from app.services.cognee_ingest import GraphComponent, GraphEmployee
+
+_integration_configs: dict[str, GitHubConfigRequest | JiraConfigRequest] = {}
+
+
+class GraphPullRequest(DataPoint):
+    pr_number: int
+    commit_sha: str
+    branch: str
+    repository_url: str
+    loc_added: int
+    loc_removed: int
+    file_path: str
+    contributedTo: SkipValidation[Any] = None
+    modifies: SkipValidation[Any] = None
+    metadata: dict = {"index_fields": ["pr_number", "file_path", "branch"]}
+
+
+class GraphJiraTicket(DataPoint):
+    ticket_id: str
+    issue_type: str
+    priority: str
+    status: str
+    project_key: str
+    assignedTo: SkipValidation[Any] = None
+    blocksComponent: SkipValidation[Any] = None
+    metadata: dict = {"index_fields": ["ticket_id", "issue_type", "status"]}
+
+
+from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
+
+
+def save_github_config(config: GitHubConfigRequest) -> None:
+    _integration_configs["github"] = config
+
+
+def save_jira_config(config: JiraConfigRequest) -> None:
+    _integration_configs["jira"] = config
+
+
+def get_github_config() -> GitHubConfigRequest | None:
+    config = _integration_configs.get("github")
+    return config if isinstance(config, GitHubConfigRequest) else None
+
+
+def get_jira_config() -> JiraConfigRequest | None:
+    config = _integration_configs.get("jira")
+    return config if isinstance(config, JiraConfigRequest) else None
+
+
+def _load_org_context(db: Session) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent]]:
+    employees = db.query(Employee).all()
+    components = db.query(Component).all()
+
+    if not employees:
+        employee_nodes = {
+            employee.id: GraphEmployee(
+                external_id=employee.id,
+                name=employee.name,
+                role=employee.role,
+                email=employee.email,
+                tenure_years=employee.tenure_years,
+            )
+            for employee in ACME_ORG_CHART.employees
+        }
+        component_nodes = {
+            component.id: GraphComponent(
+                external_id=component.id,
+                name=component.name,
+                description=component.description,
+                open_tasks_count=component.open_tasks_count,
+                unresolved_incidents=component.unresolved_incidents,
+            )
+            for component in ACME_ORG_CHART.components
+        }
+        return employee_nodes, component_nodes
+
+    employee_nodes = {
+        employee.id: GraphEmployee(
+            external_id=employee.id,
+            name=employee.name,
+            role=employee.role,
+            email=employee.email,
+            tenure_years=employee.tenure_years,
+        )
+        for employee in employees
+    }
+    component_nodes = {
+        component.id: GraphComponent(
+            external_id=component.id,
+            name=component.name,
+            description=component.description,
+            open_tasks_count=component.open_tasks_count,
+            unresolved_incidents=component.unresolved_incidents,
+        )
+        for component in components
+    }
+    return employee_nodes, component_nodes
+
+
+def analyze_github_payload(
+    config: GitHubConfigRequest,
+    employee_nodes: dict[str, GraphEmployee],
+    component_nodes: dict[str, GraphComponent],
+) -> tuple[str, list[GraphPullRequest], int]:
+    """Mock document analyzer for GitHub commits, PRs, diffs, and LOC."""
+    narrative_lines = [
+        f"GitHub repository sync: {config.repository_url}",
+        f"Target branch: {config.branch_target}",
+        "Engineering activity feed with pull requests, commits, and file diffs.",
+    ]
+    data_points: list[GraphPullRequest] = []
+    edge_count = 0
+
+    for activity in MOCK_GITHUB_ACTIVITY:
+        author = employee_nodes.get(activity["author_employee_id"])
+        for file_change in activity["files"]:
+            component = component_nodes.get(file_change["component_id"])
+            pr_node = GraphPullRequest(
+                pr_number=activity["pr_number"],
+                commit_sha=activity["commit_sha"],
+                branch=activity.get("branch", config.branch_target),
+                repository_url=config.repository_url,
+                loc_added=file_change["loc_added"],
+                loc_removed=file_change["loc_removed"],
+                file_path=file_change["path"],
+            )
+            if author:
+                pr_node.contributedTo = (
+                    Edge(
+                        relationship_type="contributedTo",
+                        properties={
+                            "loc_added": file_change["loc_added"],
+                            "loc_removed": file_change["loc_removed"],
+                        },
+                    ),
+                    author,
+                )
+                edge_count += 1
+            if component:
+                pr_node.modifies = (
+                    Edge(
+                        relationship_type="modifies",
+                        properties={"file_path": file_change["path"]},
+                    ),
+                    component,
+                )
+                edge_count += 1
+
+            data_points.append(pr_node)
+            author_name = author.name if author else "Unknown engineer"
+            component_name = component.name if component else file_change["component_id"]
+            narrative_lines.append(
+                f"PR #{activity['pr_number']} commit {activity['commit_sha']}: "
+                f"{author_name} changed {file_change['path']} "
+                f"(+{file_change['loc_added']}/-{file_change['loc_removed']} LOC) "
+                f"modifying {component_name}."
+            )
+
+    return "\n".join(narrative_lines), data_points, edge_count
+
+
+def analyze_jira_payload(
+    config: JiraConfigRequest,
+    employee_nodes: dict[str, GraphEmployee],
+    component_nodes: dict[str, GraphComponent],
+) -> tuple[str, list[GraphJiraTicket], int]:
+    """Mock document analyzer for Jira tickets, priorities, and assignments."""
+    project_filter = {
+        key.strip().upper()
+        for key in config.project_keys.split(",")
+        if key.strip()
+    }
+    narrative_lines = [
+        f"Jira site sync: {config.site_url}",
+        f"Project keys: {config.project_keys or 'all'}",
+        "Issue tracker feed with bugs, tasks, priorities, and assignees.",
+    ]
+    data_points: list[GraphJiraTicket] = []
+    edge_count = 0
+
+    for issue in MOCK_JIRA_ISSUES:
+        if project_filter and issue["project_key"] not in project_filter:
+            continue
+
+        assignee = (
+            employee_nodes.get(issue["assignee_employee_id"])
+            if issue.get("assignee_employee_id")
+            else None
+        )
+        component = component_nodes.get(issue["component_id"])
+        ticket_node = GraphJiraTicket(
+            ticket_id=issue["ticket_id"],
+            issue_type=issue["issue_type"],
+            priority=issue["priority"],
+            status=issue["status"],
+            project_key=issue["project_key"],
+        )
+        if assignee:
+            ticket_node.assignedTo = (
+                Edge(relationship_type="assignedTo"),
+                assignee,
+            )
+            edge_count += 1
+        if component:
+            ticket_node.blocksComponent = (
+                Edge(
+                    relationship_type="blocksComponent",
+                    properties={"priority": issue["priority"], "status": issue["status"]},
+                ),
+                component,
+            )
+            edge_count += 1
+
+        data_points.append(ticket_node)
+        assignee_name = assignee.name if assignee else "Unassigned"
+        component_name = component.name if component else issue["component_id"]
+        narrative_lines.append(
+            f"{issue['ticket_id']} ({issue['issue_type']}, {issue['priority']}, "
+            f"{issue['status']}) assigned to {assignee_name}, "
+            f"blocking component {component_name}."
+        )
+
+    return "\n".join(narrative_lines), data_points, edge_count
+
+
+async def process_external_app_sync(source: str, db: Session) -> dict[str, int | str]:
+    """
+    Transform raw app feed data, load into Cognee via add/cognify,
+    and attach structured graph edges for multi-hop traversal.
+    """
+    settings = get_settings()
+    normalized = source.lower().strip()
+    employee_nodes, component_nodes = _load_org_context(db)
+
+    if normalized == "github":
+        config = get_github_config()
+        if not config:
+            raise ValueError("GitHub integration is not configured.")
+        narrative, data_points, edge_count = analyze_github_payload(
+            config, employee_nodes, component_nodes
+        )
+        custom_prompt = (
+            "Extract GitHub engineering activity including pull requests, commits, "
+            "file diff pathways, LOC changes, and map contributors to components "
+            "via contributedTo and modifies relationships."
+        )
+    elif normalized == "jira":
+        config = get_jira_config()
+        if not config:
+            raise ValueError("Jira integration is not configured.")
+        narrative, data_points, edge_count = analyze_jira_payload(
+            config, employee_nodes, component_nodes
+        )
+        custom_prompt = (
+            "Extract Jira issue metadata including ticket IDs, issue types, priorities, "
+            "status indicators, and link assignees and blocked components via "
+            "assignedTo and blocksComponent relationships."
+        )
+    else:
+        raise ValueError(f"Unsupported integration source '{source}'.")
+
+    if data_points:
+        await add_data_points(data_points)
+
+    await run_cognee_add_and_cognify(
+        narrative,
+        dataset_name=settings.cognee_dataset_name,
+        custom_prompt=custom_prompt,
+    )
+
+    telemetry: dict[str, object] = {}
+    if normalized == "github":
+        telemetry["github_ownership"] = apply_github_telemetry(db)
+    elif normalized == "jira":
+        telemetry["jira_backlog"] = apply_jira_telemetry(db)
+
+    return {
+        "source": normalized,
+        "cognee_dataset": settings.cognee_dataset_name,
+        "documents_ingested": 1,
+        "graph_nodes_created": len(data_points),
+        "graph_edges_created": edge_count,
+        "narrative_preview": narrative[:280],
+        "telemetry": telemetry or get_telemetry_snapshot(),
+    }
+
+
+async def process_global_sync(db: Session, sources: list[str]) -> list[dict[str, int | str]]:
+    results: list[dict[str, int | str]] = []
+    for source in sources:
+        results.append(await process_external_app_sync(source, db))
+    return results
