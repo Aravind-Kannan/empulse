@@ -20,6 +20,8 @@ import {
   DEFAULT_INTEGRATION_CONFIG,
   INTEGRATION_CATALOG,
   isIntegrationConnected,
+  isIntegrationDraft,
+  wasPreviouslyConnected,
   type IntegrationConfigMap,
   type IntegrationId,
   type IntegrationStatus,
@@ -74,8 +76,12 @@ function deriveStatuses(
       statuses[app.id] = "syncing";
     } else if (isIntegrationConnected(app.id, config)) {
       statuses[app.id] = "connected";
-    } else {
+    } else if (isIntegrationDraft(app.id, config)) {
+      statuses[app.id] = "pending";
+    } else if (wasPreviouslyConnected(app.id, config)) {
       statuses[app.id] = "disconnected";
+    } else {
+      statuses[app.id] = "available";
     }
   }
   return statuses;
@@ -110,9 +116,30 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       patch: Partial<IntegrationConfigMap[K]>,
     ) => {
       setConfig((prev) => {
+        const credentialFields: Record<IntegrationId, string[]> = {
+          slack: ["botToken", "workspaceUrl", "channelIds"],
+          notion: ["integrationToken"],
+          github: [
+            "repositoryUrl",
+            "personalAccessToken",
+            "oauthConnected",
+            "branchTarget",
+          ],
+          jira: ["siteUrl", "apiToken", "projectKeys"],
+        };
+        const touchesCredentials = credentialFields[id].some(
+          (field) => field in patch,
+        );
+        const merged = {
+          ...prev[id],
+          ...patch,
+          ...(touchesCredentials && !("validated" in patch)
+            ? { validated: false }
+            : {}),
+        } as IntegrationConfigMap[K];
         const next = {
           ...prev,
-          [id]: { ...prev[id], ...patch },
+          [id]: merged,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
         return next;
@@ -154,7 +181,10 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(
     (id: IntegrationId) => {
-      const cleared = { ...DEFAULT_INTEGRATION_CONFIG[id] };
+      const cleared = {
+        ...DEFAULT_INTEGRATION_CONFIG[id],
+        previouslyConnected: true,
+      };
       persist({ ...config, [id]: cleared });
     },
     [config, persist],

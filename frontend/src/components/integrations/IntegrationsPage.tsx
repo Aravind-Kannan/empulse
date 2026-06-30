@@ -3,20 +3,9 @@
 import Link from "next/link";
 import { ArrowLeft, Plug } from "lucide-react";
 
-import { useIntegrations } from "@/context/IntegrationsContext";
-import { INTEGRATION_CATALOG } from "@/lib/integrations";
-
-import { GlobalSyncBanner } from "./GlobalSyncBanner";
-import { IntegrationCard } from "./IntegrationCard";
-import {
-  IntegrationConfigDrawer,
-  useSelectedIntegration,
-} from "./IntegrationConfigDrawer";
+import { IntegrationsDirectory } from "./IntegrationsDirectory";
 
 export function IntegrationsPage() {
-  const { getStatus } = useIntegrations();
-  const { selectedApp, open, close } = useSelectedIntegration();
-
   return (
     <div className="mx-auto max-w-6xl space-y-8 p-8">
       <header className="space-y-4">
@@ -44,35 +33,7 @@ export function IntegrationsPage() {
         </div>
       </header>
 
-      <GlobalSyncBanner />
-
-      <section>
-        <div className="mb-4 flex items-end justify-between">
-          <div>
-            <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
-              App directory
-            </h2>
-            <p className="mt-1 text-sm text-zinc-400">
-              Browse available connectors for your workspace.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {INTEGRATION_CATALOG.map((app) => (
-            <IntegrationCard
-              key={app.id}
-              app={app}
-              status={getStatus(app.id)}
-              onAction={() => open(app.id)}
-            />
-          ))}
-        </div>
-      </section>
-
-      {selectedApp && (
-        <IntegrationConfigDrawer app={selectedApp} onClose={close} />
-      )}
+      <IntegrationsDirectory />
     </div>
   );
 }

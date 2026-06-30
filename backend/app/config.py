@@ -32,6 +32,20 @@ class Settings(BaseSettings):
     cognee_vector_db_provider: str = "lancedb"
     cognee_graph_db_provider: str = "kuzu"
 
+    jwt_secret: str = "change-me-in-production-use-openssl-rand-hex-32"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_seconds: int = 60 * 60 * 24 * 7
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
+
+    frontend_url: str = "http://localhost:3000"
+    backend_url: str = "http://localhost:8000"
+
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    github_client_id: str = ""
+    github_client_secret: str = ""
+
     model_config = SettingsConfigDict(
         env_file=str(BACKEND_ROOT / ".env"),
         env_file_encoding="utf-8",

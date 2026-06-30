@@ -1,16 +1,27 @@
 export type IntegrationId = "slack" | "notion" | "github" | "jira";
 
-export type IntegrationStatus = "connected" | "disconnected" | "syncing";
+export type IntegrationStatus =
+  | "connected"
+  | "available"
+  | "disconnected"
+  | "syncing"
+  | "pending";
 
 export interface SlackConfig {
   workspaceUrl: string;
   botToken: string;
   channelIds: string;
+  /** Set true only after a successful API validation on save */
+  validated?: boolean;
+  /** True after the user has verified or saved this integration at least once */
+  previouslyConnected?: boolean;
 }
 
 export interface NotionConfig {
   integrationToken: string;
   databaseIds: string;
+  validated?: boolean;
+  previouslyConnected?: boolean;
 }
 
 export interface GitHubConfig {
@@ -18,12 +29,16 @@ export interface GitHubConfig {
   branchTarget: string;
   personalAccessToken: string;
   oauthConnected: boolean;
+  validated?: boolean;
+  previouslyConnected?: boolean;
 }
 
 export interface JiraConfig {
   siteUrl: string;
   projectKeys: string;
   apiToken: string;
+  validated?: boolean;
+  previouslyConnected?: boolean;
 }
 
 export type IntegrationConfigMap = {
@@ -98,10 +113,46 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
   jira: { siteUrl: "", projectKeys: "", apiToken: "" },
 };
 
+export function wasPreviouslyConnected(
+  id: IntegrationId,
+  config: IntegrationConfigMap,
+): boolean {
+  return Boolean(config[id].previouslyConnected);
+}
+
 export function isIntegrationConnected(
   id: IntegrationId,
   config: IntegrationConfigMap,
 ): boolean {
+  switch (id) {
+    case "slack":
+      return Boolean(config.slack.botToken.trim() && config.slack.validated);
+    case "notion":
+      return Boolean(
+        config.notion.integrationToken.trim() && config.notion.validated,
+      );
+    case "github":
+      return Boolean(
+        config.github.repositoryUrl.trim() &&
+          (config.github.personalAccessToken.trim() ||
+            config.github.oauthConnected) &&
+          config.github.validated,
+      );
+    case "jira":
+      return Boolean(
+        config.jira.siteUrl.trim() &&
+          config.jira.apiToken.trim() &&
+          config.jira.validated,
+      );
+  }
+}
+
+/** Credentials entered locally but not yet verified against the provider API */
+export function isIntegrationDraft(
+  id: IntegrationId,
+  config: IntegrationConfigMap,
+): boolean {
+  if (isIntegrationConnected(id, config)) return false;
   switch (id) {
     case "slack":
       return Boolean(config.slack.botToken.trim());
@@ -114,8 +165,71 @@ export function isIntegrationConnected(
             config.github.oauthConnected),
       );
     case "jira":
-      return Boolean(
-        config.jira.siteUrl.trim() && config.jira.apiToken.trim(),
-      );
+      return Boolean(config.jira.siteUrl.trim() && config.jira.apiToken.trim());
   }
+}
+
+/** Integrations that can seed the member roster (flat hierarchy). */
+export const MEMBER_IMPORT_SOURCES: IntegrationId[] = [
+  "slack",
+  "notion",
+  "github",
+];
+
+/** @deprecated Use MEMBER_IMPORT_SOURCES */
+export const PEOPLE_INTEGRATION_IDS = MEMBER_IMPORT_SOURCES;
+
+export function getConnectedMemberImportSources(
+  config: IntegrationConfigMap,
+): IntegrationId[] {
+  return MEMBER_IMPORT_SOURCES.filter((id) => isIntegrationConnected(id, config));
+}
+
+/** @deprecated Use getConnectedMemberImportSources */
+export function getConnectedPeopleSources(config: IntegrationConfigMap): IntegrationId[] {
+  return getConnectedMemberImportSources(config);
+}
+
+export function hasMemberImportSourceConnected(
+  config: IntegrationConfigMap,
+): boolean {
+  return getConnectedMemberImportSources(config).length > 0;
+}
+
+/** @deprecated Use hasMemberImportSourceConnected */
+export function hasPeopleSourceConnected(config: IntegrationConfigMap): boolean {
+  return hasMemberImportSourceConnected(config);
+}
+
+export function getConnectedIntegrationIds(
+  config: IntegrationConfigMap,
+): IntegrationId[] {
+  return INTEGRATION_CATALOG.filter((app) =>
+    isIntegrationConnected(app.id, config),
+  ).map((app) => app.id);
+}
+
+export const WORKSPACE_INTEGRATION_REQUIREMENTS: Partial<
+  Record<string, IntegrationId[]>
+> = {
+  "/era": MEMBER_IMPORT_SOURCES,
+  "/exit": MEMBER_IMPORT_SOURCES,
+  "/kra": ["github"],
+  "/investigation": ["jira"],
+};
+
+export function workspaceRequiresIntegrations(path: string): IntegrationId[] {
+  const match = Object.entries(WORKSPACE_INTEGRATION_REQUIREMENTS).find(
+    ([prefix]) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+  return match?.[1] ?? [];
+}
+
+export function isWorkspaceUnlocked(
+  path: string,
+  config: IntegrationConfigMap,
+): boolean {
+  const required = workspaceRequiresIntegrations(path);
+  if (required.length === 0) return true;
+  return required.some((id) => isIntegrationConnected(id, config));
 }

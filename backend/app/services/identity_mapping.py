@@ -1,0 +1,189 @@
+from __future__ import annotations
+
+from sqlalchemy.orm import Session
+
+from app.models.operational import Employee, EmployeeIdentity
+from app.schemas.identity import (
+    EmployeeIdentityMapping,
+    EmployeeIdentityRecord,
+    EmployeeIdentityRow,
+    IdentityReconciliationResponse,
+    ProviderMember,
+)
+
+PROVIDERS = ("github", "jira", "slack", "notion")
+
+MOCK_PROVIDER_MEMBERS: dict[str, list[ProviderMember]] = {
+    "github": [
+        ProviderMember(id="gh-alicechen", label="alicechen", email="alice.chen@acme.com"),
+        ProviderMember(id="gh-benrivera", label="benrivera-dev", email="ben.rivera@acme.com"),
+        ProviderMember(id="gh-carapatel", label="cara-patel", email="cara.patel@acme.com"),
+        ProviderMember(id="gh-dalvarezz", label="dalvarezz", email="diego.alvarez@acme.com"),
+        ProviderMember(id="gh-elena-k", label="elena-kowalski", email="elena.kowalski@acme.com"),
+        ProviderMember(id="gh-frankosei", label="fosei", email="frank.osei@acme.com"),
+        ProviderMember(id="gh-ext-001", label="contractor-bot", email=None),
+    ],
+    "jira": [
+        ProviderMember(id="jira-alice", label="alice.chen@acme.com", email="alice.chen@acme.com"),
+        ProviderMember(id="jira-ben", label="ben.rivera@acme.com", email="ben.rivera@acme.com"),
+        ProviderMember(id="jira-cara", label="cara.patel@acme.com", email="cara.patel@acme.com"),
+        ProviderMember(id="jira-diego", label="diego.alvarez@acme.com", email="diego.alvarez@acme.com"),
+        ProviderMember(id="jira-elena", label="elena.kowalski@acme.com", email="elena.kowalski@acme.com"),
+        ProviderMember(id="jira-frank", label="frank.osei@acme.com", email="frank.osei@acme.com"),
+    ],
+    "slack": [
+        ProviderMember(id="U01ALICE", label="@alice.chen", email="alice.chen@acme.com"),
+        ProviderMember(id="U02BEN", label="@ben.rivera", email="ben.rivera@acme.com"),
+        ProviderMember(id="U03CARA", label="@cara", email="cara.patel@acme.com"),
+        ProviderMember(id="U04DIEGO", label="@diego.a", email="diego.alvarez@acme.com"),
+        ProviderMember(id="U05ELENA", label="@elena", email="elena.kowalski@acme.com"),
+        ProviderMember(id="U06FRANK", label="@frank.osei", email="frank.osei@acme.com"),
+    ],
+    "notion": [
+        ProviderMember(id="notion-alice", label="Alice Chen", email="alice.chen@acme.com"),
+        ProviderMember(id="notion-ben", label="Ben Rivera", email="ben.rivera@acme.com"),
+        ProviderMember(id="notion-cara", label="Cara Patel", email="cara.patel@acme.com"),
+        ProviderMember(id="notion-diego", label="Diego Alvarez", email="diego.alvarez@acme.com"),
+        ProviderMember(id="notion-elena", label="Elena Kowalski", email="elena.kowalski@acme.com"),
+        ProviderMember(id="notion-frank", label="Frank Osei", email="frank.osei@acme.com"),
+    ],
+}
+
+
+def get_provider_members(provider: str) -> list[ProviderMember]:
+    if provider not in MOCK_PROVIDER_MEMBERS:
+        return []
+    return MOCK_PROVIDER_MEMBERS[provider]
+
+
+def list_identity_mappings(db: Session, tenant) -> list[EmployeeIdentityRecord]:
+    rows = (
+        db.query(EmployeeIdentity)
+        .filter(EmployeeIdentity.tenant_id == tenant.id)
+        .order_by(EmployeeIdentity.employee_id)
+        .all()
+    )
+    return [
+        EmployeeIdentityRecord(
+            id=row.id,
+            employee_id=row.employee_id,
+            provider=row.provider,
+            provider_username_or_id=row.provider_username_or_id,
+        )
+        for row in rows
+    ]
+
+
+def _guess_mapping(employee: Employee, provider: str) -> str | None:
+    members = MOCK_PROVIDER_MEMBERS.get(provider, [])
+    email = employee.email.lower()
+    for member in members:
+        if member.email and member.email.lower() == email:
+            return member.id
+    name_slug = employee.name.lower().replace(" ", "")
+    for member in members:
+        if name_slug in member.label.lower().replace("-", "").replace(".", ""):
+            return member.id
+    return None
+
+
+def get_reconciliation(
+    db: Session,
+    tenant,
+    connected_providers: list[str] | None = None,
+) -> IdentityReconciliationResponse:
+    active_providers = [
+        provider for provider in (connected_providers or list(PROVIDERS)) if provider in PROVIDERS
+    ]
+    employees = (
+        db.query(Employee)
+        .filter(Employee.tenant_id == tenant.id)
+        .order_by(Employee.name)
+        .all()
+    )
+    existing = (
+        db.query(EmployeeIdentity)
+        .filter(EmployeeIdentity.tenant_id == tenant.id)
+        .all()
+    )
+    mapping_index: dict[tuple[str, str], str] = {
+        (row.employee_id, row.provider): row.provider_username_or_id for row in existing
+    }
+
+    rows: list[EmployeeIdentityRow] = []
+    for employee in employees:
+        mappings: dict[str, str | None] = {}
+        for provider in active_providers:
+            saved = mapping_index.get((employee.id, provider))
+            mappings[provider] = saved or _guess_mapping(employee, provider)
+        rows.append(
+            EmployeeIdentityRow(
+                employee_id=employee.id,
+                name=employee.name,
+                email=employee.email,
+                role=employee.role,
+                mappings=mappings,
+            )
+        )
+
+    provider_members = {
+        provider: get_provider_members(provider) for provider in active_providers
+    }
+    return IdentityReconciliationResponse(
+        employees=rows,
+        provider_members=provider_members,
+        connected_providers=active_providers,
+    )
+
+
+def save_identity_mappings(
+    db: Session,
+    tenant,
+    mappings: list[EmployeeIdentityMapping],
+) -> list[EmployeeIdentityRecord]:
+    saved: list[EmployeeIdentityRecord] = []
+
+    for mapping in mappings:
+        if mapping.provider not in PROVIDERS:
+            continue
+
+        row = (
+            db.query(EmployeeIdentity)
+            .filter(
+                EmployeeIdentity.employee_id == mapping.employee_id,
+                EmployeeIdentity.provider == mapping.provider,
+                EmployeeIdentity.tenant_id == tenant.id,
+            )
+            .one_or_none()
+        )
+
+        if not mapping.provider_username_or_id.strip():
+            if row:
+                db.delete(row)
+            continue
+
+        value = mapping.provider_username_or_id.strip()
+        if row:
+            row.provider_username_or_id = value
+        else:
+            row = EmployeeIdentity(
+                tenant_id=tenant.id,
+                employee_id=mapping.employee_id,
+                provider=mapping.provider,
+                provider_username_or_id=value,
+            )
+            db.add(row)
+
+        db.flush()
+        if row:
+            saved.append(
+                EmployeeIdentityRecord(
+                    id=row.id,
+                    employee_id=row.employee_id,
+                    provider=row.provider,
+                    provider_username_or_id=row.provider_username_or_id,
+                )
+            )
+
+    db.commit()
+    return saved

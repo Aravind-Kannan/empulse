@@ -5,6 +5,7 @@ export interface Employee {
   email: string;
   tenure_years: number;
   manager_id: string | null;
+  team_name?: string | null;
 }
 
 export interface Component {
@@ -34,9 +35,65 @@ export interface SignUpData {
   company: string;
 }
 
-export interface IntegrationConfig {
-  slackBotToken: string;
-  notionApiKey: string;
+export interface MasterDataEmployee {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  manager_id: string | null;
+  manager_email: string | null;
+  tenure_years: number;
+  source_providers: string[];
+}
+
+export interface EmployeeMasterDataResponse {
+  company: string;
+  employees: MasterDataEmployee[];
+  sources_queried: string[];
+  roles_discovered: string[];
+  records_merged: number;
+  hierarchy_mode?: "flat" | "structured";
+}
+
+export interface BulkCsvRow {
+  id: string;
+  name: string;
+  email: string;
+  dynamic_role: string;
+  team_name: string;
+  reports_to_email_or_id: string;
+}
+
+export interface BulkDiffEntry {
+  kind: "added" | "removed" | "modified";
+  employee_id: string;
+  name: string;
+  changes: string[];
+}
+
+export interface BulkUploadResponse {
+  valid: boolean;
+  errors: string[];
+  diff: BulkDiffEntry[];
+  merged_org: OrgChartPayload | null;
+  sync_result: OrgChartIngestResponse | null;
+}
+
+export interface RoleHistoryRecord {
+  id: number;
+  employee_id: string;
+  old_role: string;
+  new_role: string;
+  changed_at: string;
+}
+
+export interface EmployeeUpdateResponse {
+  employee_id: string;
+  role_changed: boolean;
+  role_history_entry: RoleHistoryRecord | null;
+  cognee_dataset: string;
+  graph_nodes_created: number;
+  graph_edges_created: number;
 }
 
 export interface OrgChartIngestResponse {
@@ -214,4 +271,32 @@ export interface NotionSimulationRequest {
   notion_integration_token?: string;
   notion_database_id?: string;
   ollama_model?: string;
+}
+
+export type IdentityProvider = "github" | "jira" | "slack" | "notion";
+
+export interface ProviderMember {
+  id: string;
+  label: string;
+  email: string | null;
+}
+
+export interface EmployeeIdentityMapping {
+  employee_id: string;
+  provider: IdentityProvider;
+  provider_username_or_id: string;
+}
+
+export interface EmployeeIdentityRow {
+  employee_id: string;
+  name: string;
+  email: string;
+  role: string;
+  mappings: Partial<Record<IdentityProvider, string | null>>;
+}
+
+export interface IdentityReconciliationResponse {
+  employees: EmployeeIdentityRow[];
+  provider_members: Partial<Record<IdentityProvider, ProviderMember[]>>;
+  connected_providers: IdentityProvider[];
 }

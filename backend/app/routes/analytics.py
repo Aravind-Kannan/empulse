@@ -14,28 +14,37 @@ from app.services.kra_analytics import (
     get_kra_graph,
     is_component_spof_resolved,
 )
+from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
 @router.get("/era", response_model=EraAnalyticsResponse)
-def era_analytics(db: Session = Depends(get_db)) -> EraAnalyticsResponse:
-    return get_era_metrics(db)
+def era_analytics(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EraAnalyticsResponse:
+    return get_era_metrics(db, tenant)
 
 
 @router.get("/kra", response_model=KraAnalyticsResponse)
-def kra_analytics(db: Session = Depends(get_db)) -> KraAnalyticsResponse:
-    return get_kra_graph(db)
+def kra_analytics(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> KraAnalyticsResponse:
+    return get_kra_graph(db, tenant)
 
 
 @router.post("/kra/assign-backup", response_model=KraBackupAssignmentResponse)
 def kra_assign_backup(
     payload: KraBackupAssignmentRequest,
+    tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> KraBackupAssignmentResponse:
     try:
         assign_backup_engineer(
             db,
+            tenant=tenant,
             component_id=payload.component_id,
             employee_id=payload.employee_id,
             codebase_share_pct=payload.codebase_share_pct,
@@ -47,5 +56,5 @@ def kra_assign_backup(
         component_id=payload.component_id,
         employee_id=payload.employee_id,
         codebase_share_pct=payload.codebase_share_pct,
-        is_spof_resolved=is_component_spof_resolved(db, payload.component_id),
+        is_spof_resolved=is_component_spof_resolved(db, tenant, payload.component_id),
     )

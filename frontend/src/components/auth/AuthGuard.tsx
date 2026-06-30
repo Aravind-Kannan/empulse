@@ -6,10 +6,14 @@ import { Loader2 } from "lucide-react";
 
 import { useAuth } from "@/context/AuthContext";
 
-const PUBLIC_PATHS = ["/"];
+const PUBLIC_PATHS = ["/", "/login", "/signup"];
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.includes(pathname);
+}
+
+function isAuthPath(pathname: string) {
+  return pathname === "/login" || pathname === "/signup";
 }
 
 function isOnboardingPath(pathname: string) {
@@ -17,18 +21,27 @@ function isOnboardingPath(pathname: string) {
 }
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading, session } = useAuth();
+  const { authStatus, session } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
+
+  const isLoading = authStatus === "loading";
+  const isAuthenticated = authStatus === "authenticated";
 
   useEffect(() => {
     if (isLoading) return;
 
     const publicRoute = isPublicPath(pathname);
+    const authRoute = isAuthPath(pathname);
     const onboardingRoute = isOnboardingPath(pathname);
 
-    if (!isAuthenticated && !publicRoute) {
-      router.replace("/");
+    if (isAuthenticated && authRoute) {
+      router.replace(session?.onboarded ? "/dashboard" : "/onboarding");
+      return;
+    }
+
+    if (!isAuthenticated && !publicRoute && !authRoute) {
+      router.replace("/login");
       return;
     }
 
@@ -41,11 +54,12 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       isAuthenticated &&
       !session?.onboarded &&
       !onboardingRoute &&
-      !publicRoute
+      !publicRoute &&
+      !authRoute
     ) {
       router.replace("/onboarding");
     }
-  }, [isAuthenticated, isLoading, pathname, router, session?.onboarded]);
+  }, [authStatus, isLoading, pathname, router, session?.onboarded]);
 
   if (isLoading) {
     return (
@@ -56,7 +70,11 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAuthenticated && !isPublicPath(pathname)) {
+  if (
+    !isAuthenticated &&
+    !isPublicPath(pathname) &&
+    !isAuthPath(pathname)
+  ) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-zinc-400">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" />

@@ -30,7 +30,7 @@ function weightedBreakdown(employee: EraEmployeeMetrics) {
       weighted: employee.undocumented_solved_incidents * 10,
     },
     {
-      metric: "Code Share",
+      metric: "Cognee Share",
       raw: employee.codebase_share_pct,
       weighted: employee.codebase_share_pct * 0.4,
     },

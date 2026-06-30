@@ -10,6 +10,7 @@ from app.services.integration_telemetry import (
     has_github_sync,
     is_github_spof,
 )
+from app.services.role_utils import is_leadership_role
 
 DOCUMENTATION_SOURCES: dict[str, list[str]] = {
     "comp-payments": [
@@ -47,7 +48,7 @@ def _build_graph(
         employee_ids_with_assignments.add(assignment.employee_id)
 
     for employee in employees:
-        if employee.role.lower() == "manager":
+        if is_leadership_role(employee.role):
             continue
         nodes.append(
             KraNode(
@@ -124,11 +125,12 @@ def _fallback_acme_graph() -> KraAnalyticsResponse:
     )
 
 
-def get_kra_graph(db: Session) -> KraAnalyticsResponse:
-    employees = db.query(Employee).all()
-    components = db.query(Component).all()
+def get_kra_graph(db: Session, tenant) -> KraAnalyticsResponse:
+    employees = db.query(Employee).filter(Employee.tenant_id == tenant.id).all()
+    components = db.query(Component).filter(Component.tenant_id == tenant.id).all()
     assignments = (
         db.query(Assignment)
+        .filter(Assignment.tenant_id == tenant.id)
         .options(joinedload(Assignment.employee), joinedload(Assignment.component))
         .all()
     )
@@ -164,12 +166,21 @@ def get_kra_graph(db: Session) -> KraAnalyticsResponse:
 def assign_backup_engineer(
     db: Session,
     *,
+    tenant,
     component_id: str,
     employee_id: str,
     codebase_share_pct: float,
 ) -> bool:
-    component = db.query(Component).filter(Component.id == component_id).first()
-    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    component = (
+        db.query(Component)
+        .filter(Component.id == component_id, Component.tenant_id == tenant.id)
+        .first()
+    )
+    employee = (
+        db.query(Employee)
+        .filter(Employee.id == employee_id, Employee.tenant_id == tenant.id)
+        .first()
+    )
     if not component or not employee:
         raise ValueError("Unknown component or employee.")
 
@@ -178,6 +189,7 @@ def assign_backup_engineer(
         .filter(
             Assignment.component_id == component_id,
             Assignment.employee_id == employee_id,
+            Assignment.tenant_id == tenant.id,
         )
         .first()
     )
@@ -186,6 +198,7 @@ def assign_backup_engineer(
 
     db.add(
         Assignment(
+            tenant_id=tenant.id,
             employee_id=employee_id,
             component_id=component_id,
             codebase_share_pct=codebase_share_pct,
@@ -195,8 +208,8 @@ def assign_backup_engineer(
     return True
 
 
-def is_component_spof_resolved(db: Session, component_id: str) -> bool:
-    graph = get_kra_graph(db)
+def is_component_spof_resolved(db: Session, tenant, component_id: str) -> bool:
+    graph = get_kra_graph(db, tenant)
     for node in graph.nodes:
         if node.id == component_id and node.type == "component":
             return not node.is_spof

@@ -1,9 +1,14 @@
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.operational import Assignment, Employee
+from app.models.operational import Assignment, Component, Employee
 from app.schemas.era import EraAnalyticsResponse, EraEmployeeMetrics
 from app.schemas.org import ACME_ORG_CHART
+from app.services.cognee_era_metrics import (
+    calculate_graph_contribution_share,
+    total_component_count,
+)
 from app.services.integration_telemetry import get_jira_backlog_boost
+from app.services.role_utils import is_leadership_role
 
 
 def _risk_level(score: float) -> str:
@@ -30,7 +35,7 @@ def _calculate_risk_score(
 
 
 def _undocumented_solved_incidents(employee_id: str, role: str) -> int:
-    if role.lower() == "manager":
+    if is_leadership_role(role):
         return 0
     return sum(ord(char) for char in employee_id) % 6
 
@@ -76,11 +81,23 @@ def _metrics_from_counts(
 
 def _fallback_acme_metrics() -> list[EraEmployeeMetrics]:
     component_by_id = {c.id: c for c in ACME_ORG_CHART.components}
+    total_components = total_component_count(ACME_ORG_CHART.components)
     metrics: list[EraEmployeeMetrics] = []
 
     for employee in ACME_ORG_CHART.employees:
         assignments = [
             a for a in ACME_ORG_CHART.assignments if a.employee_id == employee.id
+        ]
+        assignment_views = [
+            type(
+                "AssignmentView",
+                (),
+                {
+                    "component_id": a.component_id,
+                    "component": component_by_id[a.component_id],
+                },
+            )()
+            for a in assignments
         ]
         open_tasks = sum(
             component_by_id[a.component_id].open_tasks_count for a in assignments
@@ -88,8 +105,11 @@ def _fallback_acme_metrics() -> list[EraEmployeeMetrics]:
         unresolved_issues = sum(
             component_by_id[a.component_id].unresolved_incidents for a in assignments
         )
-        codebase_share_pct = min(
-            100.0, sum(a.codebase_share_pct for a in assignments)
+        codebase_share_pct = calculate_graph_contribution_share(
+            employee_id=employee.id,
+            assignments=assignment_views,  # type: ignore[arg-type]
+            total_components=total_components,
+            jira_backlog_boost=get_jira_backlog_boost(employee.id),
         )
 
         metrics.append(
@@ -108,9 +128,10 @@ def _fallback_acme_metrics() -> list[EraEmployeeMetrics]:
     return metrics
 
 
-def get_era_metrics(db: Session) -> EraAnalyticsResponse:
+def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
     employees = (
         db.query(Employee)
+        .filter(Employee.tenant_id == tenant.id)
         .options(joinedload(Employee.assignments).joinedload(Assignment.component))
         .all()
     )
@@ -118,7 +139,11 @@ def get_era_metrics(db: Session) -> EraAnalyticsResponse:
     if not employees:
         return EraAnalyticsResponse(employees=_fallback_acme_metrics())
 
+    total_components = total_component_count(
+        db.query(Component).filter(Component.tenant_id == tenant.id).all()
+    )
     metrics: list[EraEmployeeMetrics] = []
+
     for employee in employees:
         open_tasks = sum(
             assignment.component.open_tasks_count for assignment in employee.assignments
@@ -127,8 +152,12 @@ def get_era_metrics(db: Session) -> EraAnalyticsResponse:
             assignment.component.unresolved_incidents
             for assignment in employee.assignments
         )
-        codebase_share_pct = min(
-            100.0, sum(assignment.codebase_share_pct for assignment in employee.assignments)
+        jira_boost = get_jira_backlog_boost(employee.id)
+        codebase_share_pct = calculate_graph_contribution_share(
+            employee_id=employee.id,
+            assignments=employee.assignments,
+            total_components=total_components,
+            jira_backlog_boost=jira_boost,
         )
 
         metrics.append(
@@ -140,7 +169,7 @@ def get_era_metrics(db: Session) -> EraAnalyticsResponse:
                 unresolved_issues=unresolved_issues,
                 open_tasks=open_tasks,
                 codebase_share_pct=codebase_share_pct,
-                jira_backlog_boost=get_jira_backlog_boost(employee.id),
+                jira_backlog_boost=jira_boost,
             )
         )
 

@@ -14,13 +14,21 @@ const STATUS_STYLES: Record<
     label: "Connected",
     className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
   },
+  available: {
+    label: "Not connected",
+    className: "border-zinc-700/80 bg-zinc-900/40 text-zinc-500",
+  },
   disconnected: {
     label: "Disconnected",
-    className: "border-zinc-700 bg-zinc-800/50 text-zinc-400",
+    className: "border-zinc-600/50 bg-zinc-800/40 text-zinc-400",
   },
   syncing: {
     label: "Syncing",
     className: "border-sky-500/30 bg-sky-500/10 text-sky-400",
+  },
+  pending: {
+    label: "Pending verification",
+    className: "border-amber-500/30 bg-amber-500/10 text-amber-400",
   },
 };
 

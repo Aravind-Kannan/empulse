@@ -1,7 +1,7 @@
 const steps = [
-  { number: 1, label: "Sign Up" },
-  { number: 2, label: "Integrations" },
-  { number: 3, label: "Org Chart" },
+  { number: 1, label: "Integrations" },
+  { number: 2, label: "Org chart" },
+  { number: 3, label: "Graph sync" },
 ] as const;
 
 export function StepIndicator({ currentStep }: { currentStep: number }) {

@@ -16,8 +16,22 @@ class JiraConfigRequest(BaseModel):
     api_token: str = ""
 
 
+class NotionValidateRequest(BaseModel):
+    integration_token: str = Field(min_length=1)
+
+
+class SlackValidateRequest(BaseModel):
+    bot_token: str = Field(min_length=1)
+
+
+class IntegrationValidateResponse(BaseModel):
+    source: Literal["notion", "slack"]
+    valid: bool
+    message: str
+
+
 class IntegrationConfigResponse(BaseModel):
-    source: Literal["github", "jira"]
+    source: Literal["github", "jira", "notion", "slack"]
     configured: bool
     message: str
 

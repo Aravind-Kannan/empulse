@@ -9,56 +9,78 @@ import {
   type ReactNode,
 } from "react";
 
-import { ACME_ORG_CHART } from "@/lib/acme-org";
+import { EMPTY_ORG_CHART } from "@/lib/acme-org";
+import { collectOrgRoles, masterDataToOrgChart } from "@/lib/org-master-data";
+import { wouldCreateCycle } from "@/lib/org-tree-utils";
 import type {
   Assignment,
   Employee,
-  IntegrationConfig,
+  EmployeeMasterDataResponse,
   OrgChartPayload,
-  SignUpData,
 } from "@/lib/types";
 
-type OnboardingStep = 1 | 2 | 3;
+type OnboardingStep = 1;
 
 interface OnboardingContextValue {
   step: OnboardingStep;
-  signUp: SignUpData;
-  integrations: IntegrationConfig;
   orgChart: OrgChartPayload;
+  availableRoles: string[];
+  masterDataSources: string[] | null;
+  hierarchyMode: "flat" | "structured" | null;
   setStep: (step: OnboardingStep) => void;
-  updateSignUp: (data: Partial<SignUpData>) => void;
-  updateIntegrations: (data: Partial<IntegrationConfig>) => void;
+  updateOrgCompany: (company: string) => void;
+  applyMasterData: (master: EmployeeMasterDataResponse, company: string) => void;
   updateEmployee: (employee: Employee) => void;
+  addEmployee: (employee: Employee) => void;
+  updateAssignments: (assignments: Assignment[], employeeId: string) => void;
   updateAssignment: (assignment: Assignment | null, employeeId: string) => void;
+  reparentEmployee: (employeeId: string, managerId: string | null) => void;
+  assignTeamTag: (employeeIds: string[], teamName: string) => void;
+  setOrgChart: (orgChart: OrgChartPayload) => void;
 }
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 
+export { OnboardingContext };
+
 export function OnboardingProvider({ children }: { children: ReactNode }) {
-  const [step, setStep] = useState<OnboardingStep>(1);
-  const [signUp, setSignUp] = useState<SignUpData>({
-    name: "",
-    email: "",
-    company: ACME_ORG_CHART.company,
-  });
-  const [integrations, setIntegrations] = useState<IntegrationConfig>({
-    slackBotToken: "",
-    notionApiKey: "",
-  });
-  const [orgChart, setOrgChart] = useState<OrgChartPayload>(() =>
-    structuredClone(ACME_ORG_CHART),
+  const [step] = useState<OnboardingStep>(1);
+  const [orgChart, setOrgChartState] = useState<OrgChartPayload>(() =>
+    structuredClone(EMPTY_ORG_CHART),
+  );
+  const [masterDataSources, setMasterDataSources] = useState<string[] | null>(
+    null,
+  );
+  const [hierarchyMode, setHierarchyMode] = useState<
+    "flat" | "structured" | null
+  >(null);
+
+  const availableRoles = useMemo(
+    () => collectOrgRoles(orgChart.employees),
+    [orgChart.employees],
   );
 
-  const updateSignUp = useCallback((data: Partial<SignUpData>) => {
-    setSignUp((prev) => ({ ...prev, ...data }));
+  const setStep = useCallback((_step: OnboardingStep) => {}, []);
+
+  const updateOrgCompany = useCallback((company: string) => {
+    setOrgChartState((prev) => ({ ...prev, company }));
   }, []);
 
-  const updateIntegrations = useCallback((data: Partial<IntegrationConfig>) => {
-    setIntegrations((prev) => ({ ...prev, ...data }));
+  const setOrgChart = useCallback((next: OrgChartPayload) => {
+    setOrgChartState(next);
   }, []);
+
+  const applyMasterData = useCallback(
+    (master: EmployeeMasterDataResponse, company: string) => {
+      setOrgChartState(masterDataToOrgChart(master, company));
+      setMasterDataSources(master.sources_queried);
+      setHierarchyMode(master.hierarchy_mode ?? "flat");
+    },
+    [],
+  );
 
   const updateEmployee = useCallback((employee: Employee) => {
-    setOrgChart((prev) => ({
+    setOrgChartState((prev) => ({
       ...prev,
       employees: prev.employees.map((item) =>
         item.id === employee.id ? employee : item,
@@ -66,42 +88,102 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
-  const updateAssignment = useCallback(
-    (assignment: Assignment | null, employeeId: string) => {
-      setOrgChart((prev) => ({
+  const addEmployee = useCallback((employee: Employee) => {
+    setOrgChartState((prev) => ({
+      ...prev,
+      employees: [...prev.employees, employee],
+    }));
+  }, []);
+
+  const updateAssignments = useCallback(
+    (assignments: Assignment[], employeeId: string) => {
+      setOrgChartState((prev) => ({
         ...prev,
-        assignments: assignment
-          ? [
-              ...prev.assignments.filter((a) => a.employee_id !== employeeId),
-              assignment,
-            ]
-          : prev.assignments.filter((a) => a.employee_id !== employeeId),
+        assignments: [
+          ...prev.assignments.filter((a) => a.employee_id !== employeeId),
+          ...assignments,
+        ],
       }));
     },
     [],
   );
 
+  const updateAssignment = useCallback(
+    (assignment: Assignment | null, employeeId: string) => {
+      if (assignment) {
+        updateAssignments([assignment], employeeId);
+      } else {
+        updateAssignments([], employeeId);
+      }
+    },
+    [updateAssignments],
+  );
+
+  const reparentEmployee = useCallback(
+    (employeeId: string, managerId: string | null) => {
+      setOrgChartState((prev) => {
+        if (wouldCreateCycle(prev.employees, employeeId, managerId)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          employees: prev.employees.map((employee) =>
+            employee.id === employeeId
+              ? { ...employee, manager_id: managerId }
+              : employee,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
+  const assignTeamTag = useCallback((employeeIds: string[], teamName: string) => {
+    const trimmed = teamName.trim();
+    setOrgChartState((prev) => ({
+      ...prev,
+      employees: prev.employees.map((employee) =>
+        employeeIds.includes(employee.id)
+          ? { ...employee, team_name: trimmed || null }
+          : employee,
+      ),
+    }));
+  }, []);
+
   const value = useMemo(
     () => ({
       step,
-      signUp,
-      integrations,
       orgChart,
+      availableRoles,
+      masterDataSources,
+      hierarchyMode,
       setStep,
-      updateSignUp,
-      updateIntegrations,
+      updateOrgCompany,
+      applyMasterData,
       updateEmployee,
+      addEmployee,
+      updateAssignments,
       updateAssignment,
+      reparentEmployee,
+      assignTeamTag,
+      setOrgChart,
     }),
     [
       step,
-      signUp,
-      integrations,
       orgChart,
-      updateSignUp,
-      updateIntegrations,
+      availableRoles,
+      masterDataSources,
+      hierarchyMode,
+      setStep,
+      updateOrgCompany,
+      applyMasterData,
       updateEmployee,
+      addEmployee,
+      updateAssignments,
       updateAssignment,
+      reparentEmployee,
+      assignTeamTag,
+      setOrgChart,
     ],
   );
 

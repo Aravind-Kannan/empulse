@@ -24,6 +24,18 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from app.models import operational  # noqa: F401
+    from app.models import operational, tenant, user, user_tenant_membership  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+
+    from app.db_schema_patches import apply_schema_patches
+
+    apply_schema_patches(engine)
+
+    db = SessionLocal()
+    try:
+        from app.services.tenant_bootstrap import bootstrap_tenancy
+
+        bootstrap_tenancy(db)
+    finally:
+        db.close()

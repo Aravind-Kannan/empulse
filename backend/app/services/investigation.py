@@ -4,6 +4,10 @@ import re
 from copy import deepcopy
 from datetime import UTC, datetime
 
+from sqlalchemy.orm import Session
+
+from app.models.operational import IncidentRecord
+from app.models.tenant import Tenant
 from app.schemas.investigation import (
     IncidentListResponse,
     IncidentStatus,
@@ -20,49 +24,6 @@ INCIDENT_STATUSES: list[IncidentStatus] = [
     "Waiting for Input",
     "Resolved",
     "Closed",
-]
-
-_MOCK_INCIDENTS: list[dict] = [
-    {
-        "id": "inc-001",
-        "title": "Payment Gateway timeout spike",
-        "status": "Investigating",
-        "system_scope": "Payment Gateway",
-        "jira_id": "PROJ-992",
-        "updated_at": "2026-06-30T10:15:00Z",
-    },
-    {
-        "id": "inc-002",
-        "title": "Auth Service elevated 503 rate",
-        "status": "Open",
-        "system_scope": "Auth Service",
-        "jira_id": "PROJ-887",
-        "updated_at": "2026-06-30T09:40:00Z",
-    },
-    {
-        "id": "inc-003",
-        "title": "Notification delivery backlog",
-        "status": "Waiting for Input",
-        "system_scope": "Notification Hub",
-        "jira_id": "PROJ-774",
-        "updated_at": "2026-06-29T18:20:00Z",
-    },
-    {
-        "id": "inc-004",
-        "title": "Checkout partial outage",
-        "status": "Resolved",
-        "system_scope": "Payment Gateway",
-        "jira_id": "PROJ-651",
-        "updated_at": "2026-06-28T14:05:00Z",
-    },
-    {
-        "id": "inc-005",
-        "title": "SSO redirect loop regression",
-        "status": "Closed",
-        "system_scope": "Auth Service",
-        "jira_id": "PROJ-540",
-        "updated_at": "2026-06-25T11:30:00Z",
-    },
 ]
 
 _SYSTEM_DIAGNOSTICS: dict[str, dict] = {
@@ -146,22 +107,58 @@ _SYSTEM_DIAGNOSTICS: dict[str, dict] = {
 _DEFAULT_SYSTEM = "Payment Gateway"
 
 
-def list_incidents(status: IncidentStatus | None = None) -> IncidentListResponse:
-    incidents = _MOCK_INCIDENTS
+def list_incidents(
+    db: Session,
+    tenant: Tenant,
+    status: IncidentStatus | None = None,
+) -> IncidentListResponse:
+    query = db.query(IncidentRecord).filter(IncidentRecord.tenant_id == tenant.id)
     if status:
-        incidents = [item for item in incidents if item["status"] == status]
+        query = query.filter(IncidentRecord.status == status)
+    records = query.order_by(IncidentRecord.updated_at.desc()).all()
     return IncidentListResponse(
-        incidents=[IncidentSummary(**item) for item in incidents]
+        incidents=[
+            IncidentSummary(
+                id=record.id,
+                title=record.title,
+                status=record.status,  # type: ignore[arg-type]
+                system_scope=record.system_scope,
+                jira_id=record.jira_id,
+                updated_at=record.updated_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            for record in records
+        ]
     )
 
 
-def update_incident_status(incident_id: str, status: IncidentStatus) -> IncidentSummary:
-    for incident in _MOCK_INCIDENTS:
-        if incident["id"] == incident_id:
-            incident["status"] = status
-            incident["updated_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            return IncidentSummary(**incident)
-    raise ValueError(f"Incident '{incident_id}' not found.")
+def update_incident_status(
+    db: Session,
+    tenant: Tenant,
+    incident_id: str,
+    status: IncidentStatus,
+) -> IncidentSummary:
+    record = (
+        db.query(IncidentRecord)
+        .filter(
+            IncidentRecord.id == incident_id,
+            IncidentRecord.tenant_id == tenant.id,
+        )
+        .one_or_none()
+    )
+    if not record:
+        raise ValueError(f"Incident '{incident_id}' not found.")
+    record.status = status
+    record.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(record)
+    return IncidentSummary(
+        id=record.id,
+        title=record.title,
+        status=record.status,  # type: ignore[arg-type]
+        system_scope=record.system_scope,
+        jira_id=record.jira_id,
+        updated_at=record.updated_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
 
 
 def _parse_system_scope(message: str) -> str:
@@ -222,9 +219,21 @@ def build_diagnostics(message: str) -> InvestigationDiagnostics:
     )
 
 
-async def stream_investigation_chat(payload: InvestigationChatRequest):
+async def stream_investigation_chat(payload: InvestigationChatRequest, tenant: Tenant):
     system = _parse_system_scope(payload.message)
     jira = _parse_jira_id(payload.message)
+
+    from app.services.tenant_cognee import tenant_graph_search
+
+    try:
+        await tenant_graph_search(
+            f"{system} incident root cause {payload.message}",
+            tenant.id,
+            top_k=5,
+        )
+    except Exception:
+        pass
+
     intro = (
         f"Traversing Cognee knowledge graph for **{system}**"
         + (f" (Jira {jira})" if jira else "")

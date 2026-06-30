@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Unplug, X } from "lucide-react";
+import { ExternalLink, Loader2, Unplug, X } from "lucide-react";
 
 import { useIntegrations } from "@/context/IntegrationsContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
@@ -9,15 +9,20 @@ import {
   saveGitHubIntegrationConfig,
   saveJiraIntegrationConfig,
   syncIntegrationSource,
+  validateNotionIntegration,
+  validateSlackIntegration,
 } from "@/lib/api";
+import { INTEGRATION_SETUP_GUIDES } from "@/lib/integration-setup-guides";
 import {
   INTEGRATION_CATALOG,
   isIntegrationConnected,
+  isIntegrationDraft,
   type IntegrationDefinition,
   type IntegrationId,
 } from "@/lib/integrations";
 
 import { IntegrationLogo } from "./IntegrationLogos";
+import { SecretInput } from "./SecretInput";
 
 interface IntegrationConfigDrawerProps {
   app: IntegrationDefinition;
@@ -42,6 +47,32 @@ function Field({
   );
 }
 
+function SetupGuide({ integrationId }: { integrationId: IntegrationId }) {
+  const guide = INTEGRATION_SETUP_GUIDES[integrationId];
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+      <p className="text-sm font-medium text-zinc-200">{guide.title}</p>
+      <ol className="mt-3 list-decimal space-y-2 pl-4 text-xs leading-relaxed text-zinc-400">
+        {guide.steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+      {guide.docUrl && (
+        <a
+          href={guide.docUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 inline-flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300"
+        >
+          {guide.docLabel ?? "Documentation"}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      )}
+    </div>
+  );
+}
+
 const inputClass =
   "w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500";
 
@@ -49,27 +80,48 @@ export function IntegrationConfigDrawer({
   app,
   onClose,
 }: IntegrationConfigDrawerProps) {
-  const { config, updateConfig, connect, disconnect } = useIntegrations();
+  const { config, updateConfig, disconnect } = useIntegrations();
   const { refreshOperationalState } = useWorkspace();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const connected = isIntegrationConnected(app.id, config);
+  const draft = isIntegrationDraft(app.id, config);
 
   async function handleSave() {
     setSaving(true);
     setError(null);
+    setSuccess(null);
     try {
-      if (app.id === "github") {
+      if (app.id === "notion") {
+        if (!config.notion.integrationToken.trim()) {
+          throw new Error("Notion integration token is required.");
+        }
+        const message = await validateNotionIntegration(
+          config.notion.integrationToken,
+        );
+        updateConfig("notion", { validated: true, previouslyConnected: true });
+        setSuccess(message);
+      } else if (app.id === "slack") {
+        if (!config.slack.botToken.trim()) {
+          throw new Error("Slack bot token is required.");
+        }
+        const message = await validateSlackIntegration(config.slack.botToken);
+        updateConfig("slack", { validated: true, previouslyConnected: true });
+        setSuccess(message);
+      } else if (app.id === "github") {
         await saveGitHubIntegrationConfig(config.github);
         await syncIntegrationSource("github");
+        updateConfig("github", { validated: true, previouslyConnected: true });
+        setSuccess("GitHub configuration saved and sync started.");
       } else if (app.id === "jira") {
         await saveJiraIntegrationConfig(config.jira);
         await syncIntegrationSource("jira");
-      } else {
-        await connect(app.id);
+        updateConfig("jira", { validated: true, previouslyConnected: true });
+        setSuccess("Jira configuration saved and sync started.");
       }
       await refreshOperationalState();
-      onClose();
+      setTimeout(() => onClose(), 900);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save integration");
     } finally {
@@ -82,6 +134,7 @@ export function IntegrationConfigDrawer({
       case "slack":
         return (
           <>
+            <SetupGuide integrationId="slack" />
             <Field label="Workspace URL" hint="e.g. https://acme.slack.com">
               <input
                 type="url"
@@ -93,15 +146,14 @@ export function IntegrationConfigDrawer({
                 className={inputClass}
               />
             </Field>
-            <Field label="Bot token" hint="xoxb-… scoped for channels:read">
-              <input
-                type="password"
+            <Field
+              label="Bot token"
+              hint="Bot User OAuth Token (xoxb-…). Verified via Slack auth.test on save."
+            >
+              <SecretInput
                 value={config.slack.botToken}
-                onChange={(e) =>
-                  updateConfig("slack", { botToken: e.target.value })
-                }
+                onChange={(value) => updateConfig("slack", { botToken: value })}
                 placeholder="xoxb-..."
-                className={inputClass}
               />
             </Field>
             <Field label="Channel IDs" hint="Comma-separated channel IDs to sync">
@@ -121,25 +173,22 @@ export function IntegrationConfigDrawer({
       case "notion":
         return (
           <>
+            <SetupGuide integrationId="notion" />
             <Field
               label="Integration token"
-              hint="Internal integration secret from Notion"
+              hint="Internal Integration Secret (secret_… or ntn_…). Verified via Notion API on save."
             >
-              <input
-                type="password"
+              <SecretInput
                 value={config.notion.integrationToken}
-                onChange={(e) =>
-                  updateConfig("notion", {
-                    integrationToken: e.target.value,
-                  })
+                onChange={(value) =>
+                  updateConfig("notion", { integrationToken: value })
                 }
                 placeholder="secret_..."
-                className={inputClass}
               />
             </Field>
             <Field
-              label="Database / page IDs"
-              hint="Comma-separated IDs for runbooks and wikis"
+              label="Limit to database IDs (optional)"
+              hint="Leave empty to auto-discover all shared databases. Comma-separated IDs to restrict import."
             >
               <input
                 type="text"
@@ -147,7 +196,7 @@ export function IntegrationConfigDrawer({
                 onChange={(e) =>
                   updateConfig("notion", { databaseIds: e.target.value })
                 }
-                placeholder="a1b2c3d4-..., e5f6g7h8-..."
+                placeholder="Leave empty for auto-discovery"
                 className={inputClass}
               />
             </Field>
@@ -157,6 +206,7 @@ export function IntegrationConfigDrawer({
       case "github":
         return (
           <>
+            <SetupGuide integrationId="github" />
             <Field label="Repository URL" hint="HTTPS clone URL or github.com/org/repo">
               <input
                 type="url"
@@ -183,16 +233,12 @@ export function IntegrationConfigDrawer({
               label="Personal access token (PAT)"
               hint="Fine-grained or classic token with repo read scope"
             >
-              <input
-                type="password"
+              <SecretInput
                 value={config.github.personalAccessToken}
-                onChange={(e) =>
-                  updateConfig("github", {
-                    personalAccessToken: e.target.value,
-                  })
+                onChange={(value) =>
+                  updateConfig("github", { personalAccessToken: value })
                 }
                 placeholder="ghp_..."
-                className={inputClass}
               />
             </Field>
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
@@ -222,6 +268,7 @@ export function IntegrationConfigDrawer({
       case "jira":
         return (
           <>
+            <SetupGuide integrationId="jira" />
             <Field
               label="Site domain / instance URL"
               hint="Your Atlassian cloud site"
@@ -254,14 +301,10 @@ export function IntegrationConfigDrawer({
               label="API access token"
               hint="Atlassian API token paired with your account email"
             >
-              <input
-                type="password"
+              <SecretInput
                 value={config.jira.apiToken}
-                onChange={(e) =>
-                  updateConfig("jira", { apiToken: e.target.value })
-                }
+                onChange={(value) => updateConfig("jira", { apiToken: value })}
                 placeholder="ATATT..."
-                className={inputClass}
               />
             </Field>
           </>
@@ -293,6 +336,11 @@ export function IntegrationConfigDrawer({
                 {connected ? "Configure" : "Connect"} {app.name}
               </h2>
               <p className="text-xs text-zinc-500">{app.syncsToCognee}</p>
+              {draft && !connected && (
+                <p className="mt-1 text-xs text-amber-400/90">
+                  Token entered — click Save to verify with {app.name}.
+                </p>
+              )}
             </div>
           </div>
           <button
@@ -309,6 +357,11 @@ export function IntegrationConfigDrawer({
         </div>
 
         <div className="space-y-2 border-t border-zinc-800 px-5 py-4">
+          {success && (
+            <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+              {success}
+            </p>
+          )}
           {error && (
             <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
               {error}
@@ -334,7 +387,7 @@ export function IntegrationConfigDrawer({
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-white disabled:opacity-50"
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {connected ? "Save & re-sync" : "Save & connect"}
+            {connected ? "Save & re-verify" : "Save & verify connection"}
           </button>
         </div>
       </aside>

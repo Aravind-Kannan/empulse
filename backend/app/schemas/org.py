@@ -8,6 +8,7 @@ class EmployeeSchema(BaseModel):
     email: EmailStr
     tenure_years: float = Field(ge=0)
     manager_id: str | None = None
+    team_name: str | None = None
 
 
 class ComponentSchema(BaseModel):

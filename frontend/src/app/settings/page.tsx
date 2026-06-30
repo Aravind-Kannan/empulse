@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, Network, Plug, Settings2 } from "lucide-react";
+import { ChevronRight, GitBranch, Network, Plug, Settings2, Users } from "lucide-react";
+
+import { TenantSwitcher } from "@/components/settings/TenantSwitcher";
 
 const settingsSections = [
   {
@@ -10,6 +12,20 @@ const settingsSections = [
     description:
       "Connect Slack, Notion, GitHub, and Jira. Trigger global Cognee graph sync.",
     icon: Plug,
+  },
+  {
+    href: "/settings/org-chart",
+    title: "Organization Chart",
+    description:
+      "Dual-tab org workspace with drag-and-drop hierarchy and team tags.",
+    icon: GitBranch,
+  },
+  {
+    href: "/settings/identity-mapping",
+    title: "Identity Mapping",
+    description:
+      "Map GitHub handles, Jira emails, Slack IDs, and Notion users to employee records.",
+    icon: Users,
   },
   {
     href: "/settings/graph-debugger",
@@ -36,6 +52,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </header>
+
+      <TenantSwitcher />
 
       <section className="space-y-3">
         {settingsSections.map(({ href, title, description, icon: Icon }) => (

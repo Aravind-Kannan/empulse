@@ -1,5 +1,12 @@
 import type { OrgChartPayload } from "./types";
 
+export const EMPTY_ORG_CHART: OrgChartPayload = {
+  company: "",
+  employees: [],
+  components: [],
+  assignments: [],
+};
+
 export const ACME_ORG_CHART: OrgChartPayload = {
   company: "Acme Company",
   employees: [

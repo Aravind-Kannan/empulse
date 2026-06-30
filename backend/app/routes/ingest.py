@@ -5,13 +5,24 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.org import OrgChartIngestRequest, OrgChartIngestResponse
 from app.services.cognee_ingest import ingest_org_chart_to_cognee, persist_org_chart
+from app.services.org_chart_read import load_org_chart
+from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
+
+
+@router.get("/org-chart", response_model=OrgChartIngestRequest)
+def get_org_chart(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> OrgChartIngestRequest:
+    return load_org_chart(db, tenant)
 
 
 @router.post("/org-chart", response_model=OrgChartIngestResponse)
 async def ingest_org_chart(
     payload: OrgChartIngestRequest,
+    tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> OrgChartIngestResponse:
     employee_ids = {employee.id for employee in payload.employees}
@@ -39,7 +50,7 @@ async def ingest_org_chart(
             )
 
     try:
-        persist_org_chart(db, payload)
+        persist_org_chart(db, payload, tenant.id)
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
@@ -48,7 +59,7 @@ async def ingest_org_chart(
         ) from exc
 
     try:
-        cognee_result = await ingest_org_chart_to_cognee(payload)
+        cognee_result = await ingest_org_chart_to_cognee(payload, tenant_id=tenant.id)
     except Exception as exc:
         raise HTTPException(
             status_code=502,

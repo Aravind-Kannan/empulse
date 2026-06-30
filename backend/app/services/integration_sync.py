@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from pydantic import SkipValidation
@@ -9,7 +10,6 @@ from cognee.infrastructure.engine import DataPoint
 from cognee.infrastructure.engine.models.Edge import Edge
 from cognee.tasks.storage import add_data_points
 
-from app.config import get_settings, run_cognee_add_and_cognify
 from app.models.operational import Component, Employee
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
 from app.schemas.org import ACME_ORG_CHART
@@ -19,6 +19,8 @@ from app.services.integration_telemetry import (
     get_telemetry_snapshot,
 )
 from app.services.cognee_ingest import GraphComponent, GraphEmployee
+from app.services.tenant_cognee import tenant_add_and_cognify
+from app.tenancy import tenant_dataset_name
 
 _integration_configs: dict[str, GitHubConfigRequest | JiraConfigRequest] = {}
 
@@ -68,9 +70,12 @@ def get_jira_config() -> JiraConfigRequest | None:
     return config if isinstance(config, JiraConfigRequest) else None
 
 
-def _load_org_context(db: Session) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent]]:
-    employees = db.query(Employee).all()
-    components = db.query(Component).all()
+def _load_org_context(
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent]]:
+    employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
+    components = db.query(Component).filter(Component.tenant_id == tenant_id).all()
 
     if not employees:
         employee_nodes = {
@@ -244,14 +249,17 @@ def analyze_jira_payload(
     return "\n".join(narrative_lines), data_points, edge_count
 
 
-async def process_external_app_sync(source: str, db: Session) -> dict[str, int | str]:
+async def process_external_app_sync(
+    source: str,
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> dict[str, int | str]:
     """
     Transform raw app feed data, load into Cognee via add/cognify,
     and attach structured graph edges for multi-hop traversal.
     """
-    settings = get_settings()
     normalized = source.lower().strip()
-    employee_nodes, component_nodes = _load_org_context(db)
+    employee_nodes, component_nodes = _load_org_context(db, tenant_id)
 
     if normalized == "github":
         config = get_github_config()
@@ -283,21 +291,22 @@ async def process_external_app_sync(source: str, db: Session) -> dict[str, int |
     if data_points:
         await add_data_points(data_points)
 
-    await run_cognee_add_and_cognify(
+    dataset = tenant_dataset_name(tenant_id)
+    await tenant_add_and_cognify(
         narrative,
-        dataset_name=settings.cognee_dataset_name,
+        tenant_id,
         custom_prompt=custom_prompt,
     )
 
     telemetry: dict[str, object] = {}
     if normalized == "github":
-        telemetry["github_ownership"] = apply_github_telemetry(db)
+        telemetry["github_ownership"] = apply_github_telemetry(db, tenant_id)
     elif normalized == "jira":
-        telemetry["jira_backlog"] = apply_jira_telemetry(db)
+        telemetry["jira_backlog"] = apply_jira_telemetry(db, tenant_id)
 
     return {
         "source": normalized,
-        "cognee_dataset": settings.cognee_dataset_name,
+        "cognee_dataset": dataset,
         "documents_ingested": 1,
         "graph_nodes_created": len(data_points),
         "graph_edges_created": edge_count,
@@ -306,8 +315,12 @@ async def process_external_app_sync(source: str, db: Session) -> dict[str, int |
     }
 
 
-async def process_global_sync(db: Session, sources: list[str]) -> list[dict[str, int | str]]:
+async def process_global_sync(
+    db: Session,
+    tenant_id: uuid.UUID,
+    sources: list[str],
+) -> list[dict[str, int | str]]:
     results: list[dict[str, int | str]] = []
     for source in sources:
-        results.append(await process_external_app_sync(source, db))
+        results.append(await process_external_app_sync(source, db, tenant_id))
     return results

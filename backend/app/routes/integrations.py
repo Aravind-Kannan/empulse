@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -7,7 +7,10 @@ from app.schemas.integrations import (
     GlobalSyncResponse,
     IntegrationConfigResponse,
     IntegrationSyncResponse,
+    IntegrationValidateResponse,
     JiraConfigRequest,
+    NotionValidateRequest,
+    SlackValidateRequest,
 )
 from app.services.integration_sync import (
     get_github_config,
@@ -17,6 +20,16 @@ from app.services.integration_sync import (
     save_github_config,
     save_jira_config,
 )
+from app.services.employee_master_fetch import fetch_employee_master_data
+from app.schemas.employee_master import (
+    EmployeeMasterDataResponse,
+    FetchUsersRequest,
+)
+from app.services.integration_validate import (
+    validate_notion_token,
+    validate_slack_bot_token,
+)
+from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -48,6 +61,32 @@ def configure_jira(payload: JiraConfigRequest) -> IntegrationConfigResponse:
     )
 
 
+@router.post("/notion/validate", response_model=IntegrationValidateResponse)
+def validate_notion(payload: NotionValidateRequest) -> IntegrationValidateResponse:
+    try:
+        message = validate_notion_token(payload.integration_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return IntegrationValidateResponse(
+        source="notion",
+        valid=True,
+        message=message,
+    )
+
+
+@router.post("/slack/validate", response_model=IntegrationValidateResponse)
+def validate_slack(payload: SlackValidateRequest) -> IntegrationValidateResponse:
+    try:
+        message = validate_slack_bot_token(payload.bot_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return IntegrationValidateResponse(
+        source="slack",
+        valid=True,
+        message=message,
+    )
+
+
 @router.get("/status")
 def integration_status() -> dict[str, bool]:
     return {
@@ -63,13 +102,48 @@ def integration_telemetry() -> dict[str, object]:
     return get_telemetry_snapshot()
 
 
+@router.get("/fetch-users", response_model=EmployeeMasterDataResponse)
+def fetch_users_get(
+    sources: list[str] = Query(default=[]),
+    company: str = Query(default="Acme Company"),
+) -> EmployeeMasterDataResponse:
+    if not sources:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one source query param (slack, jira, notion, github).",
+        )
+    try:
+        return fetch_employee_master_data(sources, company=company, flat_hierarchy=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/fetch-users", response_model=EmployeeMasterDataResponse)
+def fetch_users_post(payload: FetchUsersRequest) -> EmployeeMasterDataResponse:
+    if not payload.sources:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one source (slack, jira, notion, github).",
+        )
+    try:
+        return fetch_employee_master_data(
+            payload.sources,
+            company=payload.company,
+            credentials=payload,
+            flat_hierarchy=payload.flat_hierarchy,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/sync/{source}", response_model=IntegrationSyncResponse)
 async def sync_integration(
     source: str,
+    tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> IntegrationSyncResponse:
     try:
-        result = await process_external_app_sync(source, db)
+        result = await process_external_app_sync(source, db, tenant.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -83,6 +157,7 @@ async def sync_integration(
 
 @router.post("/sync", response_model=GlobalSyncResponse)
 async def sync_all_configured(
+    tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> GlobalSyncResponse:
     sources: list[str] = []
@@ -98,7 +173,7 @@ async def sync_all_configured(
         )
 
     try:
-        results = await process_global_sync(db, sources)
+        results = await process_global_sync(db, tenant.id, sources)
     except Exception as exc:
         raise HTTPException(
             status_code=502,

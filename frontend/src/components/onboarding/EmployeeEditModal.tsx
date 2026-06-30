@@ -1,48 +1,72 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { X } from "lucide-react";
 
-import { useOnboarding } from "@/context/OnboardingContext";
-import type { Assignment, Employee } from "@/lib/types";
+import { ComponentMultiSelect } from "@/components/org-workspace/ComponentMultiSelect";
+import { RoleCombobox } from "@/components/org-workspace/RoleCombobox";
+import { OnboardingContext } from "@/context/OnboardingContext";
+import { collectOrgRoles } from "@/lib/org-master-data";
+import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
 
 interface EmployeeEditModalProps {
   employee: Employee;
   onClose: () => void;
+  orgChart?: OrgChartPayload;
+  availableRoles?: string[];
+  onSave?: (
+    employee: Employee,
+    assignments: Assignment[],
+  ) => void | Promise<void>;
+  isSaving?: boolean;
 }
 
-export function EmployeeEditModal({ employee, onClose }: EmployeeEditModalProps) {
-  const { orgChart, updateEmployee, updateAssignment } = useOnboarding();
+export function EmployeeEditModal({
+  employee,
+  onClose,
+  orgChart: orgChartProp,
+  availableRoles: availableRolesProp,
+  onSave: onSaveProp,
+  isSaving = false,
+}: EmployeeEditModalProps) {
+  const onboarding = useContext(OnboardingContext);
+  const orgChart = orgChartProp ?? onboarding?.orgChart;
+  if (!orgChart) {
+    throw new Error("EmployeeEditModal requires orgChart or OnboardingProvider.");
+  }
+  const availableRoles =
+    availableRolesProp ?? collectOrgRoles(orgChart.employees);
   const [draft, setDraft] = useState<Employee>(employee);
-  const existingAssignment = orgChart.assignments.find(
-    (a) => a.employee_id === employee.id,
-  );
-  const [componentId, setComponentId] = useState(
-    existingAssignment?.component_id ?? "",
-  );
-  const [sharePct, setSharePct] = useState(
-    existingAssignment?.codebase_share_pct ?? 0,
-  );
+  const existingComponentIds = orgChart.assignments
+    .filter((assignment) => assignment.employee_id === employee.id)
+    .map((assignment) => assignment.component_id);
+  const [componentIds, setComponentIds] = useState<string[]>(existingComponentIds);
 
   useEffect(() => {
     setDraft(employee);
-    setComponentId(existingAssignment?.component_id ?? "");
-    setSharePct(existingAssignment?.codebase_share_pct ?? 0);
-  }, [employee, existingAssignment]);
+    setComponentIds(
+      orgChart.assignments
+        .filter((assignment) => assignment.employee_id === employee.id)
+        .map((assignment) => assignment.component_id),
+    );
+  }, [employee, orgChart.assignments]);
 
-  const managerOptions = orgChart.employees.filter((e) => e.id !== employee.id);
+  const managerOptions = orgChart.employees.filter(
+    (item) => item.id !== employee.id,
+  );
 
-  function handleSave() {
-    updateEmployee(draft);
-    if (componentId) {
-      const assignment: Assignment = {
-        employee_id: employee.id,
-        component_id: componentId,
-        codebase_share_pct: sharePct,
-      };
-      updateAssignment(assignment, employee.id);
-    } else {
-      updateAssignment(null, employee.id);
+  async function handleSave() {
+    const assignments: Assignment[] = componentIds.map((componentId) => ({
+      employee_id: employee.id,
+      component_id: componentId,
+      codebase_share_pct: 0,
+    }));
+
+    if (onSaveProp) {
+      await onSaveProp(draft, assignments);
+    } else if (onboarding) {
+      onboarding.updateEmployee(draft);
+      onboarding.updateAssignments(assignments, employee.id);
     }
     onClose();
   }
@@ -67,28 +91,44 @@ export function EmployeeEditModal({ employee, onClose }: EmployeeEditModalProps)
               <label className="mb-1 block text-xs text-zinc-500">Name</label>
               <input
                 value={draft.name}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                onChange={(event) =>
+                  setDraft({ ...draft, name: event.target.value })
+                }
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
               />
             </div>
             <div className="col-span-2 sm:col-span-1">
-              <label className="mb-1 block text-xs text-zinc-500">Role</label>
-              <select
+              <label className="mb-1 block text-xs text-zinc-500">
+                Role / Title
+              </label>
+              <RoleCombobox
                 value={draft.role}
-                onChange={(e) => setDraft({ ...draft, role: e.target.value })}
+                suggestions={availableRoles}
+                onChange={(role) => setDraft({ ...draft, role })}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <label className="mb-1 block text-xs text-zinc-500">Team tag</label>
+              <input
+                value={draft.team_name ?? ""}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    team_name: event.target.value || null,
+                  })
+                }
+                placeholder="Platform Reliability Squad"
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
-              >
-                <option>Manager</option>
-                <option>Engineer</option>
-                <option>Support</option>
-              </select>
+              />
             </div>
             <div className="col-span-2">
               <label className="mb-1 block text-xs text-zinc-500">Email</label>
               <input
                 type="email"
                 value={draft.email}
-                onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+                onChange={(event) =>
+                  setDraft({ ...draft, email: event.target.value })
+                }
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
               />
             </div>
@@ -101,10 +141,10 @@ export function EmployeeEditModal({ employee, onClose }: EmployeeEditModalProps)
                 min={0}
                 step={0.1}
                 value={draft.tenure_years}
-                onChange={(e) =>
+                onChange={(event) =>
                   setDraft({
                     ...draft,
-                    tenure_years: parseFloat(e.target.value) || 0,
+                    tenure_years: parseFloat(event.target.value) || 0,
                   })
                 }
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
@@ -116,10 +156,10 @@ export function EmployeeEditModal({ employee, onClose }: EmployeeEditModalProps)
               </label>
               <select
                 value={draft.manager_id ?? ""}
-                onChange={(e) =>
+                onChange={(event) =>
                   setDraft({
                     ...draft,
-                    manager_id: e.target.value || null,
+                    manager_id: event.target.value || null,
                   })
                 }
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
@@ -138,40 +178,11 @@ export function EmployeeEditModal({ employee, onClose }: EmployeeEditModalProps)
             <p className="mb-3 text-sm font-medium text-zinc-200">
               Technical ownership
             </p>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">
-                  Component
-                </label>
-                <select
-                  value={componentId}
-                  onChange={(e) => setComponentId(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
-                >
-                  <option value="">None</option>
-                  {orgChart.components.map((component) => (
-                    <option key={component.id} value={component.id}>
-                      {component.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {componentId && (
-                <div>
-                  <label className="mb-1 block text-xs text-zinc-500">
-                    Codebase share ({sharePct}%)
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={sharePct}
-                    onChange={(e) => setSharePct(Number(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
-              )}
-            </div>
+            <ComponentMultiSelect
+              components={orgChart.components}
+              selectedIds={componentIds}
+              onChange={setComponentIds}
+            />
           </div>
         </div>
 
@@ -179,16 +190,18 @@ export function EmployeeEditModal({ employee, onClose }: EmployeeEditModalProps)
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900"
+            disabled={isSaving}
+            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900 disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="button"
-            onClick={handleSave}
-            className="rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-white"
+            onClick={() => void handleSave()}
+            disabled={isSaving}
+            className="rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-white disabled:opacity-50"
           >
-            Save changes
+            {isSaving ? "Saving…" : "Save changes"}
           </button>
         </div>
       </div>

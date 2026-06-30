@@ -169,7 +169,7 @@ export function EraDashboard() {
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            Highest Code Ownership
+            Highest Cognee Contribution
           </button>
         </div>
       </div>
@@ -184,7 +184,7 @@ export function EraDashboard() {
                   <th className="px-4 py-3 font-medium">Unresolved</th>
                   <th className="px-4 py-3 font-medium">Open Tasks</th>
                   <th className="px-4 py-3 font-medium">Undocumented</th>
-                  <th className="px-4 py-3 font-medium">Code %</th>
+                  <th className="px-4 py-3 font-medium">Cognee %</th>
                   <th className="px-4 py-3 font-medium">Risk</th>
                 </tr>
               </thead>

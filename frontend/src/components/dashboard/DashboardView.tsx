@@ -13,6 +13,8 @@ import {
 
 import { useWorkspace } from "@/context/WorkspaceContext";
 
+import { SetupChecklist } from "./SetupChecklist";
+
 const CRON_OPTIONS = [
   { value: "0 9 * * 1", label: "Monday 9:00 AM" },
   { value: "0 8 * * 1", label: "Monday 8:00 AM" },
@@ -113,6 +115,8 @@ export function DashboardView() {
           href="/kra"
         />
       </div>
+
+      <SetupChecklist />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5 lg:col-span-2">

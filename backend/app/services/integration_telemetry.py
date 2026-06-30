@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from collections import defaultdict
 
 from sqlalchemy.orm import Session
@@ -18,18 +20,25 @@ _github_synced = False
 HIGH_PRIORITIES = {"High", "Critical"}
 
 
-def _main_engineer_for_component(db: Session, component_id: str) -> str | None:
+def _main_engineer_for_component(
+    db: Session,
+    component_id: str,
+    tenant_id: uuid.UUID,
+) -> str | None:
     assignments = (
         db.query(Assignment)
-        .filter(Assignment.component_id == component_id)
+        .filter(
+            Assignment.component_id == component_id,
+            Assignment.tenant_id == tenant_id,
+        )
         .all()
     )
     if not assignments:
         return None
-    return max(assignments, key=lambda row: row.codebase_share_pct).employee_id
+    return assignments[0].employee_id
 
 
-def apply_jira_telemetry(db: Session) -> dict[str, int]:
+def apply_jira_telemetry(db: Session, tenant_id: uuid.UUID) -> dict[str, int]:
     """Map unassigned high-priority Jira bugs to each component's main engineer."""
     global _jira_synced
 
@@ -43,7 +52,7 @@ def apply_jira_telemetry(db: Session) -> dict[str, int]:
         if issue["issue_type"] != "Bug":
             continue
 
-        main_engineer = _main_engineer_for_component(db, issue["component_id"])
+        main_engineer = _main_engineer_for_component(db, issue["component_id"], tenant_id)
         if main_engineer:
             backlog[main_engineer] += 1
 
@@ -53,7 +62,7 @@ def apply_jira_telemetry(db: Session) -> dict[str, int]:
     return dict(backlog)
 
 
-def apply_github_telemetry(_db: Session) -> dict[str, dict[str, float]]:
+def apply_github_telemetry(_db: Session, _tenant_id: uuid.UUID) -> dict[str, dict[str, float]]:
     """
     Derive 6-month directory ownership splits from GitHub activity.
     Components with a single contributor are flagged as SPOF.

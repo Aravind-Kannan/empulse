@@ -1,3 +1,145 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer utilities {
+  .landing-hero-spotlight {
+    --spotlight-x: 50%;
+    --spotlight-y: 40%;
+  }
+
+  .landing-hero-spotlight::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+      600px circle at var(--spotlight-x) var(--spotlight-y),
+      rgba(56, 189, 248, 0.08),
+      rgba(129, 140, 248, 0.04) 35%,
+      transparent 70%
+    );
+    pointer-events: none;
+  }
+
+  .landing-hero-vignette {
+    background: radial-gradient(
+      ellipse 80% 60% at 50% 40%,
+      transparent 0%,
+      rgba(9, 9, 11, 0.4) 50%,
+      #09090b 100%
+    );
+  }
+
+  .landing-metallic-text {
+    background: linear-gradient(
+      135deg,
+      #a1a1aa 0%,
+      #fafafa 25%,
+      #71717a 50%,
+      #e4e4e7 75%,
+      #52525b 100%
+    );
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: landing-shimmer 6s ease-in-out infinite;
+  }
+
+  .landing-cta-glow {
+    box-shadow:
+      0 0 20px rgba(255, 255, 255, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  }
+
+  .auth-ambient {
+    background:
+      radial-gradient(
+        ellipse 60% 50% at 20% 40%,
+        rgba(56, 189, 248, 0.12),
+        transparent 70%
+      ),
+      radial-gradient(
+        ellipse 50% 40% at 80% 60%,
+        rgba(129, 140, 248, 0.1),
+        transparent 70%
+      ),
+      #000;
+    animation: auth-ambient-drift 18s ease-in-out infinite alternate;
+  }
+
+  .landing-fade-in {
+    animation: landing-fade-up 0.8s ease-out both;
+  }
+
+  .landing-fade-in-delayed {
+    animation: landing-fade-up 0.8s ease-out 0.15s both;
+  }
+
+  .landing-fade-in-delayed-2 {
+    animation: landing-fade-up 0.8s ease-out 0.3s both;
+  }
+
+  .landing-fade-in-delayed-3 {
+    animation: landing-fade-up 0.8s ease-out 0.45s both;
+  }
+
+  .landing-scroll-hint {
+    animation: landing-bounce 2.5s ease-in-out infinite;
+  }
+
+  .landing-graph-edge {
+    stroke-dasharray: 4 4;
+    animation: landing-dash 1.5s linear infinite;
+  }
+}
+
+@keyframes auth-ambient-drift {
+  0% {
+    filter: hue-rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    filter: hue-rotate(15deg);
+    opacity: 0.85;
+  }
+}
+
+@keyframes landing-shimmer {
+  0%,
+  100% {
+    background-position: 0% center;
+  }
+  50% {
+    background-position: 100% center;
+  }
+}
+
+@keyframes landing-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes landing-bounce {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(0);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translateX(-50%) translateY(6px);
+    opacity: 0.8;
+  }
+}
+
+@keyframes landing-dash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}

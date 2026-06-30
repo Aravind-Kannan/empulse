@@ -9,14 +9,14 @@ import type { Employee } from "@/lib/types";
 import { EmployeeEditModal } from "./EmployeeEditModal";
 
 function roleColor(role: string) {
-  switch (role) {
-    case "Manager":
-      return "border-violet-500/50 bg-violet-500/10";
-    case "Support":
-      return "border-amber-500/50 bg-amber-500/10";
-    default:
-      return "border-sky-500/50 bg-sky-500/10";
+  const normalized = role.toLowerCase();
+  if (normalized.includes("manager") || normalized.includes("director") || normalized.includes("head")) {
+    return "border-violet-500/50 bg-violet-500/10";
   }
+  if (normalized.includes("support") || normalized.includes("customer")) {
+    return "border-amber-500/50 bg-amber-500/10";
+  }
+  return "border-sky-500/50 bg-sky-500/10";
 }
 
 function EmployeeNode({
@@ -72,16 +72,19 @@ export function OrgChartTree() {
   }, [orgChart.employees]);
 
   function assignmentLabel(employeeId: string) {
-    const assignment = orgChart.assignments.find(
+    const assignments = orgChart.assignments.filter(
       (a) => a.employee_id === employeeId,
     );
-    if (!assignment) return undefined;
-    const component = orgChart.components.find(
-      (c) => c.id === assignment.component_id,
-    );
-    return component
-      ? `${component.name} (${assignment.codebase_share_pct}%)`
-      : undefined;
+    if (assignments.length === 0) return undefined;
+    const names = assignments
+      .map((assignment) => {
+        const component = orgChart.components.find(
+          (c) => c.id === assignment.component_id,
+        );
+        return component?.name;
+      })
+      .filter(Boolean);
+    return names.length > 0 ? names.join(", ") : undefined;
   }
 
   return (

@@ -7,7 +7,10 @@ import { Sidebar } from "@/components/Sidebar";
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isBareLayout =
-    pathname === "/" || pathname.startsWith("/onboarding");
+    pathname === "/" ||
+    pathname.startsWith("/onboarding") ||
+    pathname === "/login" ||
+    pathname === "/signup";
 
   if (isBareLayout) {
     return <>{children}</>;

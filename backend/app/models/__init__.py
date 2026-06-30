@@ -1,3 +1,23 @@
-from app.models.operational import Assignment, Component, Employee
+from app.models.operational import (
+    Assignment,
+    Component,
+    Employee,
+    EmployeeIdentity,
+    IncidentRecord,
+    RoleHistory,
+)
+from app.models.tenant import Tenant
+from app.models.user import User
+from app.models.user_tenant_membership import UserTenantMembership
 
-__all__ = ["Employee", "Component", "Assignment"]
+__all__ = [
+    "Tenant",
+    "User",
+    "UserTenantMembership",
+    "Employee",
+    "Component",
+    "Assignment",
+    "EmployeeIdentity",
+    "RoleHistory",
+    "IncidentRecord",
+]

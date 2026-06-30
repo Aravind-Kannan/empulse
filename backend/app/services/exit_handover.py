@@ -4,22 +4,24 @@ from app.models.operational import Assignment, Employee
 from app.schemas.exit import EmployeeOption, HandoverResponse
 from app.schemas.org import ACME_ORG_CHART
 from app.services.era_analytics import _undocumented_solved_incidents
+from app.services.role_utils import is_leadership_role
 
 
-def list_exit_candidates(db: Session) -> list[EmployeeOption]:
+def list_exit_candidates(db: Session, tenant) -> list[EmployeeOption]:
     employees = (
         db.query(Employee)
-        .filter(Employee.role != "Manager")
+        .filter(Employee.tenant_id == tenant.id)
         .order_by(Employee.name)
         .all()
     )
-    if not employees:
+    candidates = [e for e in employees if not is_leadership_role(e.role)]
+    if not candidates:
         return [
             EmployeeOption(id=e.id, name=e.name, role=e.role)
             for e in ACME_ORG_CHART.employees
-            if e.role != "Manager"
+            if not is_leadership_role(e.role)
         ]
-    return [EmployeeOption(id=e.id, name=e.name, role=e.role) for e in employees]
+    return [EmployeeOption(id=e.id, name=e.name, role=e.role) for e in candidates]
 
 
 def _hotfix_lines(employee_id: str, role: str, component_names: list[str]) -> list[str]:
@@ -36,11 +38,11 @@ def _hotfix_lines(employee_id: str, role: str, component_names: list[str]) -> li
     return lines
 
 
-def build_handover_markdown(db: Session, employee_id: str) -> HandoverResponse:
+def build_handover_markdown(db: Session, employee_id: str, tenant) -> HandoverResponse:
     employee = (
         db.query(Employee)
         .options(joinedload(Employee.assignments).joinedload(Assignment.component))
-        .filter(Employee.id == employee_id)
+        .filter(Employee.id == employee_id, Employee.tenant_id == tenant.id)
         .first()
     )
 

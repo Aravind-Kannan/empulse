@@ -11,115 +11,201 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 
-import type { AuthSession } from "@/lib/auth";
-
-const AUTH_STORAGE_KEY = "empulse-auth-session";
+import {
+  completeOnboardingSession,
+  fetchCurrentSession,
+  fetchLinkedTenants,
+  loginWithPassword,
+  logoutSession,
+  sessionFromAuthState,
+  signUpWithPassword,
+  switchActiveTenant,
+  type ActiveTenant,
+  type AuthSession,
+  type AuthStatus,
+  type AuthUser,
+  type TenantMembership,
+} from "@/lib/auth";
 
 interface AuthContextValue {
+  authStatus: AuthStatus;
+  user: AuthUser | null;
+  activeTenant: ActiveTenant | null;
+  linkedTenants: TenantMembership[];
+  accessToken: string | null;
+  /** Derived session shape for legacy consumers */
   session: AuthSession | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   signUp: (payload: {
     name: string;
     email: string;
+    password: string;
     company?: string;
-  }) => void;
-  login: (payload: { email: string; name?: string }) => void;
-  completeOnboarding: () => void;
-  logout: () => void;
+  }) => Promise<void>;
+  login: (payload: { email: string; password: string }) => Promise<void>;
+  completeOnboarding: () => Promise<void>;
+  logout: () => Promise<void>;
+  refreshSession: () => Promise<void>;
+  switchTenant: (tenantId: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function loadSession(): AuthSession | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as AuthSession) : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistSession(session: AuthSession | null) {
-  if (session) {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
-  } else {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [session, setSession] = useState<AuthSession | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [activeTenant, setActiveTenant] = useState<ActiveTenant | null>(null);
+  const [linkedTenants, setLinkedTenants] = useState<TenantMembership[]>([]);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [isNewUser, setIsNewUser] = useState(false);
 
-  useEffect(() => {
-    setSession(loadSession());
-    setIsLoading(false);
+  const loadLinkedTenants = useCallback(async () => {
+    try {
+      const tenants = await fetchLinkedTenants();
+      setLinkedTenants(tenants);
+    } catch {
+      setLinkedTenants([]);
+    }
   }, []);
 
+  const refreshSession = useCallback(async () => {
+    try {
+      const current = await fetchCurrentSession();
+      if (!current) {
+        setUser(null);
+        setActiveTenant(null);
+        setAccessToken(null);
+        setLinkedTenants([]);
+        setAuthStatus("unauthenticated");
+        return;
+      }
+      setUser(current.user);
+      setActiveTenant(current.activeTenant);
+      setAccessToken(current.accessToken);
+      setAuthStatus("authenticated");
+      await loadLinkedTenants();
+    } catch {
+      setUser(null);
+      setActiveTenant(null);
+      setAccessToken(null);
+      setLinkedTenants([]);
+      setAuthStatus("unauthenticated");
+    }
+  }, [loadLinkedTenants]);
+
+  useEffect(() => {
+    void refreshSession();
+  }, [refreshSession]);
+
   const signUp = useCallback(
-    (payload: { name: string; email: string; company?: string }) => {
-      const nextSession: AuthSession = {
-        email: payload.email,
+    async (payload: {
+      name: string;
+      email: string;
+      password: string;
+      company?: string;
+    }) => {
+      const result = await signUpWithPassword({
         name: payload.name,
-        company: payload.company ?? "Acme Company",
-        isNewUser: true,
-        onboarded: false,
-        loggedInAt: new Date().toISOString(),
-      };
-      setSession(nextSession);
-      persistSession(nextSession);
+        email: payload.email,
+        password: payload.password,
+        company: payload.company ?? "My Company",
+      });
+      setUser(result.user);
+      setActiveTenant(result.activeTenant);
+      setAccessToken(result.accessToken);
+      setIsNewUser(result.isNewUser);
+      setAuthStatus("authenticated");
+      await loadLinkedTenants();
       router.push("/onboarding");
     },
-    [router],
+    [router, loadLinkedTenants],
   );
 
   const login = useCallback(
-    (payload: { email: string; name?: string }) => {
-      const existing = loadSession();
-      const nextSession: AuthSession = {
-        email: payload.email,
-        name: payload.name ?? existing?.name ?? "Manager",
-        company: existing?.company ?? "Acme Company",
-        isNewUser: false,
-        onboarded: true,
-        loggedInAt: new Date().toISOString(),
-      };
-      setSession(nextSession);
-      persistSession(nextSession);
-      router.push("/dashboard");
+    async (payload: { email: string; password: string }) => {
+      const result = await loginWithPassword(payload);
+      setUser(result.user);
+      setActiveTenant(result.activeTenant);
+      setAccessToken(result.accessToken);
+      setIsNewUser(result.isNewUser);
+      setAuthStatus("authenticated");
+      await loadLinkedTenants();
+      router.push(result.user.onboarded ? "/dashboard" : "/onboarding");
     },
-    [router],
+    [router, loadLinkedTenants],
   );
 
-  const completeOnboarding = useCallback(() => {
-    setSession((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, isNewUser: false, onboarded: true };
-      persistSession(next);
-      return next;
-    });
+  const completeOnboarding = useCallback(async () => {
+    const result = await completeOnboardingSession();
+    setUser(result.user);
+    setActiveTenant(result.activeTenant);
+    setAccessToken(result.accessToken);
+    setIsNewUser(false);
   }, []);
 
-  const logout = useCallback(() => {
-    setSession(null);
-    persistSession(null);
+  const logout = useCallback(async () => {
+    await logoutSession();
+    setUser(null);
+    setActiveTenant(null);
+    setAccessToken(null);
+    setLinkedTenants([]);
+    setAuthStatus("unauthenticated");
     router.push("/");
   }, [router]);
 
+  const switchTenant = useCallback(
+    async (tenantId: string) => {
+      const result = await switchActiveTenant(tenantId);
+      setUser(result.user);
+      setActiveTenant(result.activeTenant);
+      setAccessToken(result.accessToken);
+      await loadLinkedTenants();
+      router.refresh();
+    },
+    [loadLinkedTenants, router],
+  );
+
+  const session = useMemo(
+    () =>
+      user && activeTenant
+        ? sessionFromAuthState(user, activeTenant, isNewUser)
+        : null,
+    [user, activeTenant, isNewUser],
+  );
+
   const value = useMemo(
     () => ({
+      authStatus,
+      user,
+      activeTenant,
+      linkedTenants,
+      accessToken,
       session,
-      isAuthenticated: Boolean(session),
-      isLoading,
+      isAuthenticated: authStatus === "authenticated",
+      isLoading: authStatus === "loading",
       signUp,
       login,
       completeOnboarding,
       logout,
+      refreshSession,
+      switchTenant,
     }),
-    [session, isLoading, signUp, login, completeOnboarding, logout],
+    [
+      authStatus,
+      user,
+      activeTenant,
+      linkedTenants,
+      accessToken,
+      session,
+      signUp,
+      login,
+      completeOnboarding,
+      logout,
+      refreshSession,
+      switchTenant,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
