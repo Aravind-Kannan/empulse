@@ -37,3 +37,6 @@ class Tenant(Base):
     memberships: Mapped[list["UserTenantMembership"]] = relationship(  # noqa: F821
         "UserTenantMembership", back_populates="tenant", cascade="all, delete-orphan"
     )
+    jira_integration: Mapped["JiraIntegration | None"] = relationship(  # noqa: F821
+        "JiraIntegration", back_populates="tenant", uselist=False
+    )

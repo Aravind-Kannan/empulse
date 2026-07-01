@@ -7,9 +7,10 @@ import { ExternalLink, Loader2, Unplug, X } from "lucide-react";
 import { useIntegrations } from "@/context/IntegrationsContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import {
+  connectJiraIntegration,
   saveGitHubIntegrationConfig,
-  saveJiraIntegrationConfig,
   syncIntegrationSource,
+  validateJiraIntegration,
   validateNotionIntegration,
   validateSlackIntegration,
 } from "@/lib/api";
@@ -18,6 +19,9 @@ import {
   INTEGRATION_CATALOG,
   isIntegrationConnected,
   isIntegrationDraft,
+  normalizeJiraSiteUrl,
+  parseJiraProjectKeys,
+  validateJiraConfigDraft,
   type IntegrationDefinition,
   type IntegrationId,
 } from "@/lib/integrations";
@@ -126,10 +130,30 @@ export function IntegrationConfigDrawer({
         updateConfig("github", { validated: true, previouslyConnected: true });
         setSuccess("GitHub configuration saved and sync started.");
       } else if (app.id === "jira") {
-        await saveJiraIntegrationConfig(config.jira);
-        await syncIntegrationSource("jira");
-        updateConfig("jira", { validated: true, previouslyConnected: true });
-        setSuccess("Jira configuration saved and sync started.");
+        const validationError = validateJiraConfigDraft(config.jira);
+        if (validationError) {
+          throw new Error(validationError);
+        }
+        const normalizedSite = normalizeJiraSiteUrl(config.jira.siteUrl);
+        const normalizedKeys = parseJiraProjectKeys(config.jira.projectKeys).join(
+          ", ",
+        );
+        const jiraDraft = {
+          ...config.jira,
+          siteUrl: normalizedSite,
+          projectKeys: normalizedKeys,
+        };
+        const message = await validateJiraIntegration(jiraDraft);
+        await connectJiraIntegration(jiraDraft);
+        updateConfig("jira", {
+          siteUrl: normalizedSite,
+          projectKeys: normalizedKeys,
+          validated: true,
+          previouslyConnected: true,
+        });
+        setSuccess(
+          `${message} Cognee sync has started in the background.`,
+        );
       }
       await refreshOperationalState();
       setTimeout(() => onClose(), 900);
@@ -282,7 +306,7 @@ export function IntegrationConfigDrawer({
             <SetupGuide integrationId="jira" />
             <Field
               label="Site domain / instance URL"
-              hint="Your Atlassian cloud site"
+              hint="Your Atlassian Cloud site, e.g. https://acme.atlassian.net"
             >
               <input
                 type="url"
@@ -290,13 +314,33 @@ export function IntegrationConfigDrawer({
                 onChange={(e) =>
                   updateConfig("jira", { siteUrl: e.target.value })
                 }
+                onBlur={() =>
+                  updateConfig("jira", {
+                    siteUrl: normalizeJiraSiteUrl(config.jira.siteUrl),
+                  })
+                }
                 placeholder="https://acme.atlassian.net"
                 className={inputClass}
               />
             </Field>
             <Field
-              label="Project keys"
-              hint="Comma-separated keys, e.g. ENG, PLAT, OPS"
+              label="Atlassian account email"
+              hint="Email for your Atlassian account — paired with the API token for authentication"
+            >
+              <input
+                type="email"
+                value={config.jira.authEmail}
+                onChange={(e) =>
+                  updateConfig("jira", { authEmail: e.target.value })
+                }
+                placeholder="you@company.com"
+                className={inputClass}
+                autoComplete="email"
+              />
+            </Field>
+            <Field
+              label="Target project keys (optional)"
+              hint="Comma-separated keys (ENG, PLAT). Leave empty to import all accessible projects."
             >
               <input
                 type="text"
@@ -304,13 +348,21 @@ export function IntegrationConfigDrawer({
                 onChange={(e) =>
                   updateConfig("jira", { projectKeys: e.target.value })
                 }
-                placeholder="ENG, PLAT"
+                onBlur={() => {
+                  try {
+                    const keys = parseJiraProjectKeys(config.jira.projectKeys);
+                    updateConfig("jira", { projectKeys: keys.join(", ") });
+                  } catch {
+                    // keep raw value so save surfaces the validation error
+                  }
+                }}
+                placeholder="Leave empty for all projects"
                 className={inputClass}
               />
             </Field>
             <Field
               label="API access token"
-              hint="Atlassian API token paired with your account email"
+              hint="Atlassian API token from id.atlassian.com — verified via Jira API on save"
             >
               <SecretInput
                 value={config.jira.apiToken}

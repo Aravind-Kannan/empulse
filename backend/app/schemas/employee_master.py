@@ -46,4 +46,6 @@ class FetchUsersRequest(BaseModel):
     github_repository_url: str | None = None
     github_personal_access_token: str | None = None
     jira_site_url: str | None = None
+    jira_auth_email: str | None = None
     jira_api_token: str | None = None
+    jira_project_keys: str | None = None

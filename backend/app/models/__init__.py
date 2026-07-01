@@ -1,4 +1,5 @@
 from app.models.ingest_job import IngestJob
+from app.models.jira_integration import JiraIntegration
 from app.models.operational import (
     Assignment,
     Component,
@@ -22,4 +23,5 @@ __all__ = [
     "RoleHistory",
     "IncidentRecord",
     "IngestJob",
+    "JiraIntegration",
 ]

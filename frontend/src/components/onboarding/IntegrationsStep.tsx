@@ -13,6 +13,7 @@ import { fetchEmployeeMasterData } from "@/lib/api";
 import {
   getConnectedMemberImportSources,
   hasMemberImportSourceConnected,
+  MEMBER_IMPORT_SOURCE_LABEL,
 } from "@/lib/integrations";
 
 export function IntegrationsStep() {
@@ -31,7 +32,7 @@ export function IntegrationsStep() {
 
     if (!importReady) {
       setError(
-        "Connect and verify at least one integration (Slack, Notion, or GitHub) to import members.",
+        `Connect and verify at least one integration (${MEMBER_IMPORT_SOURCE_LABEL}) to import members.`,
       );
       return;
     }
@@ -68,10 +69,9 @@ export function IntegrationsStep() {
               Connect your data sources
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-zinc-400">
-              Connect any integration below. We pull reporting lines from Slack
-              (manager profile fields) and Notion people databases when
-              available; otherwise members import as a flat roster you can
-              organize on the next step.
+              Connect any integration below. For Jira we import people assigned
+              to issues in your projects (not apps or automation). Slack and
+              Notion can add reporting lines when available.
             </p>
           </div>
         </div>
@@ -79,7 +79,7 @@ export function IntegrationsStep() {
         {!importReady && (
           <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
             Connect and save at least one integration to import your member
-            roster — Slack, Notion, or GitHub org.
+            roster — {MEMBER_IMPORT_SOURCE_LABEL}.
           </p>
         )}
       </div>

@@ -155,7 +155,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
             "oauthConnected",
             "branchTarget",
           ],
-          jira: ["siteUrl", "apiToken", "projectKeys"],
+          jira: ["siteUrl", "authEmail", "apiToken", "projectKeys"],
         };
         const touchesCredentials = credentialFields[id].some(
           (field) => field in patch,

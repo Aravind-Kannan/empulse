@@ -20,10 +20,13 @@ from app.services.integration_sync import (
     save_github_config,
     save_jira_config,
 )
-from app.services.employee_master_fetch import fetch_employee_master_data
 from app.schemas.employee_master import (
     EmployeeMasterDataResponse,
     FetchUsersRequest,
+)
+from app.services.employee_master_fetch import (
+    enrich_jira_credentials_from_db,
+    fetch_employee_master_data,
 )
 from app.services.integration_validate import (
     validate_notion_token,
@@ -88,10 +91,16 @@ def validate_slack(payload: SlackValidateRequest) -> IntegrationValidateResponse
 
 
 @router.get("/status")
-def integration_status() -> dict[str, bool]:
+def integration_status(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    from app.services.jira_service import get_jira_integration
+
+    jira = get_jira_integration(db, tenant.id)
     return {
         "github": get_github_config() is not None,
-        "jira": get_jira_config() is not None,
+        "jira": jira is not None and jira.status in ("connected", "syncing"),
     }
 
 
@@ -122,18 +131,20 @@ def fetch_users_get(
 def fetch_users_post(
     payload: FetchUsersRequest,
     tenant: CurrentTenant,
+    db: Session = Depends(get_db),
 ) -> EmployeeMasterDataResponse:
     if not payload.sources:
         raise HTTPException(
             status_code=400,
             detail="Provide at least one source (slack, jira, notion, github).",
         )
+    credentials = enrich_jira_credentials_from_db(payload, db, tenant.id)
     try:
         return fetch_employee_master_data(
-            payload.sources,
-            company=payload.company,
-            credentials=payload,
-            flat_hierarchy=payload.flat_hierarchy,
+            credentials.sources,
+            company=credentials.company,
+            credentials=credentials,
+            flat_hierarchy=credentials.flat_hierarchy,
             tenant_id=tenant.id,
         )
     except ValueError as exc:
@@ -167,7 +178,7 @@ async def sync_all_configured(
     sources: list[str] = []
     if get_github_config():
         sources.append("github")
-    if get_jira_config():
+    if get_jira_config(db, tenant.id):
         sources.append("jira")
 
     if not sources:

@@ -35,6 +35,7 @@ export interface GitHubConfig {
 
 export interface JiraConfig {
   siteUrl: string;
+  authEmail: string;
   projectKeys: string;
   apiToken: string;
   validated?: boolean;
@@ -110,8 +111,65 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
     personalAccessToken: "",
     oauthConnected: false,
   },
-  jira: { siteUrl: "", projectKeys: "", apiToken: "" },
+  jira: { siteUrl: "", authEmail: "", projectKeys: "", apiToken: "" },
 };
+
+const JIRA_SITE_RE =
+  /^https?:\/\/[a-zA-Z0-9][-a-zA-Z0-9]*\.atlassian\.net\/?$/i;
+const PROJECT_KEY_RE = /^[A-Z][A-Z0-9]{0,9}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function normalizeJiraSiteUrl(raw: string): string {
+  let cleaned = raw.trim().replace(/\/+$/, "");
+  if (!cleaned) return "";
+  if (!/^https?:\/\//i.test(cleaned)) {
+    cleaned = `https://${cleaned}`;
+  }
+  return cleaned;
+}
+
+export function parseJiraProjectKeys(raw: string): string[] {
+  if (!raw.trim()) return [];
+  const keys: string[] = [];
+  for (const part of raw.split(",")) {
+    const key = part.trim().toUpperCase();
+    if (!key) continue;
+    if (!PROJECT_KEY_RE.test(key)) {
+      throw new Error(
+        `Invalid project key "${part.trim()}". Use comma-separated keys like ENG, PLAT.`,
+      );
+    }
+    if (!keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+/** Returns an error message when the draft config is invalid, otherwise null. */
+export function validateJiraConfigDraft(config: JiraConfig): string | null {
+  const siteUrl = normalizeJiraSiteUrl(config.siteUrl);
+  if (!siteUrl) {
+    return "Jira site URL is required.";
+  }
+  if (!JIRA_SITE_RE.test(siteUrl)) {
+    return "Enter a valid Atlassian Cloud URL, e.g. https://acme.atlassian.net";
+  }
+  const email = config.authEmail.trim();
+  if (!email) {
+    return "Atlassian account email is required for API authentication.";
+  }
+  if (!EMAIL_RE.test(email)) {
+    return "Enter a valid Atlassian account email.";
+  }
+  if (!config.apiToken.trim()) {
+    return "Jira API token is required.";
+  }
+  try {
+    parseJiraProjectKeys(config.projectKeys);
+  } catch (err) {
+    return err instanceof Error ? err.message : "Invalid project keys.";
+  }
+  return null;
+}
 
 export function wasPreviouslyConnected(
   id: IntegrationId,
@@ -141,6 +199,7 @@ export function isIntegrationConnected(
     case "jira":
       return Boolean(
         config.jira.siteUrl.trim() &&
+          config.jira.authEmail.trim() &&
           config.jira.apiToken.trim() &&
           config.jira.validated,
       );
@@ -165,7 +224,11 @@ export function isIntegrationDraft(
             config.github.oauthConnected),
       );
     case "jira":
-      return Boolean(config.jira.siteUrl.trim() && config.jira.apiToken.trim());
+      return Boolean(
+        config.jira.siteUrl.trim() &&
+          config.jira.authEmail.trim() &&
+          config.jira.apiToken.trim(),
+      );
   }
 }
 
@@ -174,7 +237,11 @@ export const MEMBER_IMPORT_SOURCES: IntegrationId[] = [
   "slack",
   "notion",
   "github",
+  "jira",
 ];
+
+export const MEMBER_IMPORT_SOURCE_LABEL =
+  "Slack, Notion, GitHub, or Jira";
 
 /** @deprecated Use MEMBER_IMPORT_SOURCES */
 export const PEOPLE_INTEGRATION_IDS = MEMBER_IMPORT_SOURCES;
