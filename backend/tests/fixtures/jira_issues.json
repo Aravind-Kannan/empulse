@@ -1,0 +1,88 @@
+[
+  {
+    "issue_key": "ENG-142",
+    "issue_type": "Bug",
+    "priority": "High",
+    "status": "In Progress",
+    "status_category": "indeterminate",
+    "project_key": "ENG",
+    "assignee_provider_user_id": "jira-cara",
+    "assignee_email": "cara.patel@acme.com",
+    "component_id": "comp-auth"
+  },
+  {
+    "issue_key": "ENG-156",
+    "issue_type": "Task",
+    "priority": "Medium",
+    "status": "Open",
+    "status_category": "new",
+    "project_key": "ENG",
+    "assignee_provider_user_id": "jira-ben",
+    "assignee_email": "ben.rivera@acme.com",
+    "component_id": "comp-payments"
+  },
+  {
+    "issue_key": "OPS-88",
+    "issue_type": "Bug",
+    "priority": "Critical",
+    "status": "Blocked",
+    "status_category": "indeterminate",
+    "project_key": "OPS",
+    "assignee_provider_user_id": "jira-diego",
+    "assignee_email": "diego.alvarez@acme.com",
+    "component_id": "comp-payments"
+  },
+  {
+    "issue_key": "ENG-161",
+    "issue_type": "Task",
+    "priority": "Low",
+    "status": "Done",
+    "status_category": "done",
+    "project_key": "ENG",
+    "assignee_provider_user_id": "jira-elena",
+    "assignee_email": "elena.kowalski@acme.com",
+    "component_id": "comp-notifications"
+  },
+  {
+    "issue_key": "ENG-201",
+    "issue_type": "Bug",
+    "priority": "High",
+    "status": "Open",
+    "status_category": "new",
+    "project_key": "ENG",
+    "assignee_provider_user_id": null,
+    "component_id": "comp-payments"
+  },
+  {
+    "issue_key": "ENG-202",
+    "issue_type": "Bug",
+    "priority": "Critical",
+    "status": "Open",
+    "status_category": "new",
+    "project_key": "ENG",
+    "assignee_provider_user_id": null,
+    "component_id": "comp-auth"
+  },
+  {
+    "issue_key": "OPS-91",
+    "issue_type": "Bug",
+    "priority": "High",
+    "status": "Open",
+    "status_category": "new",
+    "project_key": "OPS",
+    "assignee_provider_user_id": null,
+    "component_id": "comp-payments"
+  },
+  {
+    "issue_key": "ENG-300",
+    "issue_type": "Epic",
+    "priority": "Medium",
+    "status": "In Progress",
+    "status_category": "indeterminate",
+    "project_key": "ENG",
+    "assignee_provider_user_id": "jira-ben",
+    "assignee_email": "ben.rivera@acme.com",
+    "component_id": "comp-payments",
+    "story_points": 13.0
+  }
+]

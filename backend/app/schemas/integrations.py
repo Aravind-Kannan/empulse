@@ -8,12 +8,22 @@ class GitHubConfigRequest(BaseModel):
     branch_target: str = "main"
     personal_access_token: str = ""
     oauth_connected: bool = False
+    path_component_map: dict[str, str] = Field(default_factory=dict)
+    default_component_id: str | None = None
 
 
 class JiraConfigRequest(BaseModel):
     site_url: str = Field(min_length=1)
     project_keys: str = ""
     api_token: str = ""
+    account_email: str = ""
+    component_field_map: dict[str, str] = Field(default_factory=dict)
+    label_component_map: dict[str, str] = Field(default_factory=dict)
+    project_component_map: dict[str, str] = Field(default_factory=dict)
+    default_component_id: str | None = None
+    high_priorities: list[str] = Field(
+        default_factory=lambda: ["Highest", "High", "Critical"]
+    )
 
 
 class NotionValidateRequest(BaseModel):
@@ -22,6 +32,61 @@ class NotionValidateRequest(BaseModel):
 
 class SlackValidateRequest(BaseModel):
     bot_token: str = Field(min_length=1)
+
+
+class SlackConfigRequest(BaseModel):
+    workspace_url: str = ""
+    bot_token: str = ""
+    channel_ids: str = ""
+    validated: bool = False
+    previously_connected: bool = False
+
+
+class NotionConfigRequest(BaseModel):
+    integration_token: str = ""
+    database_ids: str = ""
+    validated: bool = False
+    previously_connected: bool = False
+
+
+class StoredSlackConfig(BaseModel):
+    workspace_url: str = ""
+    bot_token: str = ""
+    channel_ids: str = ""
+    validated: bool = False
+    previously_connected: bool = False
+
+
+class StoredNotionConfig(BaseModel):
+    integration_token: str = ""
+    database_ids: str = ""
+    validated: bool = False
+    previously_connected: bool = False
+
+
+class StoredGitHubConfig(BaseModel):
+    repository_url: str = ""
+    branch_target: str = "main"
+    personal_access_token: str = ""
+    oauth_connected: bool = False
+    validated: bool = False
+    previously_connected: bool = False
+
+
+class StoredJiraConfig(BaseModel):
+    site_url: str = ""
+    project_keys: str = ""
+    api_token: str = ""
+    account_email: str = ""
+    validated: bool = False
+    previously_connected: bool = False
+
+
+class TenantIntegrationsConfigResponse(BaseModel):
+    slack: StoredSlackConfig
+    notion: StoredNotionConfig
+    github: StoredGitHubConfig
+    jira: StoredJiraConfig
 
 
 class IntegrationValidateResponse(BaseModel):

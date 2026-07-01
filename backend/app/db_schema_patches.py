@@ -18,6 +18,8 @@ TENANT_SCOPED_TABLES = (
     "role_history",
     "employee_identities",
     "unmapped_activities",
+    "github_ownership_snapshots",
+    "doa_file_snapshots",
 )
 
 
@@ -146,6 +148,9 @@ def apply_schema_patches(engine: Engine) -> None:
                     )
                 )
 
-    from app.models.operational import UnmappedActivity
+    from app.models.operational import DoaFileSnapshot, GitHubOwnershipSnapshot, TenantIntegrationConfig, UnmappedActivity
 
     UnmappedActivity.__table__.create(bind=engine, checkfirst=True)
+    GitHubOwnershipSnapshot.__table__.create(bind=engine, checkfirst=True)
+    DoaFileSnapshot.__table__.create(bind=engine, checkfirst=True)
+    TenantIntegrationConfig.__table__.create(bind=engine, checkfirst=True)

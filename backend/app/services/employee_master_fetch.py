@@ -16,7 +16,7 @@ from app.schemas.employee_master import (
     MasterDataRecord,
 )
 from app.services.employee_ids import employee_id_from_email
-from app.services.integration_sync import get_github_config, get_jira_config
+from app.services.integration_config_store import get_github_config
 
 
 def enrich_jira_credentials_from_db(
@@ -702,6 +702,9 @@ def _source_credentials_provided(source: str, creds: FetchUsersRequest) -> bool:
 def _fetch_source_records(
     source: str,
     credentials: FetchUsersRequest | None,
+    *,
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> list[MasterDataRecord]:
     creds = credentials or FetchUsersRequest(sources=[source])
     live_requested = _source_credentials_provided(source, creds)
@@ -720,7 +723,11 @@ def _fetch_source_records(
         return _fetch_slack_users_fallback()
 
     if source == "github":
-        gh_config = get_github_config()
+        gh_config = (
+            get_github_config(db, tenant_id)
+            if db is not None and tenant_id is not None
+            else None
+        )
         repo_url = creds.github_repository_url or (
             gh_config.repository_url if gh_config else ""
         )
@@ -872,7 +879,7 @@ def fetch_employee_master_data(
     credentials: FetchUsersRequest | None = None,
     flat_hierarchy: bool = False,
     tenant_id: uuid.UUID | None = None,
-    skip_failed_sources: bool = False,
+    db: Session | None = None,
 ) -> EmployeeMasterDataResponse:
     """
     Import workspace members from connected platforms.
@@ -891,21 +898,9 @@ def fetch_employee_master_data(
     sources_queried: list[str] = []
     source_errors: list[str] = []
     for source in active_sources:
-        try:
-            records = _fetch_source_records(source, credentials)
-        except ValueError as exc:
-            if skip_failed_sources:
-                source_errors.append(f"{source}: {exc}")
-                continue
-            raise
-        if not records:
-            message = f"{source}: no importable members returned."
-            if skip_failed_sources:
-                source_errors.append(message)
-                continue
-            raise ValueError(message)
-        raw_records.extend(records)
-        sources_queried.append(source)
+        raw_records.extend(
+            _fetch_source_records(source, credentials, db=db, tenant_id=tenant_id)
+        )
 
     if not raw_records:
         if source_errors:

@@ -27,14 +27,19 @@ def compute_knowledge(
     backup_term = 0.15 * (100.0 - signals.backup_review_score)
 
     score = min(100.0, ownership_term + spof_term + breadth_term + backup_term)
+    ownership_label = (
+        "DOA codebase ownership"
+        if signals.uses_doa_ownership
+        else "Codebase ownership concentration"
+    )
     factors = [
         DimensionFactor(
             "ownership",
-            "Codebase ownership concentration",
+            ownership_label,
             ownership_pct,
             round(ownership_term, 1),
             provider="github" if not github_missing else "internal",
-            synthetic=github_missing and signals.codebase_share_pct > 0,
+            synthetic=github_missing and signals.codebase_share_pct > 0 and not signals.uses_doa_ownership,
         ),
         DimensionFactor(
             "spof",
@@ -54,7 +59,8 @@ def compute_knowledge(
             "Backup review coverage gap",
             100.0 - signals.backup_review_score,
             round(backup_term, 1),
-            synthetic=True,
+            provider="github" if signals.github_connected else "internal",
+            synthetic=not signals.uses_review_network,
         ),
     ]
     return DimensionResult(

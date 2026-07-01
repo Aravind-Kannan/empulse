@@ -3,24 +3,51 @@
 from __future__ import annotations
 
 import uuid
-
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.operational import Assignment
+from app.models.operational import Assignment, Component, Employee, GitHubOwnershipSnapshot
+from app.services.github_types import GitHubPullRequestActivity
 from app.services.identity_resolver import resolve_author_employee_id
-from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
+from app.services.jira_types import JiraEmployeeSignals, JiraIssueActivity
 
 _jira_backlog_by_employee: dict[str, int] = {}
+_jira_employee_signals: dict[str, JiraEmployeeSignals] = {}
+_jira_issues_cache: list[JiraIssueActivity] = []
 _github_ownership: dict[str, dict[str, float]] = {}
 _github_spof_components: set[str] = set()
+_github_employee_context: dict[str, "GitHubEmployeeTelemetry"] = {}
+_github_open_prs_by_login: dict[str, int] = {}
+_component_bus_factor: dict[str, int] = {}
+_employee_max_doa_pct: dict[str, float] = {}
+_doa_available = False
+_doa_decay_evidence: list[dict] = []
+_github_activities: list[GitHubPullRequestActivity] = []
+_review_network = None
 _jira_synced = False
 _github_synced = False
 _sync_timestamps: dict[str, str] = {}
 
 HIGH_PRIORITIES = {"High", "Critical"}
+SPOF_OWNERSHIP_THRESHOLD = 85.0
+
+
+@dataclass
+class GitHubEmployeeTelemetry:
+    backup_review_score: float = 50.0
+    open_prs: int = 0
+    recent_pr_count: int = 0
+    unique_reviewers: int = 0
+    review_concentration_pct: float = 0.0
+    sole_reviewer_count: int = 0
+    reviews_given_count: int = 0
+    isolation_score: float = 0.0
+    no_backup_pr_urls: list[str] = field(default_factory=list)
+    latest_pr_url: str | None = None
+    top_pr_url_by_component: dict[str, str] = field(default_factory=dict)
 
 
 def mark_sync_completed(source: str) -> None:
@@ -56,73 +83,180 @@ def _main_engineer_for_component(
     return assignments[0].employee_id
 
 
-def apply_jira_telemetry(db: Session, tenant_id: uuid.UUID) -> dict[str, int]:
-    """Map unassigned high-priority Jira bugs to each component's main engineer."""
-    global _jira_synced
+def apply_jira_telemetry(
+    db: Session,
+    tenant_id: uuid.UUID,
+    issues: list[JiraIssueActivity] | None = None,
+    *,
+    high_priorities: set[str] | None = None,
+) -> dict[str, int]:
+    """Aggregate Jira issues into employee signals and refresh component counts."""
+    global _jira_synced, _jira_issues_cache
+
+    if issues is None:
+        from app.services.integration_config_store import get_jira_config
+        from app.services.jira_client import issues_from_mock_feed
+
+        config = get_jira_config(db, tenant_id)
+        site_url = config.site_url if config else "https://acme.atlassian.net"
+        issues = issues_from_mock_feed(site_url)
+
+    priorities = high_priorities or HIGH_PRIORITIES
+    valid_components = {
+        row[0]
+        for row in db.query(Component.id).filter(Component.tenant_id == tenant_id).all()
+    }
 
     backlog: dict[str, int] = defaultdict(int)
+    employee_open_tasks: dict[str, int] = defaultdict(int)
+    employee_open_p1_p2: dict[str, int] = defaultdict(int)
+    employee_epics: dict[str, int] = defaultdict(int)
+    employee_sprint_points: dict[str, float] = defaultdict(float)
+    employee_urls: dict[str, list[str]] = defaultdict(list)
+    component_open_tasks: dict[str, int] = defaultdict(int)
+    component_unresolved: dict[str, int] = defaultdict(int)
 
-    for issue in MOCK_JIRA_ISSUES:
-        assignee_provider_id = issue.get("assignee_provider_user_id")
-        if assignee_provider_id:
-            resolved_assignee = resolve_author_employee_id(
+    for issue in issues:
+        if issue.is_done:
+            continue
+        component_id = issue.component_id
+        if component_id and component_id not in valid_components:
+            component_id = None
+
+        assignee_id: str | None = None
+        if issue.assignee_provider_user_id:
+            assignee_id = resolve_author_employee_id(
                 db,
                 tenant_id,
-                issue.get("assignee_provider", "jira"),
-                assignee_provider_id,
-                demo_fallback_employee_id=issue.get("assignee_employee_id"),
+                "jira",
+                issue.assignee_provider_user_id,
+                email_hint=issue.assignee_email,
                 quarantine_event_type="jira_issue",
-                quarantine_payload={"ticket_id": issue.get("ticket_id")},
+                quarantine_payload={"issue_key": issue.issue_key},
             )
-            if resolved_assignee:
-                continue
 
-        if issue.get("assignee_employee_id") or assignee_provider_id:
-            continue
-        if issue["priority"] not in HIGH_PRIORITIES:
-            continue
-        if issue["issue_type"] != "Bug":
-            continue
+        if assignee_id and not issue.is_subtask:
+            employee_open_tasks[assignee_id] += 1
+            if issue.is_high_priority and issue.priority in priorities:
+                employee_open_p1_p2[assignee_id] += 1
+            if issue.issue_type.lower() == "epic":
+                employee_epics[assignee_id] += 1
+            if issue.story_points > 0:
+                employee_sprint_points[assignee_id] += issue.story_points
+            if issue.issue_url:
+                employee_urls[assignee_id].append(issue.issue_url)
 
-        main_engineer = _main_engineer_for_component(db, issue["component_id"], tenant_id)
-        if main_engineer:
-            backlog[main_engineer] += 1
+        if component_id:
+            if assignee_id and not issue.is_subtask:
+                component_open_tasks[component_id] += 1
+            if issue.is_bug_or_incident and issue.is_high_priority and issue.priority in priorities:
+                component_unresolved[component_id] += 1
+
+        is_unassigned_boost_candidate = (
+            not assignee_id
+            and issue.is_bug_or_incident
+            and issue.priority in priorities
+            and component_id
+        )
+        if is_unassigned_boost_candidate:
+            main_engineer = _main_engineer_for_component(db, component_id, tenant_id)
+            if main_engineer:
+                backlog[main_engineer] += 1
+                if issue.issue_url:
+                    employee_urls[main_engineer].append(issue.issue_url)
+
+    for component_id in valid_components:
+        row = (
+            db.query(Component)
+            .filter(Component.id == component_id, Component.tenant_id == tenant_id)
+            .one_or_none()
+        )
+        if row:
+            row.open_tasks_count = component_open_tasks.get(component_id, 0)
+            row.unresolved_incidents = component_unresolved.get(component_id, 0)
+
+    employee_ids = (
+        set(employee_open_tasks)
+        | set(backlog)
+        | set(employee_epics)
+    )
+    signals: dict[str, JiraEmployeeSignals] = {}
+    for employee_id in employee_ids:
+        signals[employee_id] = JiraEmployeeSignals(
+            employee_id=employee_id,
+            open_tasks=employee_open_tasks.get(employee_id, 0),
+            open_p1_p2=employee_open_p1_p2.get(employee_id, 0),
+            jira_backlog_boost=backlog.get(employee_id, 0),
+            epic_owner_count=employee_epics.get(employee_id, 0),
+            sprint_points=employee_sprint_points.get(employee_id, 0.0),
+            sample_issue_urls=employee_urls.get(employee_id, [])[:5],
+        )
 
     _jira_backlog_by_employee.clear()
     _jira_backlog_by_employee.update(backlog)
+    _jira_employee_signals.clear()
+    _jira_employee_signals.update(signals)
+    _jira_issues_cache = list(issues)
     _jira_synced = True
+    db.flush()
     return dict(backlog)
 
 
-def apply_github_telemetry(db: Session, tenant_id: uuid.UUID) -> dict[str, dict[str, float]]:
-    """
-    Derive 6-month directory ownership splits from GitHub activity.
-    Components with a single contributor are flagged as SPOF.
-    """
-    global _github_synced
-
+def _compute_ownership_from_activities(
+    db: Session,
+    tenant_id: uuid.UUID,
+    activities: list[GitHubPullRequestActivity],
+    *,
+    open_prs_by_login: dict[str, int] | None = None,
+) -> tuple[dict[str, dict[str, float]], set[str], dict[str, GitHubEmployeeTelemetry]]:
     loc_by_component: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    employee_context: dict[str, GitHubEmployeeTelemetry] = defaultdict(GitHubEmployeeTelemetry)
+    pr_urls_by_component_employee: dict[tuple[str, str], str] = {}
+    reviewers_by_employee: dict[str, set[str]] = defaultdict(set)
+    pr_count_by_employee: dict[str, int] = defaultdict(int)
 
-    for activity in MOCK_GITHUB_ACTIVITY:
+    open_prs_by_login = open_prs_by_login or _github_open_prs_by_login
+
+    for activity in activities:
+        if activity.author_type == "Bot":
+            continue
+
         author_id = resolve_author_employee_id(
             db,
             tenant_id,
-            activity.get("author_provider", "github"),
-            activity["author_provider_user_id"],
-            demo_fallback_employee_id=activity.get("author_employee_id"),
+            "github",
+            activity.author_provider_user_id,
+            demo_fallback_employee_id=None,
             quarantine_event_type="github_pr",
             quarantine_payload={
-                "pr_number": activity.get("pr_number"),
-                "commit_sha": activity.get("commit_sha"),
+                "pr_number": activity.pr_number,
+                "commit_sha": activity.commit_sha,
+                "pr_url": activity.pr_url,
             },
         )
         if not author_id:
             continue
 
-        for file_change in activity["files"]:
-            component_id = file_change["component_id"]
-            loc = file_change["loc_added"] + file_change["loc_removed"]
+        pr_count_by_employee[author_id] += 1
+        ctx = employee_context[author_id]
+        ctx.latest_pr_url = activity.pr_url
+        ctx.open_prs = open_prs_by_login.get(activity.author_login.lower(), 0)
+
+        for reviewer in activity.reviewer_logins:
+            if reviewer.lower() != activity.author_login.lower():
+                reviewers_by_employee[author_id].add(reviewer.lower())
+
+        for file_change in activity.files:
+            component_id = file_change.component_id
+            if not component_id:
+                continue
+            loc = file_change.loc_added + file_change.loc_removed
+            if loc <= 0:
+                continue
             loc_by_component[component_id][author_id] += loc
+            existing = pr_urls_by_component_employee.get((component_id, author_id))
+            if not existing or loc > 0:
+                pr_urls_by_component_employee[(component_id, author_id)] = activity.pr_url
 
     ownership: dict[str, dict[str, float]] = {}
     spof_components: set[str] = set()
@@ -133,19 +267,275 @@ def apply_github_telemetry(db: Session, tenant_id: uuid.UUID) -> dict[str, dict[
             employee_id: round((loc / total_loc) * 100, 1)
             for employee_id, loc in contributors.items()
         }
-        if len(contributors) <= 1:
+        if contributors:
+            max_pct = max(ownership[component_id].values())
+            if max_pct > SPOF_OWNERSHIP_THRESHOLD:
+                spof_components.add(component_id)
+
+    for employee_id, ctx in employee_context.items():
+        unique_reviewers = reviewers_by_employee.get(employee_id, set())
+        ctx.unique_reviewers = len(unique_reviewers)
+        ctx.recent_pr_count = pr_count_by_employee.get(employee_id, 0)
+        for (component_id, emp_id), url in pr_urls_by_component_employee.items():
+            if emp_id == employee_id:
+                ctx.top_pr_url_by_component[component_id] = url
+
+    return ownership, spof_components, dict(employee_context)
+
+
+def _persist_ownership_snapshots(
+    db: Session,
+    tenant_id: uuid.UUID,
+    ownership: dict[str, dict[str, float]],
+) -> None:
+    valid_components = {
+        row[0]
+        for row in db.query(Component.id)
+        .filter(Component.tenant_id == tenant_id)
+        .all()
+    }
+    valid_employees = {
+        row[0]
+        for row in db.query(Assignment.employee_id)
+        .filter(Assignment.tenant_id == tenant_id)
+        .all()
+    }
+    if not valid_employees:
+        valid_employees = {
+            row[0]
+            for row in db.query(Employee.id)
+            .filter(Employee.tenant_id == tenant_id)
+            .all()
+        }
+
+    db.query(GitHubOwnershipSnapshot).filter(
+        GitHubOwnershipSnapshot.tenant_id == tenant_id
+    ).delete(synchronize_session=False)
+    now = datetime.now(UTC)
+    for component_id, contributors in ownership.items():
+        if component_id not in valid_components:
+            continue
+        for employee_id, pct in contributors.items():
+            if employee_id not in valid_employees:
+                continue
+            db.add(
+                GitHubOwnershipSnapshot(
+                    tenant_id=tenant_id,
+                    component_id=component_id,
+                    employee_id=employee_id,
+                    ownership_pct=pct,
+                    computed_at=now,
+                )
+            )
+    db.flush()
+
+
+def _load_ownership_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
+    rows = (
+        db.query(GitHubOwnershipSnapshot)
+        .filter(GitHubOwnershipSnapshot.tenant_id == tenant_id)
+        .all()
+    )
+    if not rows:
+        return False
+
+    ownership: dict[str, dict[str, float]] = defaultdict(dict)
+    for row in rows:
+        ownership[row.component_id][row.employee_id] = row.ownership_pct
+
+    spof_components: set[str] = set()
+    for component_id, contributors in ownership.items():
+        if contributors and max(contributors.values()) > SPOF_OWNERSHIP_THRESHOLD:
+            spof_components.add(component_id)
+
+    _github_ownership.clear()
+    _github_ownership.update(dict(ownership))
+    _github_spof_components.clear()
+    _github_spof_components.update(spof_components)
+    return True
+
+
+def _load_doa_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
+    from app.models.operational import DoaFileSnapshot
+    from app.services.github_doa import compute_bus_factor, DOA_AUTHOR_THRESHOLD
+
+    rows = (
+        db.query(DoaFileSnapshot)
+        .filter(DoaFileSnapshot.tenant_id == tenant_id)
+        .all()
+    )
+    if not rows:
+        return False
+
+    global _doa_available, _component_bus_factor, _employee_max_doa_pct
+    per_component_files: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    contributor_weight: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    employee_max: dict[str, float] = defaultdict(float)
+
+    for row in rows:
+        contributor_weight[row.component_id][row.employee_id] += row.doa_score
+        employee_max[row.employee_id] = max(employee_max[row.employee_id], row.doa_score * 100.0)
+        if row.is_author or row.doa_score >= DOA_AUTHOR_THRESHOLD:
+            per_component_files[row.component_id][row.file_path].append(row.employee_id)
+
+    ownership: dict[str, dict[str, float]] = {}
+    bus_factor: dict[str, int] = {}
+    spof_components: set[str] = set()
+
+    for component_id, weights in contributor_weight.items():
+        total = sum(weights.values()) or 1.0
+        ownership[component_id] = {
+            employee_id: round((weight / total) * 100, 1)
+            for employee_id, weight in weights.items()
+        }
+        bf = compute_bus_factor(per_component_files.get(component_id, {}))
+        bus_factor[component_id] = bf
+        if bf <= 1:
             spof_components.add(component_id)
 
     _github_ownership.clear()
     _github_ownership.update(ownership)
     _github_spof_components.clear()
     _github_spof_components.update(spof_components)
+    _component_bus_factor.clear()
+    _component_bus_factor.update(bus_factor)
+    _employee_max_doa_pct.clear()
+    _employee_max_doa_pct.update(dict(employee_max))
+    _doa_available = True
+    return True
+
+
+def hydrate_github_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
+    global _github_synced
+    if _github_synced:
+        return True
+    if _load_ownership_from_db(db, tenant_id):
+        _load_doa_from_db(db, tenant_id)
+        _github_synced = True
+        return True
+    if _load_doa_from_db(db, tenant_id):
+        _github_synced = True
+        return True
+    return False
+
+
+def apply_github_telemetry(
+    db: Session,
+    tenant_id: uuid.UUID,
+    activities: list[GitHubPullRequestActivity] | None = None,
+    *,
+    open_prs_by_login: dict[str, int] | None = None,
+) -> dict[str, dict[str, float]]:
+    """
+    Derive directory ownership splits from GitHub activity and persist snapshots.
+    Components with >85% single-contributor ownership are flagged as SPOF.
+    """
+    global _github_synced, _github_employee_context, _doa_available
+    global _component_bus_factor, _employee_max_doa_pct, _doa_decay_evidence
+    global _github_activities, _review_network
+
+    if activities is None:
+        if hydrate_github_telemetry_from_db(db, tenant_id):
+            return _github_ownership
+        from app.services.github_client import activities_from_mock_feed
+
+        activities = activities_from_mock_feed()
+
+    if open_prs_by_login:
+        _github_open_prs_by_login.clear()
+        _github_open_prs_by_login.update(open_prs_by_login)
+
+    from app.services.github_doa import persist_doa_snapshots
+
+    doa_result = persist_doa_snapshots(db, tenant_id, activities)
+    _doa_available = bool(doa_result.snapshots)
+    _component_bus_factor.clear()
+    _component_bus_factor.update(doa_result.bus_factor_by_component)
+    _employee_max_doa_pct.clear()
+    _employee_max_doa_pct.update(doa_result.employee_max_doa_pct)
+    _doa_decay_evidence = list(doa_result.decay_evidence)
+
+    ownership, spof_components, employee_context = _compute_ownership_from_activities(
+        db,
+        tenant_id,
+        activities,
+        open_prs_by_login=open_prs_by_login,
+    )
+
+    if doa_result.ownership:
+        ownership = doa_result.ownership
+        spof_components = {
+            component_id
+            for component_id, bf in doa_result.bus_factor_by_component.items()
+            if bf <= 1
+        }
+        if not spof_components:
+            spof_components = {
+                component_id
+                for component_id, contributors in ownership.items()
+                if contributors and max(contributors.values()) > SPOF_OWNERSHIP_THRESHOLD
+            }
+
+    _github_ownership.clear()
+    _github_ownership.update(ownership)
+    _github_spof_components.clear()
+    _github_spof_components.update(spof_components)
+    from app.services.github_reviews import build_review_network
+
+    component_rows = (
+        db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    )
+    component_by_id = {row.id: row for row in component_rows}
+    review_network = build_review_network(
+        db,
+        tenant_id,
+        activities,
+        since_days=90,
+        component_by_id=component_by_id,
+        bus_factor_by_component=_component_bus_factor,
+    )
+    _review_network = review_network
+    _github_activities = list(activities)
+
+    for employee_id, review_metrics in review_network.metrics_by_employee.items():
+        ctx = employee_context.setdefault(employee_id, GitHubEmployeeTelemetry())
+        ctx.backup_review_score = review_metrics.backup_review_score
+        ctx.unique_reviewers = review_metrics.unique_reviewers_on_prs
+        ctx.recent_pr_count = review_metrics.recent_pr_count
+        ctx.review_concentration_pct = review_metrics.review_concentration_pct
+        ctx.sole_reviewer_count = review_metrics.sole_reviewer_count
+        ctx.reviews_given_count = review_metrics.reviews_given_count
+        ctx.isolation_score = review_metrics.isolation_score
+        ctx.no_backup_pr_urls = list(review_metrics.no_backup_pr_urls)
+
+    _github_employee_context.clear()
+    _github_employee_context.update(employee_context)
+
+    _persist_ownership_snapshots(db, tenant_id, ownership)
     _github_synced = True
     return ownership
 
 
 def get_jira_backlog_boost(employee_id: str) -> int:
     return _jira_backlog_by_employee.get(employee_id, 0)
+
+
+def get_jira_employee_signals(employee_id: str) -> JiraEmployeeSignals | None:
+    return _jira_employee_signals.get(employee_id)
+
+
+def get_jira_open_tasks(employee_id: str) -> int | None:
+    signals = _jira_employee_signals.get(employee_id)
+    return signals.open_tasks if signals else None
+
+
+def get_jira_epic_owner_count(employee_id: str) -> int:
+    signals = _jira_employee_signals.get(employee_id)
+    return signals.epic_owner_count if signals else 0
+
+
+def get_cached_jira_issues() -> list[JiraIssueActivity]:
+    return list(_jira_issues_cache)
 
 
 def has_jira_sync() -> bool:
@@ -164,22 +554,93 @@ def is_github_spof(component_id: str) -> bool:
     return component_id in _github_spof_components
 
 
+def get_github_employee_context(employee_id: str) -> GitHubEmployeeTelemetry:
+    return _github_employee_context.get(employee_id, GitHubEmployeeTelemetry())
+
+
+def get_github_backup_review_score(employee_id: str) -> float:
+    return get_github_employee_context(employee_id).backup_review_score
+
+
+def get_github_open_prs(employee_id: str) -> int:
+    return get_github_employee_context(employee_id).open_prs
+
+
+def has_doa_ownership() -> bool:
+    return _doa_available
+
+
+def get_component_bus_factor(component_id: str) -> int | None:
+    return _component_bus_factor.get(component_id)
+
+
+def get_all_bus_factors() -> dict[str, int]:
+    return dict(_component_bus_factor)
+
+
+def get_employee_max_doa_pct(employee_id: str) -> float:
+    return _employee_max_doa_pct.get(employee_id, 0.0)
+
+
+def get_doa_decay_evidence() -> list[dict]:
+    return list(_doa_decay_evidence)
+
+
+def get_review_network():
+    return _review_network
+
+
+def get_github_activities() -> list[GitHubPullRequestActivity]:
+    return list(_github_activities)
+
+
+def get_team_risky_changes():
+    if _review_network is None:
+        return []
+    return list(_review_network.risky_changes)
+
+
+def has_review_network() -> bool:
+    return _review_network is not None
+
+
 def get_telemetry_snapshot() -> dict[str, object]:
     return {
         "jira_synced": _jira_synced,
         "github_synced": _github_synced,
+        "doa_available": _doa_available,
         "jira_backlog_by_employee": dict(_jira_backlog_by_employee),
+        "jira_employee_signals": {
+            employee_id: {
+                "open_tasks": row.open_tasks,
+                "open_p1_p2": row.open_p1_p2,
+                "jira_backlog_boost": row.jira_backlog_boost,
+                "epic_owner_count": row.epic_owner_count,
+            }
+            for employee_id, row in _jira_employee_signals.items()
+        },
         "github_spof_components": sorted(_github_spof_components),
         "github_ownership": _github_ownership,
+        "component_bus_factor": dict(_component_bus_factor),
     }
 
 
 def reset_telemetry_for_tests() -> None:
     """Clear in-memory telemetry state (tests only)."""
-    global _jira_synced, _github_synced
+    global _jira_synced, _github_synced, _doa_available, _review_network
     _jira_backlog_by_employee.clear()
+    _jira_employee_signals.clear()
+    _jira_issues_cache.clear()
     _github_ownership.clear()
     _github_spof_components.clear()
+    _github_employee_context.clear()
+    _github_open_prs_by_login.clear()
+    _github_activities.clear()
+    _component_bus_factor.clear()
+    _employee_max_doa_pct.clear()
+    _doa_decay_evidence.clear()
     _sync_timestamps.clear()
+    _review_network = None
     _jira_synced = False
     _github_synced = False
+    _doa_available = False

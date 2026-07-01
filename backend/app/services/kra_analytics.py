@@ -6,6 +6,7 @@ from app.models.operational import Assignment, Component, Employee
 from app.schemas.kra import KraAnalyticsResponse, KraLink, KraNode
 from app.schemas.org import ACME_ORG_CHART
 from app.services.integration_telemetry import (
+    get_all_bus_factors,
     get_github_ownership,
     has_github_sync,
     is_github_spof,
@@ -106,6 +107,8 @@ def _build_graph(
     for link in links:
         engineers_by_component[link.target].add(link.source)
 
+    bus_factors = get_all_bus_factors() if has_github_sync() else {}
+
     for node in nodes:
         if node.type != "component":
             continue
@@ -113,6 +116,7 @@ def _build_graph(
         github_spof = is_github_spof(node.id)
         node.is_spof = structural_spof or github_spof
         node.github_verified_spof = github_spof
+        node.bus_factor = bus_factors.get(node.id)
 
     return KraAnalyticsResponse(nodes=nodes, links=links)
 

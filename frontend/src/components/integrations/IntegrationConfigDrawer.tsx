@@ -9,6 +9,9 @@ import { useWorkspace } from "@/context/WorkspaceContext";
 import {
   connectJiraIntegration,
   saveGitHubIntegrationConfig,
+  saveJiraIntegrationConfig,
+  saveNotionIntegrationConfig,
+  saveSlackIntegrationConfig,
   syncIntegrationSource,
   validateJiraIntegration,
   validateNotionIntegration,
@@ -115,6 +118,11 @@ export function IntegrationConfigDrawer({
         const message = await validateNotionIntegration(
           config.notion.integrationToken,
         );
+        await saveNotionIntegrationConfig({
+          ...config.notion,
+          validated: true,
+          previouslyConnected: true,
+        });
         updateConfig("notion", { validated: true, previouslyConnected: true });
         setSuccess(message);
       } else if (app.id === "slack") {
@@ -122,6 +130,11 @@ export function IntegrationConfigDrawer({
           throw new Error("Slack bot token is required.");
         }
         const message = await validateSlackIntegration(config.slack.botToken);
+        await saveSlackIntegrationConfig({
+          ...config.slack,
+          validated: true,
+          previouslyConnected: true,
+        });
         updateConfig("slack", { validated: true, previouslyConnected: true });
         setSuccess(message);
       } else if (app.id === "github") {
@@ -357,6 +370,20 @@ export function IntegrationConfigDrawer({
                   }
                 }}
                 placeholder="Leave empty for all projects"
+                className={inputClass}
+              />
+            </Field>
+            <Field
+              label="Account email"
+              hint="Atlassian account email used with the API token"
+            >
+              <input
+                type="email"
+                value={config.jira.accountEmail}
+                onChange={(e) =>
+                  updateConfig("jira", { accountEmail: e.target.value })
+                }
+                placeholder="you@company.com"
                 className={inputClass}
               />
             </Field>

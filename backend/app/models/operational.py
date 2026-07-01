@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -150,6 +150,86 @@ class Assignment(Base):
 
     employee: Mapped["Employee"] = relationship("Employee", back_populates="assignments")
     component: Mapped["Component"] = relationship("Component", back_populates="assignments")
+
+
+class GitHubOwnershipSnapshot(Base):
+    __tablename__ = "github_ownership_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "component_id",
+            "employee_id",
+            name="uq_github_ownership_snapshot",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    component_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("components.id"), nullable=False
+    )
+    employee_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("employees.id"), nullable=False
+    )
+    ownership_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+
+class DoaFileSnapshot(Base):
+    __tablename__ = "doa_file_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "component_id",
+            "file_path",
+            "employee_id",
+            name="uq_doa_file_snapshot",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    component_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("components.id"), nullable=False, index=True
+    )
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    employee_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("employees.id"), nullable=False, index=True
+    )
+    doa_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    is_author: Mapped[bool] = mapped_column(nullable=False, default=False)
+    last_touch_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    decay_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+
+class TenantIntegrationConfig(Base):
+    __tablename__ = "tenant_integration_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "source",
+            name="uq_tenant_integration_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
 
 class IncidentRecord(Base):

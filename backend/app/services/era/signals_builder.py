@@ -5,7 +5,19 @@ from __future__ import annotations
 from app.models.operational import Assignment, Component, Employee
 from app.services.era.composite import criticality_multiplier
 from app.services.era.signals import EmployeeSignals
-from app.services.integration_telemetry import get_github_ownership, is_github_spof
+from app.services.integration_telemetry import (
+    get_employee_max_doa_pct,
+    get_github_backup_review_score,
+    get_github_ownership,
+    get_github_open_prs,
+    get_github_employee_context,
+    get_jira_epic_owner_count,
+    get_jira_open_tasks,
+    has_doa_ownership,
+    has_review_network,
+    has_jira_sync,
+    is_github_spof,
+)
 from app.services.role_utils import is_leadership_role
 
 
@@ -42,12 +54,17 @@ def build_signals_for_employee(
     codebase_share_pct: float,
     jira_backlog_boost: int,
     github_connected: bool = False,
+    jira_connected: bool = False,
 ) -> EmployeeSignals:
     assignments: list[Assignment] = employee.assignments
     component_ids = {assignment.component_id for assignment in assignments}
     components: list[Component] = [assignment.component for assignment in assignments]
 
     open_tasks = sum(component.open_tasks_count for component in components)
+    if jira_connected and has_jira_sync():
+        jira_open_tasks = get_jira_open_tasks(employee.id)
+        if jira_open_tasks is not None:
+            open_tasks = jira_open_tasks
     unresolved_issues = sum(component.unresolved_incidents for component in components)
     owned_count = len(component_ids)
     breadth_pct = (owned_count / total_components) * 100 if total_components else 0.0
@@ -58,8 +75,22 @@ def build_signals_for_employee(
     )
 
     max_ownership = _max_github_ownership(employee.id, component_ids)
+    uses_doa = False
+    if github_connected and has_doa_ownership():
+        doa_pct = get_employee_max_doa_pct(employee.id)
+        if doa_pct > 0:
+            max_ownership = doa_pct
+            uses_doa = True
     if max_ownership == 0.0:
         max_ownership = codebase_share_pct
+
+    review_network_active = github_connected and has_review_network()
+    gh_context = get_github_employee_context(employee.id) if github_connected else None
+    uses_review = bool(
+        review_network_active
+        and gh_context
+        and (gh_context.recent_pr_count > 0 or gh_context.reviews_given_count > 0)
+    )
 
     return EmployeeSignals(
         employee_id=employee.id,
@@ -83,6 +114,15 @@ def build_signals_for_employee(
         github_connected=github_connected,
         identity_coverage_github="confirmed" if github_connected else "missing",
         component_names=[component.name for component in components],
+        backup_review_score=(
+            get_github_backup_review_score(employee.id) if github_connected else 50.0
+        ),
+        open_prs=get_github_open_prs(employee.id) if github_connected else 0,
+        uses_doa_ownership=uses_doa,
+        uses_review_network=uses_review,
+        sole_epic_owner_count=(
+            get_jira_epic_owner_count(employee.id) if jira_connected and has_jira_sync() else 0
+        ),
     )
 
 

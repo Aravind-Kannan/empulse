@@ -15,6 +15,11 @@ from app.schemas.era import (
     EraEvidenceItem,
     EraEvidenceSource,
     EraRecoveryEstimate,
+    EraReviewNetworkEdge,
+    EraReviewNetworkMetrics,
+    EraReviewNetworkResponse,
+    EraRiskyChangeItem,
+    EraTeamRiskyChangesResponse,
 )
 from app.schemas.org import ACME_ORG_CHART
 from app.services.cognee_era_metrics import (
@@ -36,8 +41,50 @@ from app.services.era.signals_builder import (
     build_signals_for_employee,
     build_signals_from_acme_employee,
 )
-from app.services.integration_telemetry import get_jira_backlog_boost, has_github_sync
+from app.services.github_evidence import merge_github_evidence
+from app.services.jira_evidence import merge_jira_evidence
+from app.services.integration_config_store import get_jira_config
+from app.services.integration_telemetry import (
+    get_jira_backlog_boost,
+    get_review_network,
+    get_team_risky_changes,
+    has_github_sync,
+    has_jira_sync,
+    has_review_network,
+    hydrate_github_telemetry_from_db,
+)
 from app.services.role_utils import is_leadership_role
+
+
+def _jira_connected(db: Session, tenant_id) -> bool:
+    return get_jira_config(db, tenant_id) is not None and has_jira_sync()
+
+
+def _merge_integration_evidence(
+    employee_id: str,
+    employee_name: str,
+    base_evidence: list[dict],
+    *,
+    component_names: dict[str, str],
+    github_connected: bool,
+    jira_connected: bool,
+    limit: int,
+) -> list[dict]:
+    merged = merge_github_evidence(
+        employee_id,
+        employee_name,
+        base_evidence,
+        component_names=component_names,
+        github_connected=github_connected,
+        limit=limit,
+    )
+    return merge_jira_evidence(
+        employee_id,
+        employee_name,
+        merged,
+        jira_connected=jira_connected,
+        limit=limit,
+    )
 
 
 def _risk_level(score: float) -> str:
@@ -227,6 +274,7 @@ def _compute_v2_metrics(
     total_components: int,
     *,
     github_connected: bool,
+    jira_connected: bool = False,
 ) -> list[EraEmployeeMetrics]:
     signals_list = []
     employee_by_id = {employee.id: employee for employee in employees}
@@ -249,6 +297,7 @@ def _compute_v2_metrics(
                 codebase_share_pct=codebase_share_pct,
                 jira_backlog_boost=jira_boost,
                 github_connected=github_connected,
+                jira_connected=jira_connected,
             )
         )
 
@@ -257,6 +306,21 @@ def _compute_v2_metrics(
     for signals in signals_list:
         employee = employee_by_id[signals.employee_id]
         score_result = score_employee(signals, tenant_stats, evidence_limit=5)
+        component_names = {
+            assignment.component.id: assignment.component.name
+            for assignment in employee.assignments
+        }
+        merged_evidence = _merge_integration_evidence(
+            signals.employee_id,
+            signals.name,
+            score_result.evidence,
+            component_names=component_names,
+            github_connected=github_connected,
+            jira_connected=jira_connected,
+            limit=5,
+        )
+        score_result.evidence = merged_evidence
+        score_result.evidence_total_count = len(score_result.all_evidence)
         coverage = build_identity_coverage(
             db,
             tenant.id,
@@ -431,7 +495,9 @@ def _fallback_acme_metrics() -> list[EraEmployeeMetrics]:
 
 def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
     use_v2 = get_settings().era_v2_scoring
+    hydrate_github_telemetry_from_db(db, tenant.id)
     github_connected = has_github_sync()
+    jira_connected = _jira_connected(db, tenant.id)
     employees = (
         db.query(Employee)
         .filter(Employee.tenant_id == tenant.id)
@@ -496,6 +562,7 @@ def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
         employees,
         total_components,
         github_connected=github_connected,
+        jira_connected=jira_connected,
     )
     return _wrap_response(db, tenant, metrics, demo_mode=False)
 
@@ -509,6 +576,7 @@ def get_era_employee_detail(
     offset: int = 0,
 ) -> EraEmployeeDetailResponse | None:
     use_v2 = get_settings().era_v2_scoring
+    hydrate_github_telemetry_from_db(db, tenant.id)
     github_connected = has_github_sync()
     employee = (
         db.query(Employee)
@@ -581,6 +649,9 @@ def get_era_employee_detail(
         jira_backlog_boost=jira_boost,
     )
 
+    github_connected = has_github_sync()
+    jira_connected = _jira_connected(db, tenant.id)
+
     if use_v2:
         signals = build_signals_for_employee(
             employee,
@@ -589,6 +660,7 @@ def get_era_employee_detail(
             codebase_share_pct=codebase_share_pct,
             jira_backlog_boost=jira_boost,
             github_connected=github_connected,
+            jira_connected=jira_connected,
         )
         peer_signals = []
         for peer in all_employees:
@@ -607,10 +679,27 @@ def get_era_employee_detail(
                     ),
                     jira_backlog_boost=get_jira_backlog_boost(peer.id),
                     github_connected=github_connected,
+                    jira_connected=jira_connected,
                 )
             )
         tenant_stats = build_tenant_percentiles([signals, *peer_signals])
         score_result = score_employee(signals, tenant_stats, evidence_limit=1000)
+        component_names = {
+            assignment.component.id: assignment.component.name
+            for assignment in employee.assignments
+        }
+        merged = _merge_integration_evidence(
+            signals.employee_id,
+            signals.name,
+            score_result.all_evidence,
+            component_names=component_names,
+            github_connected=github_connected,
+            jira_connected=jira_connected,
+            limit=1000,
+        )
+        score_result.all_evidence = merged
+        score_result.evidence = merged[:5]
+        score_result.evidence_total_count = len(merged)
         coverage = build_identity_coverage(
             db, tenant.id, employee.id, github_connected=github_connected
         )
@@ -651,4 +740,134 @@ def get_era_employee_detail(
         evidence_total_count=len(all_evidence),
         limit=limit,
         offset=offset,
+    )
+
+
+def _parse_since_days(since: str | None, default: int = 90) -> int:
+    if not since:
+        return default
+    cleaned = since.strip().lower()
+    if cleaned.endswith("d"):
+        try:
+            return max(1, min(365, int(cleaned[:-1])))
+        except ValueError:
+            return default
+    try:
+        return max(1, min(365, int(cleaned)))
+    except ValueError:
+        return default
+
+
+def _ensure_review_network(db: Session, tenant_id) -> bool:
+    if has_review_network():
+        return True
+    if hydrate_github_telemetry_from_db(db, tenant_id):
+        return has_review_network()
+    from app.services.github_client import activities_from_mock_feed
+    from app.services.integration_telemetry import apply_github_telemetry
+
+    if not has_github_sync():
+        apply_github_telemetry(db, tenant_id, activities_from_mock_feed())
+    return has_review_network()
+
+
+def get_era_review_network(
+    db: Session,
+    tenant,
+    employee_id: str,
+) -> EraReviewNetworkResponse | None:
+    employee = (
+        db.query(Employee)
+        .filter(Employee.id == employee_id, Employee.tenant_id == tenant.id)
+        .one_or_none()
+    )
+    if employee is None:
+        return None
+
+    _ensure_review_network(db, tenant.id)
+    network = get_review_network()
+    window_days = network.window_days if network else 90
+    incoming: list[EraReviewNetworkEdge] = []
+    metrics_model: EraReviewNetworkMetrics | None = None
+
+    if network:
+        from app.services.github_reviews import employee_review_subgraph
+
+        subgraph = employee_review_subgraph(network, employee_id)
+        metrics = subgraph["metrics"]
+        if metrics:
+            metrics_model = EraReviewNetworkMetrics(
+                employee_id=metrics.employee_id,
+                review_concentration_pct=metrics.review_concentration_pct,
+                reviews_given_count=metrics.reviews_given_count,
+                reviews_received_count=metrics.reviews_received_count,
+                sole_reviewer_count=metrics.sole_reviewer_count,
+                unique_reviewers_on_prs=metrics.unique_reviewers_on_prs,
+                isolation_score=metrics.isolation_score,
+                backup_review_score=metrics.backup_review_score,
+                recent_pr_count=metrics.recent_pr_count,
+                no_backup_pr_urls=metrics.no_backup_pr_urls,
+                top_reviewer_employee_id=metrics.top_reviewer_employee_id,
+                top_reviewer_login=metrics.top_reviewer_login,
+            )
+        for edge in subgraph["incoming_reviewers"]:
+            incoming.append(
+                EraReviewNetworkEdge(
+                    reviewer_employee_id=edge.reviewer_employee_id,
+                    author_employee_id=edge.author_employee_id,
+                    review_count=edge.review_count,
+                    reviewer_login=edge.reviewer_login,
+                    author_login=edge.author_login,
+                )
+            )
+
+    return EraReviewNetworkResponse(
+        computed_at=datetime.now(UTC),
+        employee_id=employee_id,
+        window_days=window_days,
+        metrics=metrics_model,
+        incoming_reviewers=incoming,
+    )
+
+
+def get_era_team_risky_changes(
+    db: Session,
+    tenant,
+    *,
+    since: str | None = "90d",
+) -> EraTeamRiskyChangesResponse:
+    window_days = _parse_since_days(since)
+    _ensure_review_network(db, tenant.id)
+    network = get_review_network()
+
+    employee_names: dict[str, str] = {
+        row.id: row.name
+        for row in db.query(Employee).filter(Employee.tenant_id == tenant.id).all()
+    }
+
+    items: list[EraRiskyChangeItem] = []
+    for risky in get_team_risky_changes():
+        author_name = None
+        if risky.author_employee_id:
+            author_name = employee_names.get(risky.author_employee_id)
+        items.append(
+            EraRiskyChangeItem(
+                pr_number=risky.pr_number,
+                pr_url=risky.pr_url,
+                author_employee_id=risky.author_employee_id,
+                author_login=risky.author_login,
+                author_name=author_name,
+                severity=risky.severity,
+                rule=risky.rule,
+                title=risky.title,
+                description=risky.description,
+                merged_at=risky.merged_at,
+                impact_points=risky.impact_points,
+            )
+        )
+
+    return EraTeamRiskyChangesResponse(
+        computed_at=datetime.now(UTC),
+        window_days=network.window_days if network else window_days,
+        items=items,
     )

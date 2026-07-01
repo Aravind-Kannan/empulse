@@ -1,0 +1,229 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
+
+import { fetchEraMetrics } from "@/lib/api";
+import { useWorkspace } from "@/context/WorkspaceContext";
+import type { EraAnalyticsResponse, EraEmployeeMetrics } from "@/lib/types";
+
+import { EraCommandHeader } from "./EraCommandHeader";
+import { EraEmployeePreview } from "./EraEmployeePreview";
+import { EraEvidenceFeed } from "./EraEvidenceFeed";
+import { EraKpiStrip } from "./EraKpiStrip";
+import { EraRiskHeatmap } from "./EraRiskHeatmap";
+import { EraTeamComposition } from "./EraTeamComposition";
+import {
+  buildTeamEvidenceFeed,
+  connectedIntegrationCount,
+  totalUnmappedCount,
+} from "./era-utils";
+
+export function EraCommandCenter() {
+  const { operationalRevision } = useWorkspace();
+  const [data, setData] = useState<EraAnalyticsResponse | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
+    try {
+      const response = await fetchEraMetrics();
+      setData(response);
+      setSelectedId((current) => {
+        if (
+          current &&
+          response.employees.some((employee) => employee.employee_id === current)
+        ) {
+          return current;
+        }
+        const sorted = [...response.employees]
+          .filter((employee) => !employee.excluded)
+          .sort((a, b) => b.risk_factor_score - a.risk_factor_score);
+        return sorted[0]?.employee_id ?? null;
+      });
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load metrics. Is the backend running on port 8000?",
+      );
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    void load();
+  }, [mounted, operationalRevision, load]);
+
+  const employees = data?.employees ?? [];
+  const activeEmployees = useMemo(
+    () => employees.filter((employee) => !employee.excluded),
+    [employees],
+  );
+
+  const selectedEmployee: EraEmployeeMetrics | null = useMemo(() => {
+    if (!selectedId) return activeEmployees[0] ?? null;
+    return (
+      activeEmployees.find((employee) => employee.employee_id === selectedId) ??
+      activeEmployees[0] ??
+      null
+    );
+  }, [activeEmployees, selectedId]);
+
+  const teamEvidence = useMemo(
+    () => buildTeamEvidenceFeed(activeEmployees, 12),
+    [activeEmployees],
+  );
+
+  if (!mounted || loading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-16 animate-pulse rounded-xl bg-zinc-900/50" />
+        <EraKpiStrip
+          summary={{
+            avg_risk_score: 0,
+            high_risk_count: 0,
+            medium_risk_count: 0,
+            low_risk_count: 0,
+            spof_component_count: 0,
+            open_p1_count: 0,
+            undocumented_incident_count: 0,
+            top_risk_driver: "knowledge",
+            estimated_recovery_weeks: { min: 0, max: 0 },
+            data_health_pct: 0,
+          }}
+          integrationCount={0}
+          loading
+        />
+        <EraRiskHeatmap
+          employees={[]}
+          selectedId={null}
+          onSelect={() => {}}
+          loading
+        />
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold text-zinc-100">ERA Command Center</h1>
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-300">
+          {error ?? "Failed to load ERA metrics."}
+        </div>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-white"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (activeEmployees.length === 0) {
+    return (
+      <div className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/30 p-8 text-center">
+        <h1 className="text-2xl font-semibold text-zinc-100">ERA Command Center</h1>
+        <p className="text-sm text-zinc-400">
+          No employees in scope yet. Import your org chart to begin continuity risk
+          assessment.
+        </p>
+        <Link
+          href="/onboarding"
+          className="inline-flex rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-white"
+        >
+          Import org chart
+        </Link>
+      </div>
+    );
+  }
+
+  const integrationCount = connectedIntegrationCount(data.sync_freshness);
+  const unmappedCount = totalUnmappedCount(data.unmapped_activity);
+
+  return (
+    <div
+      className={`space-y-6 ${
+        data.demo_mode
+          ? "rounded-xl border-l-4 border-amber-500/80 pl-4"
+          : ""
+      }`}
+      title={data.demo_mode ? "Demo data — connect integrations" : undefined}
+    >
+      {data.demo_mode && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          Demo data — connect integrations for live continuity signals.
+        </div>
+      )}
+
+      {data.warnings.length > 0 && (
+        <div className="space-y-2">
+          {data.warnings.map((warning) => (
+            <div
+              key={warning}
+              className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+            >
+              {warning}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <EraCommandHeader
+        recovery={data.team_summary.estimated_recovery_weeks}
+        syncFreshness={data.sync_freshness}
+        unmappedCount={unmappedCount}
+        employees={activeEmployees}
+        highRiskCount={data.team_summary.high_risk_count}
+        refreshing={refreshing}
+        onRefresh={() => void load(true)}
+      />
+
+      <EraKpiStrip
+        summary={data.team_summary}
+        integrationCount={integrationCount}
+      />
+
+      <EraRiskHeatmap
+        employees={employees}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+      />
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <EraEmployeePreview employee={selectedEmployee} />
+        <EraTeamComposition
+          employees={employees}
+          topRiskDriver={data.team_summary.top_risk_driver}
+        />
+      </div>
+
+      <EraEvidenceFeed
+        items={teamEvidence}
+        selectedId={selectedId}
+        onSelectEmployee={setSelectedId}
+      />
+
+      <p className="text-xs text-zinc-600">
+        Directors and leadership roles are excluded from ERA scoring.
+      </p>
+    </div>
+  );
+}

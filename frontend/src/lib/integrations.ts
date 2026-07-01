@@ -38,6 +38,7 @@ export interface JiraConfig {
   authEmail: string;
   projectKeys: string;
   apiToken: string;
+  accountEmail: string;
   validated?: boolean;
   previouslyConnected?: boolean;
 }
@@ -111,7 +112,7 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
     personalAccessToken: "",
     oauthConnected: false,
   },
-  jira: { siteUrl: "", authEmail: "", projectKeys: "", apiToken: "" },
+  jira: { siteUrl: "", projectKeys: "", apiToken: "", accountEmail: "" },
 };
 
 const JIRA_SITE_RE =

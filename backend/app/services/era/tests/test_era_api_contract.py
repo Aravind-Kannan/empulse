@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.era_analytics import get_era_metrics, get_era_employee_detail
 
+from tests.conftest import add_employee
+
 
 @pytest.fixture()
 def client():
@@ -75,3 +77,22 @@ def test_list_endpoint_via_http(client):
     assert "team_summary" in payload
     assert "employees" in payload
     assert "computed_at" in payload
+
+
+def test_v2_metrics_with_persisted_employees(db, tenant):
+    """Regression: build_identity_coverage must not raise when DB has employees."""
+    add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-persisted-001",
+        name="Persisted Engineer",
+        email="persisted@acme.com",
+    )
+    with patch("app.services.era_analytics.get_settings") as mock_settings:
+        mock_settings.return_value.era_v2_scoring = True
+        response = get_era_metrics(db, tenant)
+
+    assert response.demo_mode is False
+    assert len(response.employees) == 1
+    assert response.employees[0].identity_coverage
+    assert response.employees[0].dimensions is not None

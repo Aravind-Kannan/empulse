@@ -1,3 +1,6 @@
+# Legacy mock feeds — GitHub production sync uses github_client.py.
+# Jira production sync uses jira_client.py; mocks retained for offline fallback/tests.
+
 MOCK_GITHUB_ACTIVITY = [
     {
         "pr_number": 482,

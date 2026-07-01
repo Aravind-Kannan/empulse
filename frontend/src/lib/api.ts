@@ -3,6 +3,8 @@ import type {
   EmployeeOption,
   EraAnalyticsResponse,
   EraEmployeeDetailResponse,
+  EraReviewNetworkResponse,
+  EraTeamRiskyChangesResponse,
   GlobalSyncResult,
   HandoverResponse,
   IncidentStatus,
@@ -26,7 +28,11 @@ import type {
   BulkUploadResponse,
   EmployeeUpdateResponse,
 } from "./types";
-import type { IntegrationConfigMap, IntegrationId } from "./integrations";
+import {
+  DEFAULT_INTEGRATION_CONFIG,
+  type IntegrationConfigMap,
+  type IntegrationId,
+} from "./integrations";
 import { API_BASE, apiFetch } from "./api-client";
 
 export async function fetchOrgChart(): Promise<OrgChartPayload> {
@@ -235,6 +241,32 @@ export async function fetchEraEmployeeDetail(
   return response.json();
 }
 
+export async function fetchEraReviewNetwork(
+  employeeId: string,
+): Promise<EraReviewNetworkResponse> {
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/era/${encodeURIComponent(employeeId)}/review-network`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load review network (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchEraTeamRiskyChanges(
+  since = "90d",
+): Promise<EraTeamRiskyChangesResponse> {
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/team/risky-changes?since=${encodeURIComponent(since)}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load risky changes (${response.status})`);
+  }
+  return response.json();
+}
+
 export async function fetchKraGraph(): Promise<KraAnalyticsResponse> {
   const response = await apiFetch(`${API_BASE}/api/analytics/kra`, {
     cache: "no-store",
@@ -414,6 +446,131 @@ export async function validateSlackIntegration(
   return data.message;
 }
 
+type StoredIntegrationsConfig = {
+  slack: {
+    workspace_url: string;
+    bot_token: string;
+    channel_ids: string;
+    validated?: boolean;
+    previously_connected?: boolean;
+  };
+  notion: {
+    integration_token: string;
+    database_ids: string;
+    validated?: boolean;
+    previously_connected?: boolean;
+  };
+  github: {
+    repository_url: string;
+    branch_target: string;
+    personal_access_token: string;
+    oauth_connected: boolean;
+    validated?: boolean;
+    previously_connected?: boolean;
+  };
+  jira: {
+    site_url: string;
+    project_keys: string;
+    api_token: string;
+    account_email: string;
+    validated?: boolean;
+    previously_connected?: boolean;
+  };
+};
+
+function mapStoredIntegrationConfig(
+  stored: StoredIntegrationsConfig,
+): IntegrationConfigMap {
+  return {
+    slack: {
+      workspaceUrl: stored.slack.workspace_url ?? "",
+      botToken: stored.slack.bot_token ?? "",
+      channelIds: stored.slack.channel_ids ?? "",
+      validated: Boolean(stored.slack.validated),
+      previouslyConnected: Boolean(stored.slack.previously_connected),
+    },
+    notion: {
+      integrationToken: stored.notion.integration_token ?? "",
+      databaseIds: stored.notion.database_ids ?? "",
+      validated: Boolean(stored.notion.validated),
+      previouslyConnected: Boolean(stored.notion.previously_connected),
+    },
+    github: {
+      repositoryUrl: stored.github.repository_url ?? "",
+      branchTarget: stored.github.branch_target ?? "main",
+      personalAccessToken: stored.github.personal_access_token ?? "",
+      oauthConnected: Boolean(stored.github.oauth_connected),
+      validated: Boolean(stored.github.validated),
+      previouslyConnected: Boolean(stored.github.previously_connected),
+    },
+    jira: {
+      siteUrl: stored.jira.site_url ?? "",
+      projectKeys: stored.jira.project_keys ?? "",
+      apiToken: stored.jira.api_token ?? "",
+      accountEmail: stored.jira.account_email ?? "",
+      validated: Boolean(stored.jira.validated),
+      previouslyConnected: Boolean(stored.jira.previously_connected),
+    },
+  };
+}
+
+export async function fetchIntegrationConfig(): Promise<IntegrationConfigMap> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/config`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Failed to load integration config"));
+  }
+  const stored = (await response.json()) as StoredIntegrationsConfig;
+  return mapStoredIntegrationConfig(stored);
+}
+
+export async function saveSlackIntegrationConfig(
+  config: IntegrationConfigMap["slack"],
+): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/slack/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workspace_url: config.workspaceUrl,
+      bot_token: config.botToken,
+      channel_ids: config.channelIds,
+      validated: config.validated ?? false,
+      previously_connected: config.previouslyConnected ?? false,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Slack config save failed"));
+  }
+}
+
+export async function saveNotionIntegrationConfig(
+  config: IntegrationConfigMap["notion"],
+): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/notion/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      integration_token: config.integrationToken,
+      database_ids: config.databaseIds,
+      validated: config.validated ?? false,
+      previously_connected: config.previouslyConnected ?? false,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Notion config save failed"));
+  }
+}
+
+export async function deleteIntegrationConfig(source: IntegrationId): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/${source}/config`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `${source} disconnect failed`));
+  }
+}
+
 export async function saveGitHubIntegrationConfig(
   config: IntegrationConfigMap["github"],
 ): Promise<void> {
@@ -442,6 +599,7 @@ export async function validateJiraIntegration(
       jira_domain: config.siteUrl,
       auth_email: config.authEmail,
       api_token: config.apiToken,
+      account_email: config.accountEmail,
     }),
   });
   if (!response.ok) {

@@ -11,6 +11,8 @@ import {
 } from "react";
 
 import {
+  deleteIntegrationConfig,
+  fetchIntegrationConfig,
   saveAndSyncIntegration,
   syncAllIntegrations,
   syncIntegrationSource,
@@ -65,6 +67,18 @@ interface SyncProgress {
   completed: string[];
   total: number;
   error: string | null;
+}
+
+function mergeIntegrationConfig(
+  local: IntegrationConfigMap,
+  remote: IntegrationConfigMap,
+): IntegrationConfigMap {
+  return {
+    slack: { ...DEFAULT_INTEGRATION_CONFIG.slack, ...local.slack, ...remote.slack },
+    notion: { ...DEFAULT_INTEGRATION_CONFIG.notion, ...local.notion, ...remote.notion },
+    github: { ...DEFAULT_INTEGRATION_CONFIG.github, ...local.github, ...remote.github },
+    jira: { ...DEFAULT_INTEGRATION_CONFIG.jira, ...local.jira, ...remote.jira },
+  };
 }
 
 interface IntegrationsContextValue {
@@ -123,7 +137,28 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    setConfig(loadConfig(tenantId));
+    let cancelled = false;
+
+    async function hydrate() {
+      const local = loadConfig(tenantId);
+      if (!tenantId) {
+        if (!cancelled) setConfig(local);
+        return;
+      }
+
+      try {
+        const remote = await fetchIntegrationConfig();
+        const merged = mergeIntegrationConfig(local, remote);
+        if (!cancelled) {
+          setConfig(merged);
+          saveConfig(tenantId, merged);
+        }
+      } catch {
+        if (!cancelled) setConfig(local);
+      }
+    }
+
+    void hydrate();
     setSyncingIds(new Set());
     setSyncProgress({
       active: false,
@@ -132,6 +167,10 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       total: 0,
       error: null,
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [tenantId]);
 
   const persist = useCallback(
@@ -157,7 +196,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
             "oauthConnected",
             "branchTarget",
           ],
-          jira: ["siteUrl", "authEmail", "apiToken", "projectKeys"],
+          jira: ["siteUrl", "apiToken", "projectKeys", "accountEmail"],
         };
         const touchesCredentials = credentialFields[id].some(
           (field) => field in patch,
@@ -212,12 +251,17 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   );
 
   const disconnect = useCallback(
-    (id: IntegrationId) => {
+    async (id: IntegrationId) => {
       const cleared = {
         ...DEFAULT_INTEGRATION_CONFIG[id],
         previouslyConnected: true,
       };
       persist({ ...config, [id]: cleared });
+      try {
+        await deleteIntegrationConfig(id);
+      } catch {
+        // Local disconnect still applies if backend removal fails.
+      }
     },
     [config, persist],
   );

@@ -3,12 +3,21 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.era import EraAnalyticsResponse, EraEmployeeDetailResponse
+from app.schemas.era import (
+    EraReviewNetworkResponse,
+    EraTeamRiskyChangesResponse,
+)
 from app.schemas.kra import (
     KraAnalyticsResponse,
     KraBackupAssignmentRequest,
     KraBackupAssignmentResponse,
 )
-from app.services.era_analytics import get_era_employee_detail, get_era_metrics
+from app.services.era_analytics import (
+    get_era_employee_detail,
+    get_era_metrics,
+    get_era_review_network,
+    get_era_team_risky_changes,
+)
 from app.services.kra_analytics import (
     assign_backup_engineer,
     get_kra_graph,
@@ -25,6 +34,27 @@ def era_analytics(
     db: Session = Depends(get_db),
 ) -> EraAnalyticsResponse:
     return get_era_metrics(db, tenant)
+
+
+@router.get("/era/{employee_id}/review-network", response_model=EraReviewNetworkResponse)
+def era_employee_review_network(
+    employee_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EraReviewNetworkResponse:
+    payload = get_era_review_network(db, tenant, employee_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found.")
+    return payload
+
+
+@router.get("/team/risky-changes", response_model=EraTeamRiskyChangesResponse)
+def era_team_risky_changes(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+    since: str = Query(default="90d"),
+) -> EraTeamRiskyChangesResponse:
+    return get_era_team_risky_changes(db, tenant, since=since)
 
 
 @router.get("/era/{employee_id}", response_model=EraEmployeeDetailResponse)

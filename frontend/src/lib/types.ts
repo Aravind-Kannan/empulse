@@ -256,6 +256,57 @@ export interface EraEmployeeDetailResponse {
   offset: number;
 }
 
+export interface EraReviewNetworkEdge {
+  reviewer_employee_id: string;
+  author_employee_id: string;
+  review_count: number;
+  reviewer_login: string;
+  author_login: string;
+}
+
+export interface EraReviewNetworkMetrics {
+  employee_id: string;
+  review_concentration_pct: number;
+  reviews_given_count: number;
+  reviews_received_count: number;
+  sole_reviewer_count: number;
+  unique_reviewers_on_prs: number;
+  isolation_score: number;
+  backup_review_score: number;
+  recent_pr_count: number;
+  no_backup_pr_urls: string[];
+  top_reviewer_employee_id?: string | null;
+  top_reviewer_login?: string | null;
+}
+
+export interface EraReviewNetworkResponse {
+  computed_at: string;
+  employee_id: string;
+  window_days: number;
+  metrics: EraReviewNetworkMetrics | null;
+  incoming_reviewers: EraReviewNetworkEdge[];
+}
+
+export interface EraRiskyChangeItem {
+  pr_number: number;
+  pr_url: string;
+  author_employee_id?: string | null;
+  author_login: string;
+  author_name?: string | null;
+  severity: string;
+  rule: string;
+  title: string;
+  description: string;
+  merged_at?: string | null;
+  impact_points: number;
+}
+
+export interface EraTeamRiskyChangesResponse {
+  computed_at: string;
+  window_days: number;
+  items: EraRiskyChangeItem[];
+}
+
 
 export interface KraNode {
   id: string;

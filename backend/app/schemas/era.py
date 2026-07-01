@@ -109,3 +109,54 @@ class EraEmployeeDetailResponse(BaseModel):
     evidence_total_count: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+
+
+class EraReviewNetworkEdge(BaseModel):
+    reviewer_employee_id: str
+    author_employee_id: str
+    review_count: int = Field(ge=1)
+    reviewer_login: str
+    author_login: str
+
+
+class EraReviewNetworkMetrics(BaseModel):
+    employee_id: str
+    review_concentration_pct: float = Field(ge=0, le=100)
+    reviews_given_count: int = Field(ge=0)
+    reviews_received_count: int = Field(ge=0)
+    sole_reviewer_count: int = Field(ge=0)
+    unique_reviewers_on_prs: int = Field(ge=0)
+    isolation_score: float = Field(ge=0, le=100)
+    backup_review_score: float = Field(ge=0, le=100)
+    recent_pr_count: int = Field(ge=0)
+    no_backup_pr_urls: list[str] = Field(default_factory=list)
+    top_reviewer_employee_id: str | None = None
+    top_reviewer_login: str | None = None
+
+
+class EraReviewNetworkResponse(BaseModel):
+    computed_at: datetime
+    employee_id: str
+    window_days: int = Field(ge=1)
+    metrics: EraReviewNetworkMetrics | None = None
+    incoming_reviewers: list[EraReviewNetworkEdge] = Field(default_factory=list)
+
+
+class EraRiskyChangeItem(BaseModel):
+    pr_number: int
+    pr_url: str
+    author_employee_id: str | None = None
+    author_login: str
+    author_name: str | None = None
+    severity: str
+    rule: str
+    title: str
+    description: str
+    merged_at: str | None = None
+    impact_points: float = Field(ge=0)
+
+
+class EraTeamRiskyChangesResponse(BaseModel):
+    computed_at: datetime
+    window_days: int = Field(ge=1)
+    items: list[EraRiskyChangeItem] = Field(default_factory=list)

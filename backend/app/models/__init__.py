@@ -5,8 +5,11 @@ from app.models.operational import (
     Component,
     Employee,
     EmployeeIdentity,
+    GitHubOwnershipSnapshot,
+    DoaFileSnapshot,
     IncidentRecord,
     RoleHistory,
+    TenantIntegrationConfig,
     UnmappedActivity,
 )
 from app.models.tenant import Tenant
@@ -22,6 +25,9 @@ __all__ = [
     "Assignment",
     "EmployeeIdentity",
     "UnmappedActivity",
+    "GitHubOwnershipSnapshot",
+    "DoaFileSnapshot",
+    "TenantIntegrationConfig",
     "RoleHistory",
     "IncidentRecord",
     "IngestJob",

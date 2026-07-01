@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models.operational import Employee
+from app.models.operational import Employee, EmployeeIdentity
 from app.schemas.era import (
     EraAffectedComponent,
     EraEmployeeMetrics,
@@ -16,7 +16,7 @@ from app.schemas.era import (
 )
 from app.services.era.types import DIMENSION_KEYS
 from app.services.identity_mapping import PROVIDERS
-from app.services.integration_sync import get_github_config, get_jira_config
+from app.services.integration_config_store import get_github_config, get_jira_config
 from app.services.integration_telemetry import (
     get_github_ownership,
     get_sync_freshness,
@@ -204,7 +204,7 @@ def build_warnings(
     now = datetime.now(UTC)
     freshness = get_sync_freshness()
 
-    if get_github_config() and not has_github_sync():
+    if get_github_config(db, tenant_id) and not has_github_sync():
         warnings.append("github_not_synced")
     github_at = freshness.get("github")
     if github_at:
@@ -214,7 +214,7 @@ def build_warnings(
         if now - synced > timedelta(hours=STALE_SYNC_HOURS):
             warnings.append("github_stale")
 
-    if get_jira_config() and not has_jira_sync():
+    if get_jira_config(db, tenant_id) and not has_jira_sync():
         warnings.append("jira_not_synced")
     jira_at = freshness.get("jira")
     if jira_at:

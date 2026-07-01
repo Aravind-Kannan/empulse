@@ -13,17 +13,26 @@ from app.models.operational import Component, Employee
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
 from app.schemas.org import ACME_ORG_CHART
 from app.services.cognee_ingest import GraphComponent, GraphEmployee
+from app.services.github_client import (
+    fetch_github_pull_request_activity,
+    parse_repository_url,
+)
+from app.services.github_path_mapper import apply_path_mapping
+from app.services.github_types import GitHubPullRequestActivity
 from app.services.integration_telemetry import (
+    HIGH_PRIORITIES,
     apply_github_telemetry,
     apply_jira_telemetry,
     get_telemetry_snapshot,
     mark_sync_completed,
 )
+from app.services.identity_resolver import resolve_author_employee_id
 from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
-from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
-from app.services.identity_resolver import resolve_author_employee_id
+from app.services.jira_client import fetch_jira_issues
+from app.services.jira_mapper import map_issue_to_component
+from app.services.jira_types import JiraIssueActivity
 
 
 class GraphPullRequest(DataPoint):
@@ -34,6 +43,7 @@ class GraphPullRequest(DataPoint):
     loc_added: int
     loc_removed: int
     file_path: str
+    pr_url: str = ""
     contributedTo: SkipValidation[Any] = None
     modifies: SkipValidation[Any] = None
     metadata: dict = {"index_fields": ["pr_number", "file_path", "branch"]}
@@ -50,40 +60,13 @@ class GraphJiraTicket(DataPoint):
     metadata: dict = {"index_fields": ["ticket_id", "issue_type", "status"]}
 
 
-_integration_configs: dict[str, GitHubConfigRequest | JiraConfigRequest] = {}
-
-
-def save_github_config(config: GitHubConfigRequest) -> None:
-    _integration_configs["github"] = config
-
-
-def save_jira_config(config: JiraConfigRequest) -> None:
-    _integration_configs["jira"] = config
-
-
-def get_github_config() -> GitHubConfigRequest | None:
-    config = _integration_configs.get("github")
-    return config if isinstance(config, GitHubConfigRequest) else None
-
-
-def get_jira_config(
-    db: Session | None = None,
-    tenant_id: uuid.UUID | None = None,
-) -> JiraConfigRequest | None:
-    if db is not None and tenant_id is not None:
-        from app.services.jira_service import get_jira_config_for_tenant
-
-        db_config = get_jira_config_for_tenant(db, tenant_id)
-        if db_config:
-            return db_config
-    config = _integration_configs.get("jira")
-    return config if isinstance(config, JiraConfigRequest) else None
+from app.services.integration_config_store import get_github_config, get_jira_config
 
 
 def _load_org_context(
     db: Session,
     tenant_id: uuid.UUID,
-) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent]]:
+) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent], dict[str, Component]]:
     employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
     components = db.query(Component).filter(Component.tenant_id == tenant_id).all()
 
@@ -108,7 +91,18 @@ def _load_org_context(
             )
             for component in ACME_ORG_CHART.components
         }
-        return employee_nodes, component_nodes
+        components_by_id = {
+            component.id: Component(
+                id=component.id,
+                tenant_id=tenant_id,
+                name=component.name,
+                description=component.description,
+                open_tasks_count=component.open_tasks_count,
+                unresolved_incidents=component.unresolved_incidents,
+            )
+            for component in ACME_ORG_CHART.components
+        }
+        return employee_nodes, component_nodes, components_by_id
 
     employee_nodes = {
         employee.id: GraphEmployee(
@@ -130,7 +124,28 @@ def _load_org_context(
         )
         for component in components
     }
-    return employee_nodes, component_nodes
+    components_by_id = {component.id: component for component in components}
+    return employee_nodes, component_nodes, components_by_id
+
+
+def fetch_and_map_github_activity(
+    config: GitHubConfigRequest,
+    components_by_id: dict[str, Component],
+    *,
+    use_fixture: bool = False,
+) -> tuple[list[GitHubPullRequestActivity], list[str], dict[str, int]]:
+    _, repo_name = parse_repository_url(config.repository_url)
+    activities, open_prs_by_login = fetch_github_pull_request_activity(
+        config, use_fixture=use_fixture
+    )
+    mapped, unmapped = apply_path_mapping(
+        activities,
+        path_component_map=config.path_component_map,
+        repo_name=repo_name,
+        components_by_id=components_by_id,
+        default_component_id=config.default_component_id,
+    )
+    return mapped, unmapped, open_prs_by_login
 
 
 def analyze_github_payload(
@@ -139,8 +154,9 @@ def analyze_github_payload(
     component_nodes: dict[str, GraphComponent],
     db: Session,
     tenant_id: uuid.UUID,
+    activities: list[GitHubPullRequestActivity],
 ) -> tuple[str, list[GraphPullRequest], int]:
-    """Mock document analyzer for GitHub commits, PRs, diffs, and LOC."""
+    """Build Cognee graph nodes from live GitHub pull request activity."""
     narrative_lines = [
         f"GitHub repository sync: {config.repository_url}",
         f"Target branch: {config.branch_target}",
@@ -149,38 +165,43 @@ def analyze_github_payload(
     data_points: list[GraphPullRequest] = []
     edge_count = 0
 
-    for activity in MOCK_GITHUB_ACTIVITY:
+    for activity in activities:
         author_employee_id = resolve_author_employee_id(
             db,
             tenant_id,
-            activity.get("author_provider", "github"),
-            activity["author_provider_user_id"],
-            demo_fallback_employee_id=activity.get("author_employee_id"),
+            "github",
+            activity.author_provider_user_id,
+            demo_fallback_employee_id=None,
             quarantine_event_type="github_pr",
             quarantine_payload={
-                "pr_number": activity.get("pr_number"),
-                "commit_sha": activity.get("commit_sha"),
+                "pr_number": activity.pr_number,
+                "commit_sha": activity.commit_sha,
+                "pr_url": activity.pr_url,
             },
         )
         author = employee_nodes.get(author_employee_id) if author_employee_id else None
-        for file_change in activity["files"]:
-            component = component_nodes.get(file_change["component_id"])
+        for file_change in activity.files:
+            if not file_change.component_id:
+                continue
+            component = component_nodes.get(file_change.component_id)
             pr_node = GraphPullRequest(
-                pr_number=activity["pr_number"],
-                commit_sha=activity["commit_sha"],
-                branch=activity.get("branch", config.branch_target),
+                pr_number=activity.pr_number,
+                commit_sha=activity.commit_sha,
+                branch=activity.branch or config.branch_target,
                 repository_url=config.repository_url,
-                loc_added=file_change["loc_added"],
-                loc_removed=file_change["loc_removed"],
-                file_path=file_change["path"],
+                loc_added=file_change.loc_added,
+                loc_removed=file_change.loc_removed,
+                file_path=file_change.path,
+                pr_url=activity.pr_url,
             )
             if author:
                 pr_node.contributedTo = (
                     Edge(
                         relationship_type="contributedTo",
                         properties={
-                            "loc_added": file_change["loc_added"],
-                            "loc_removed": file_change["loc_removed"],
+                            "loc_added": file_change.loc_added,
+                            "loc_removed": file_change.loc_removed,
+                            "pr_url": activity.pr_url,
                         },
                     ),
                     author,
@@ -190,23 +211,45 @@ def analyze_github_payload(
                 pr_node.modifies = (
                     Edge(
                         relationship_type="modifies",
-                        properties={"file_path": file_change["path"]},
+                        properties={
+                            "file_path": file_change.path,
+                            "pr_url": activity.pr_url,
+                        },
                     ),
                     component,
                 )
                 edge_count += 1
 
             data_points.append(pr_node)
-            author_name = author.name if author else "Unknown engineer"
-            component_name = component.name if component else file_change["component_id"]
+            author_name = author.name if author else activity.author_login
+            component_name = component.name if component else file_change.component_id
             narrative_lines.append(
-                f"PR #{activity['pr_number']} commit {activity['commit_sha']}: "
-                f"{author_name} changed {file_change['path']} "
-                f"(+{file_change['loc_added']}/-{file_change['loc_removed']} LOC) "
+                f"PR #{activity.pr_number} ({activity.pr_url}) commit {activity.commit_sha}: "
+                f"{author_name} changed {file_change.path} "
+                f"(+{file_change.loc_added}/-{file_change.loc_removed} LOC) "
                 f"modifying {component_name}."
             )
 
     return "\n".join(narrative_lines), data_points, edge_count
+
+
+def fetch_and_map_jira_issues(
+    config: JiraConfigRequest,
+    components_by_id: dict[str, Component],
+    *,
+    use_fixture: bool = False,
+) -> list[JiraIssueActivity]:
+    issues = fetch_jira_issues(config, use_fixture=use_fixture)
+    valid_ids = set(components_by_id)
+    mapped: list[JiraIssueActivity] = []
+    for issue in issues:
+        component_id = map_issue_to_component(
+            issue, config, valid_component_ids=valid_ids
+        )
+        if component_id:
+            issue.component_id = component_id
+        mapped.append(issue)
+    return mapped
 
 
 def analyze_jira_payload(
@@ -215,8 +258,9 @@ def analyze_jira_payload(
     component_nodes: dict[str, GraphComponent],
     db: Session,
     tenant_id: uuid.UUID,
+    issues: list[JiraIssueActivity],
 ) -> tuple[str, list[GraphJiraTicket], int]:
-    """Mock document analyzer for Jira tickets, priorities, and assignments."""
+    """Build Cognee graph nodes from Jira issue activity."""
     project_filter = {
         key.strip().upper()
         for key in config.project_keys.split(",")
@@ -231,32 +275,35 @@ def analyze_jira_payload(
     data_points: list[GraphJiraTicket] = []
     edge_count = 0
 
-    for issue in source_issues:
-        if project_filter and issue["project_key"] not in project_filter:
+    for issue in issues:
+        if project_filter and issue.project_key not in project_filter:
+            continue
+        if issue.is_done:
             continue
 
-        assignee_provider_id = issue.get("assignee_provider_user_id")
         assignee_employee_id: str | None = None
-        if assignee_provider_id:
+        if issue.assignee_provider_user_id:
             assignee_employee_id = resolve_author_employee_id(
                 db,
                 tenant_id,
-                issue.get("assignee_provider", "jira"),
-                assignee_provider_id,
-                demo_fallback_employee_id=issue.get("assignee_employee_id"),
+                "jira",
+                issue.assignee_provider_user_id,
+                email_hint=issue.assignee_email,
                 quarantine_event_type="jira_issue",
-                quarantine_payload={"ticket_id": issue.get("ticket_id")},
+                quarantine_payload={"issue_key": issue.issue_key},
             )
         assignee = (
             employee_nodes.get(assignee_employee_id) if assignee_employee_id else None
         )
-        component = component_nodes.get(issue["component_id"])
+        component = (
+            component_nodes.get(issue.component_id) if issue.component_id else None
+        )
         ticket_node = GraphJiraTicket(
-            ticket_id=issue["ticket_id"],
-            issue_type=issue["issue_type"],
-            priority=issue["priority"],
-            status=issue["status"],
-            project_key=issue["project_key"],
+            ticket_id=issue.issue_key,
+            issue_type=issue.issue_type,
+            priority=issue.priority,
+            status=issue.status,
+            project_key=issue.project_key,
         )
         if assignee:
             ticket_node.assignedTo = (
@@ -268,7 +315,7 @@ def analyze_jira_payload(
             ticket_node.blocksComponent = (
                 Edge(
                     relationship_type="blocksComponent",
-                    properties={"priority": issue["priority"], "status": issue["status"]},
+                    properties={"priority": issue.priority, "status": issue.status},
                 ),
                 component,
             )
@@ -276,11 +323,10 @@ def analyze_jira_payload(
 
         data_points.append(ticket_node)
         assignee_name = assignee.name if assignee else "Unassigned"
-        component_name = component.name if component else issue["component_id"]
-        description = issue.get("description", "")
+        component_name = component.name if component else (issue.component_id or "unmapped")
         narrative_lines.append(
-            f"{issue['ticket_id']} ({issue['issue_type']}, {issue['priority']}, "
-            f"{issue['status']}) assigned to {assignee_name}, "
+            f"{issue.issue_key} ({issue.issue_type}, {issue.priority}, "
+            f"{issue.status}) assigned to {assignee_name}, "
             f"blocking component {component_name}."
             + (f" {description}" if description else "")
         )
@@ -292,21 +338,44 @@ async def process_external_app_sync(
     source: str,
     db: Session,
     tenant_id: uuid.UUID,
+    *,
+    use_github_fixture: bool = False,
+    use_jira_fixture: bool = False,
 ) -> dict[str, int | str]:
     """
     Transform raw app feed data, load into Cognee via add/cognify,
     and attach structured graph edges for multi-hop traversal.
     """
     normalized = source.lower().strip()
-    employee_nodes, component_nodes = _load_org_context(db, tenant_id)
+    employee_nodes, component_nodes, components_by_id = _load_org_context(db, tenant_id)
+    github_activities: list[GitHubPullRequestActivity] = []
+    open_prs_by_login: dict[str, int] = {}
 
     if normalized == "github":
-        config = get_github_config()
+        config = get_github_config(db, tenant_id)
         if not config:
             raise ValueError("GitHub integration is not configured.")
-        narrative, data_points, edge_count = analyze_github_payload(
-            config, employee_nodes, component_nodes, db, tenant_id
+        github_activities, unmapped_paths, open_prs_by_login = fetch_and_map_github_activity(
+            config,
+            components_by_id,
+            use_fixture=use_github_fixture,
         )
+        if unmapped_paths:
+            narrative_prefix = (
+                f"Warning: {len(unmapped_paths)} file paths could not be mapped to components."
+            )
+        else:
+            narrative_prefix = ""
+        narrative, data_points, edge_count = analyze_github_payload(
+            config,
+            employee_nodes,
+            component_nodes,
+            db,
+            tenant_id,
+            github_activities,
+        )
+        if narrative_prefix:
+            narrative = f"{narrative_prefix}\n{narrative}"
         custom_prompt = (
             "Extract GitHub engineering activity including pull requests, commits, "
             "file diff pathways, LOC changes, and map contributors to components "
@@ -316,8 +385,18 @@ async def process_external_app_sync(
         config = get_jira_config(db, tenant_id)
         if not config:
             raise ValueError("Jira integration is not configured.")
+        jira_issues = fetch_and_map_jira_issues(
+            config,
+            components_by_id,
+            use_fixture=use_jira_fixture,
+        )
         narrative, data_points, edge_count = analyze_jira_payload(
-            config, employee_nodes, component_nodes, db, tenant_id
+            config,
+            employee_nodes,
+            component_nodes,
+            db,
+            tenant_id,
+            jira_issues,
         )
         custom_prompt = (
             "Extract Jira issue metadata including ticket IDs, issue types, priorities, "
@@ -339,7 +418,20 @@ async def process_external_app_sync(
 
     telemetry: dict[str, object] = {}
     if normalized == "github":
-        telemetry["github_ownership"] = apply_github_telemetry(db, tenant_id)
+        telemetry["github_ownership"] = apply_github_telemetry(
+            db,
+            tenant_id,
+            github_activities,
+            open_prs_by_login=open_prs_by_login or None,
+        )
+    elif normalized == "jira":
+        high_priorities = set(config.high_priorities) if config else HIGH_PRIORITIES
+        telemetry["jira_backlog"] = apply_jira_telemetry(
+            db,
+            tenant_id,
+            jira_issues,
+            high_priorities=high_priorities,
+        )
 
     db.commit()
 
