@@ -1,0 +1,45 @@
+{
+  "pages": [
+    {
+      "page_id": "notion-page-payments-runbook",
+      "title": "Payment Gateway Runbook",
+      "page_url": "https://www.notion.so/payments-runbook",
+      "last_edited_at": "2024-08-01T10:00:00Z",
+      "component_id": "comp-payments",
+      "owner_emails": ["ben@acme.com"],
+      "page_kind": "runbook",
+      "last_verified_at": null,
+      "is_archived": false
+    },
+    {
+      "page_id": "notion-page-auth-arch",
+      "title": "Auth Service Architecture",
+      "page_url": "https://www.notion.so/auth-architecture",
+      "last_edited_at": "2026-02-15T12:00:00Z",
+      "component_id": "comp-auth",
+      "owner_emails": ["cara@acme.com"],
+      "page_kind": "runbook",
+      "last_verified_at": "2026-01-01T00:00:00Z",
+      "is_archived": false
+    },
+    {
+      "page_id": "notion-page-payments-handover",
+      "title": "Payment Gateway Ownership Transfer",
+      "page_url": "https://www.notion.so/payments-handover",
+      "last_edited_at": "2026-03-01T09:00:00Z",
+      "component_id": "comp-payments",
+      "owner_emails": ["ben@acme.com"],
+      "page_kind": "ownership_template",
+      "last_verified_at": "2026-03-01T09:00:00Z",
+      "is_archived": false
+    }
+  ],
+  "people_expertise": [
+    {
+      "email": "frank.osei@acme.com",
+      "name": "Frank Osei",
+      "tags": ["Payments", "Gateway"],
+      "page_id": "notion-person-frank"
+    }
+  ]
+}

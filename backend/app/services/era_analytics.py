@@ -38,21 +38,31 @@ from app.services.era.metadata import (
 )
 from app.services.era.normalize import build_tenant_percentiles
 from app.services.era.signals_builder import (
+    _undocumented_solved_incidents,
     build_signals_for_employee,
     build_signals_from_acme_employee,
 )
 from app.services.github_evidence import merge_github_evidence
 from app.services.jira_evidence import merge_jira_evidence
-from app.services.integration_config_store import get_jira_config
+from app.services.integration_config_store import (
+    get_jira_config,
+    get_notion_config,
+    get_slack_config,
+)
 from app.services.integration_telemetry import (
     get_jira_backlog_boost,
     get_review_network,
     get_team_risky_changes,
     has_github_sync,
     has_jira_sync,
+    has_notion_sync,
+    has_slack_sync,
     has_review_network,
     hydrate_github_telemetry_from_db,
+    hydrate_notion_telemetry_from_db,
 )
+from app.services.notion_evidence import merge_notion_evidence
+from app.services.slack_evidence import merge_slack_evidence
 from app.services.role_utils import is_leadership_role
 
 
@@ -60,7 +70,17 @@ def _jira_connected(db: Session, tenant_id) -> bool:
     return get_jira_config(db, tenant_id) is not None and has_jira_sync()
 
 
+def _notion_connected(db: Session, tenant_id) -> bool:
+    return get_notion_config(db, tenant_id) is not None and has_notion_sync()
+
+
+def _slack_connected(db: Session, tenant_id) -> bool:
+    return get_slack_config(db, tenant_id) is not None and has_slack_sync()
+
+
 def _merge_integration_evidence(
+    db: Session,
+    tenant_id,
     employee_id: str,
     employee_name: str,
     base_evidence: list[dict],
@@ -68,6 +88,8 @@ def _merge_integration_evidence(
     component_names: dict[str, str],
     github_connected: bool,
     jira_connected: bool,
+    notion_connected: bool,
+    slack_connected: bool,
     limit: int,
 ) -> list[dict]:
     merged = merge_github_evidence(
@@ -77,12 +99,28 @@ def _merge_integration_evidence(
         component_names=component_names,
         github_connected=github_connected,
         limit=limit,
+        db=db,
+        tenant_id=tenant_id,
     )
-    return merge_jira_evidence(
+    merged = merge_jira_evidence(
         employee_id,
         employee_name,
         merged,
         jira_connected=jira_connected,
+        limit=limit,
+    )
+    return merge_slack_evidence(
+        employee_id,
+        employee_name,
+        merge_notion_evidence(
+            employee_id,
+            employee_name,
+            merged,
+            notion_connected=notion_connected,
+            component_names=component_names,
+            limit=limit,
+        ),
+        slack_connected=slack_connected,
         limit=limit,
     )
 
@@ -108,12 +146,6 @@ def _calculate_risk_score(
         + (codebase_share_pct * 0.4)
     )
     return min(100.0, float(raw))
-
-
-def _undocumented_solved_incidents(employee_id: str, role: str) -> int:
-    if is_leadership_role(role):
-        return 0
-    return sum(ord(char) for char in employee_id) % 6
 
 
 def _evidence_dicts_to_models(items: list[dict]) -> list[EraEvidenceItem]:
@@ -149,7 +181,7 @@ def _metrics_from_counts(
     undocumented = (
         undocumented_solved_incidents
         if undocumented_solved_incidents is not None
-        else _undocumented_solved_incidents(employee_id, role)
+        else _undocumented_solved_incidents(employee_id, role, notion_connected=False)
     )
     adjusted_unresolved = unresolved_issues + jira_backlog_boost
     score = _calculate_risk_score(
@@ -275,6 +307,8 @@ def _compute_v2_metrics(
     *,
     github_connected: bool,
     jira_connected: bool = False,
+    notion_connected: bool = False,
+    slack_connected: bool = False,
 ) -> list[EraEmployeeMetrics]:
     signals_list = []
     employee_by_id = {employee.id: employee for employee in employees}
@@ -298,6 +332,8 @@ def _compute_v2_metrics(
                 jira_backlog_boost=jira_boost,
                 github_connected=github_connected,
                 jira_connected=jira_connected,
+                notion_connected=notion_connected,
+                slack_connected=slack_connected,
             )
         )
 
@@ -311,12 +347,16 @@ def _compute_v2_metrics(
             for assignment in employee.assignments
         }
         merged_evidence = _merge_integration_evidence(
+            db,
+            tenant.id,
             signals.employee_id,
             signals.name,
             score_result.evidence,
             component_names=component_names,
             github_connected=github_connected,
             jira_connected=jira_connected,
+            notion_connected=notion_connected,
+            slack_connected=slack_connected,
             limit=5,
         )
         score_result.evidence = merged_evidence
@@ -496,8 +536,11 @@ def _fallback_acme_metrics() -> list[EraEmployeeMetrics]:
 def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
     use_v2 = get_settings().era_v2_scoring
     hydrate_github_telemetry_from_db(db, tenant.id)
+    hydrate_notion_telemetry_from_db(db, tenant.id)
     github_connected = has_github_sync()
     jira_connected = _jira_connected(db, tenant.id)
+    notion_connected = _notion_connected(db, tenant.id)
+    slack_connected = _slack_connected(db, tenant.id)
     employees = (
         db.query(Employee)
         .filter(Employee.tenant_id == tenant.id)
@@ -563,6 +606,8 @@ def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
         total_components,
         github_connected=github_connected,
         jira_connected=jira_connected,
+        notion_connected=notion_connected,
+        slack_connected=slack_connected,
     )
     return _wrap_response(db, tenant, metrics, demo_mode=False)
 
@@ -577,6 +622,7 @@ def get_era_employee_detail(
 ) -> EraEmployeeDetailResponse | None:
     use_v2 = get_settings().era_v2_scoring
     hydrate_github_telemetry_from_db(db, tenant.id)
+    hydrate_notion_telemetry_from_db(db, tenant.id)
     github_connected = has_github_sync()
     employee = (
         db.query(Employee)
@@ -651,6 +697,8 @@ def get_era_employee_detail(
 
     github_connected = has_github_sync()
     jira_connected = _jira_connected(db, tenant.id)
+    notion_connected = _notion_connected(db, tenant.id)
+    slack_connected = _slack_connected(db, tenant.id)
 
     if use_v2:
         signals = build_signals_for_employee(
@@ -661,6 +709,8 @@ def get_era_employee_detail(
             jira_backlog_boost=jira_boost,
             github_connected=github_connected,
             jira_connected=jira_connected,
+            notion_connected=notion_connected,
+            slack_connected=slack_connected,
         )
         peer_signals = []
         for peer in all_employees:
@@ -680,6 +730,8 @@ def get_era_employee_detail(
                     jira_backlog_boost=get_jira_backlog_boost(peer.id),
                     github_connected=github_connected,
                     jira_connected=jira_connected,
+                    notion_connected=notion_connected,
+                    slack_connected=slack_connected,
                 )
             )
         tenant_stats = build_tenant_percentiles([signals, *peer_signals])
@@ -689,12 +741,16 @@ def get_era_employee_detail(
             for assignment in employee.assignments
         }
         merged = _merge_integration_evidence(
+            db,
+            tenant.id,
             signals.employee_id,
             signals.name,
             score_result.all_evidence,
             component_names=component_names,
             github_connected=github_connected,
             jira_connected=jira_connected,
+            notion_connected=notion_connected,
+            slack_connected=slack_connected,
             limit=1000,
         )
         score_result.all_evidence = merged

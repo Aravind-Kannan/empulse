@@ -100,6 +100,57 @@ export function riskBarClass(score: number): string {
   return "from-emerald-500 to-emerald-400";
 }
 
+export function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+export function primaryDimensionKey(
+  employee: EraEmployeeMetrics,
+): EraDimensionKey {
+  let best: EraDimensionKey = "knowledge";
+  let bestValue = -1;
+  for (const key of DIMENSION_KEYS) {
+    const value = dimensionValue(employee, key);
+    if (value > bestValue) {
+      bestValue = value;
+      best = key;
+    }
+  }
+  return best;
+}
+
+const INTEGRATION_LABELS: Record<IntegrationId, string> = {
+  github: "GitHub",
+  jira: "Jira",
+  slack: "Slack",
+  notion: "Notion",
+};
+
+export function formatProviderSyncAge(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+export function formatPerProviderSyncFreshness(
+  syncFreshness: EraAnalyticsResponse["sync_freshness"],
+): string {
+  const providers: IntegrationId[] = ["github", "jira", "slack", "notion"];
+  return providers
+    .map(
+      (provider) =>
+        `${INTEGRATION_LABELS[provider]} ${formatProviderSyncAge(syncFreshness[provider])}`,
+    )
+    .join(" · ");
+}
+
 export function exportEmployeesCsv(employees: EraEmployeeMetrics[]) {
   const headers = [
     "employee_id",

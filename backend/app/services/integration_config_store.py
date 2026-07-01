@@ -31,6 +31,8 @@ _DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
         "workspace_url": "",
         "bot_token": "",
         "channel_ids": "",
+        "incident_channel_ids": "",
+        "on_call_channel_ids": "",
         "validated": False,
         "previously_connected": False,
     },
@@ -240,6 +242,39 @@ def get_jira_config(
         default_component_id=stored.get("default_component_id"),
         high_priorities=stored.get("high_priorities")
         or ["Highest", "High", "Critical"],
+    )
+
+
+def get_notion_config(
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> NotionConfigRequest | None:
+    stored = get_source_config(db, tenant_id, "notion")
+    if not stored.get("integration_token", "").strip():
+        return None
+    return NotionConfigRequest(
+        integration_token=stored["integration_token"],
+        database_ids=stored.get("database_ids", ""),
+        validated=bool(stored.get("validated")),
+        previously_connected=bool(stored.get("previously_connected")),
+    )
+
+
+def get_slack_config(
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> SlackConfigRequest | None:
+    stored = get_source_config(db, tenant_id, "slack")
+    if not stored.get("bot_token", "").strip():
+        return None
+    return SlackConfigRequest(
+        workspace_url=stored.get("workspace_url", ""),
+        bot_token=stored["bot_token"],
+        channel_ids=stored.get("channel_ids", ""),
+        incident_channel_ids=stored.get("incident_channel_ids", ""),
+        on_call_channel_ids=stored.get("on_call_channel_ids", ""),
+        validated=bool(stored.get("validated")),
+        previously_connected=bool(stored.get("previously_connected")),
     )
 
 

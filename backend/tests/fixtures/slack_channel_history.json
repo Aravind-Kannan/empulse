@@ -1,0 +1,218 @@
+{
+  "workspace_url": "https://acme.slack.com",
+  "channels": [
+    {
+      "id": "C_INCIDENTS",
+      "name": "incidents",
+      "component_id": "comp-payments",
+      "is_incident": true,
+      "is_on_call": false,
+      "threads": [
+        {
+          "thread_ts": "1717200000.000100",
+          "parent_text": "SEV1 payment gateway latency spike",
+          "messages": [
+            {
+              "ts": "1717200000.000100",
+              "user": "U_ALICE",
+              "text": "#incident payments latency elevated",
+              "is_bot": false
+            },
+            {
+              "ts": "1717200060.000200",
+              "user": "U_BEN",
+              "text": "checking pool metrics",
+              "is_bot": false
+            },
+            {
+              "ts": "1717200120.000300",
+              "user": "U_CARA",
+              "text": "cc <@U_BEN> can you take lead?",
+              "is_bot": false
+            },
+            {
+              "ts": "1717203600.000400",
+              "user": "U_BEN",
+              "text": "root cause was connection pool exhaustion — mitigated and resolved",
+              "is_bot": false,
+              "reactions": ["white_check_mark"]
+            }
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1718000000.000100",
+          "parent_text": "Auth cache invalidation incident",
+          "messages": [
+            {
+              "ts": "1718000000.000100",
+              "user": "U_DIANA",
+              "text": "incident auth cache stale reads",
+              "is_bot": false
+            },
+            {
+              "ts": "1718000100.000200",
+              "user": "U_CARA",
+              "text": "investigating",
+              "is_bot": false
+            },
+            {
+              "ts": "1718004000.000300",
+              "user": "U_CARA",
+              "text": "fixed by flushing cache — resolved",
+              "is_bot": false
+            }
+          ],
+          "mentions": ["U_CARA"]
+        },
+        {
+          "thread_ts": "1718100000.000100",
+          "parent_text": "Bot-only noise thread",
+          "messages": [
+            {
+              "ts": "1718100000.000100",
+              "user": "U_BOT",
+              "text": "pagerduty alert opened",
+              "is_bot": true
+            },
+            {
+              "ts": "1718100060.000200",
+              "user": "U_BOT",
+              "text": "pagerduty alert closed",
+              "is_bot": true
+            }
+          ],
+          "mentions": []
+        }
+      ]
+    },
+    {
+      "id": "C_ONCALL",
+      "name": "oncall-payments",
+      "component_id": "comp-payments",
+      "is_incident": false,
+      "is_on_call": true,
+      "threads": [
+        {
+          "thread_ts": "1719000000.000100",
+          "parent_text": "On-call handoff thread",
+          "messages": [
+            {
+              "ts": "1719000000.000100",
+              "user": "U_BEN",
+              "text": "taking the pager",
+              "is_bot": false
+            },
+            {
+              "ts": "1719001800.000200",
+              "user": "U_BEN",
+              "text": "investigating alert",
+              "is_bot": false
+            },
+            {
+              "ts": "1719003600.000300",
+              "user": "U_BEN",
+              "text": "all clear",
+              "is_bot": false
+            }
+          ],
+          "mentions": []
+        }
+      ]
+    },
+    {
+      "id": "C_ESCALATION",
+      "name": "incidents-payments",
+      "component_id": "comp-payments",
+      "is_incident": true,
+      "is_on_call": false,
+      "threads": [
+        {
+          "thread_ts": "1710000001.000100",
+          "parent_text": "Escalation thread 1",
+          "messages": [
+            {"ts": "1710000001.000100", "user": "U_ALICE", "text": "sev2 <@U_BEN>", "is_bot": false},
+            {"ts": "1710000002.000200", "user": "U_BOB", "text": "ping <@U_BEN>", "is_bot": false},
+            {"ts": "1710000003.000300", "user": "U_BEN", "text": "on it", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1710000002.000100",
+          "parent_text": "Escalation thread 2",
+          "messages": [
+            {"ts": "1710000002.000100", "user": "U_ALICE", "text": "<@U_BEN> help", "is_bot": false},
+            {"ts": "1710000002.000200", "user": "U_CARA", "text": "also need <@U_BEN>", "is_bot": false},
+            {"ts": "1710000002.000300", "user": "U_BEN", "text": "looking", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1710000003.000100",
+          "parent_text": "Escalation thread 3",
+          "messages": [
+            {"ts": "1710000003.000100", "user": "U_ALICE", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000003.000200", "user": "U_DIANA", "text": "<@U_BEN> please", "is_bot": false},
+            {"ts": "1710000003.000300", "user": "U_BEN", "text": "ack", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1710000004.000100",
+          "parent_text": "Escalation thread 4",
+          "messages": [
+            {"ts": "1710000004.000100", "user": "U_ALICE", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000004.000200", "user": "U_BOB", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000004.000300", "user": "U_BEN", "text": "ack", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1710000005.000100",
+          "parent_text": "Escalation thread 5",
+          "messages": [
+            {"ts": "1710000005.000100", "user": "U_ALICE", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000005.000200", "user": "U_CARA", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000005.000300", "user": "U_BEN", "text": "ack", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1710000006.000100",
+          "parent_text": "Escalation thread 6",
+          "messages": [
+            {"ts": "1710000006.000100", "user": "U_ALICE", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000006.000200", "user": "U_DIANA", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000006.000300", "user": "U_BEN", "text": "ack", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1710000007.000100",
+          "parent_text": "Escalation thread 7",
+          "messages": [
+            {"ts": "1710000007.000100", "user": "U_ALICE", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000007.000200", "user": "U_BOB", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000007.000300", "user": "U_BEN", "text": "ack", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        },
+        {
+          "thread_ts": "1710000008.000100",
+          "parent_text": "Escalation thread 8",
+          "messages": [
+            {"ts": "1710000008.000100", "user": "U_ALICE", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000008.000200", "user": "U_CARA", "text": "<@U_BEN>", "is_bot": false},
+            {"ts": "1710000008.000300", "user": "U_BEN", "text": "ack", "is_bot": false}
+          ],
+          "mentions": ["U_BEN"]
+        }
+      ]
+    }
+  ],
+  "users": {
+    "U_BEN": {"email": "ben@acme.com"},
+    "U_CARA": {"email": "cara@acme.com"},
+    "U_ALICE": {"email": "alice.chen@acme.com"}
+  }
+}

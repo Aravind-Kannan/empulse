@@ -65,6 +65,69 @@ def discover_database_ids(token: str) -> list[str]:
     return [str(item["id"]) for item in databases if item.get("id")]
 
 
+def fetch_database_schema(token: str, database_id: str) -> dict[str, Any]:
+    """Return the property schema for a Notion database."""
+    response = requests.get(
+        f"https://api.notion.com/v1/databases/{database_id}",
+        headers=notion_headers(token),
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise ValueError(
+            f"Notion database fetch failed ({response.status_code}): "
+            f"{response.text[:200]}"
+        )
+    return response.json().get("properties") or {}
+
+
+def is_people_database_schema(properties: dict[str, Any]) -> bool:
+    """Heuristic: roster DBs have email + name, or people + role columns."""
+    has_name = any(prop.get("type") == "title" for prop in properties.values())
+    if not has_name:
+        return False
+
+    has_email = any(prop.get("type") == "email" for prop in properties.values())
+    if has_email:
+        return True
+
+    has_people = any(
+        prop.get("type") == "people"
+        for key, prop in properties.items()
+        if any(
+            hint in key.lower()
+            for hint in ("person", "assignee", "member", "employee", "owner")
+        )
+    )
+    has_role = any(
+        prop.get("type") in ("select", "multi_select", "rich_text", "status")
+        for key, prop in properties.items()
+        if any(hint in key.lower() for hint in ("role", "title", "job", "position"))
+    )
+    return has_people and has_role
+
+
+def discover_people_database_ids(token: str) -> list[str]:
+    """Return database IDs that look like people / team rosters."""
+    people_ids: list[str] = []
+    for database_id in discover_database_ids(token):
+        try:
+            properties = fetch_database_schema(token, database_id)
+        except ValueError as exc:
+            logger.warning("Skipping Notion database %s: %s", database_id, exc)
+            continue
+        if is_people_database_schema(properties):
+            people_ids.append(database_id)
+    return people_ids
+
+
+def _row_people_emails(props: dict[str, Any]) -> list[str]:
+    emails: list[str] = []
+    for prop in props.values():
+        if prop.get("type") == "people":
+            emails.extend(_prop_people_emails(prop))
+    return emails
+
+
 def query_database_pages(token: str, database_id: str) -> list[dict[str, Any]]:
     """Fetch all rows from a Notion database."""
     page_rows: list[dict[str, Any]] = []
@@ -218,22 +281,23 @@ def parse_database_rows_to_records(page_rows: list[dict[str, Any]]) -> list[Mast
 
         name = _prop_text(name_prop) or _page_title(page) or "Notion Member"
         email = _prop_text(email_prop)
+        row_people_emails = _row_people_emails(props)
         if not email and manager_prop:
-            people_emails = _prop_people_emails(manager_prop)
-            if people_emails:
-                email = people_emails[0]
+            manager_people_emails = _prop_people_emails(manager_prop)
+            if manager_people_emails:
+                email = manager_people_emails[0]
+        if not email and row_people_emails:
+            email = row_people_emails[0]
         if not email:
-            page_id = str(page.get("id", ""))
-            if not page_id:
-                continue
-            email = f"notion-{page_id.replace('-', '')[:12]}@example.com"
+            # Skip non-person rows (expense trackers, task lists, etc.).
+            continue
 
         email = email.lower()
         page_id = str(page.get("id", email))
         page_id_to_email[page_id] = email
 
         relation_ids = _prop_relation_ids(manager_prop)
-        people_emails = _prop_people_emails(manager_prop)
+        people_emails = _prop_people_emails(manager_prop) or row_people_emails
         pending.append(
             (
                 page_id,
@@ -295,8 +359,9 @@ def fetch_notion_member_records(
     """
     Import members from Notion.
 
-    Queries shared databases when available, then supplements with workspace
-    users from the Notion Users API so a people database is not required.
+    Without explicit ``database_ids``, imports workspace users only (Notion
+    Users API). When IDs are omitted but auto-discovery is desired, only
+    databases that look like people rosters are queried — not every shared DB.
     """
     cleaned_token = token.strip()
     if not cleaned_token:
@@ -308,12 +373,6 @@ def fetch_notion_member_records(
         if item.strip()
     ]
     ids = explicit_ids
-    if not ids:
-        try:
-            ids = discover_database_ids(cleaned_token)
-        except ValueError as exc:
-            logger.warning("Notion database discovery failed: %s", exc)
-            ids = []
 
     db_records: list[MasterDataRecord] = []
     if ids:
@@ -334,3 +393,190 @@ def count_accessible_resources(token: str) -> tuple[int, int]:
     databases = search_notion_objects(token, object_type="database")
     pages = search_notion_objects(token, object_type="page")
     return len(databases), len(pages)
+
+
+EXPERTISE_FIELD_HINTS = ("expertise", "skills", "specialt", "topic")
+DOC_FIELD_HINTS = ("runbook", "architecture", "playbook", "wiki", "doc", "handover")
+COMPONENT_FIELD_HINTS = ("component", "system", "service", "product", "area")
+OWNER_FIELD_HINTS = ("owner", "author", "maintainer", "doc owner")
+VERIFIED_FIELD_HINTS = ("last verified", "last_verified", "verified", "last reviewed")
+OWNERSHIP_TEMPLATE_HINTS = ("ownership transfer", "living runbook", "handover pack")
+
+
+def _prop_multi_select(prop: dict | None) -> list[str]:
+    if not prop or prop.get("type") != "multi_select":
+        return []
+    return [
+        str(item.get("name", "")).strip()
+        for item in (prop.get("multi_select") or [])
+        if item.get("name")
+    ]
+
+
+def _prop_date_value(prop: dict | None) -> str | None:
+    if not prop or prop.get("type") != "date":
+        return None
+    date_value = prop.get("date") or {}
+    return date_value.get("start")
+
+
+def _page_url(page_id: str) -> str:
+    clean = page_id.replace("-", "")
+    return f"https://www.notion.so/{clean}"
+
+
+def _is_archived(page: dict[str, Any]) -> bool:
+    return bool(page.get("archived"))
+
+
+def parse_people_expertise_rows(page_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract Guru-style expertise tags from People DB rows."""
+    expertise_rows: list[dict[str, Any]] = []
+    for page in page_rows:
+        props = page.get("properties") or {}
+        email_prop = _find_property(props, "email", "work email", "mail")
+        name_prop = _find_property(props, "name", "employee", "person")
+        email = _prop_text(email_prop).lower()
+        if not email:
+            continue
+        tags: list[str] = []
+        for key, prop in props.items():
+            label = key.lower()
+            if any(hint in label for hint in EXPERTISE_FIELD_HINTS):
+                tags.extend(_prop_multi_select(prop))
+        if tags:
+            expertise_rows.append(
+                {
+                    "email": email,
+                    "name": _prop_text(name_prop) or _page_title(page) or email,
+                    "tags": sorted(set(tags)),
+                    "page_id": str(page.get("id", "")),
+                }
+            )
+    return expertise_rows
+
+
+def parse_document_pages(
+    pages: list[dict[str, Any]],
+    *,
+    component_names: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Normalize wiki pages and database rows into doc inventory dicts."""
+    normalized_names = {name.lower(): cid for cid, name in component_names.items()}
+    docs: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    def add_page(page: dict[str, Any], *, default_kind: str = "runbook") -> None:
+        page_id = str(page.get("id", ""))
+        if not page_id or page_id in seen_ids or _is_archived(page):
+            return
+        props = page.get("properties") or {}
+        title = _page_title(page)
+        if not title and page.get("object") == "page":
+            parent = page.get("parent") or {}
+            if parent.get("type") == "database_id":
+                title = _prop_text(_find_property(props, "name", "title")) or "Untitled"
+        if not title:
+            return
+
+        component_id: str | None = None
+        component_prop = _find_property(props, *COMPONENT_FIELD_HINTS)
+        relation_ids = _prop_relation_ids(component_prop)
+        if relation_ids:
+            component_id = relation_ids[0]
+
+        title_lower = title.lower()
+        if not component_id:
+            for name_lower, cid in normalized_names.items():
+                if name_lower in title_lower:
+                    component_id = cid
+                    break
+
+        owner_prop = _find_property(props, *OWNER_FIELD_HINTS)
+        owner_emails = _prop_people_emails(owner_prop)
+        verified_prop = _find_property(props, *VERIFIED_FIELD_HINTS)
+        last_verified = _prop_date_value(verified_prop)
+
+        page_kind = default_kind
+        if any(hint in title_lower for hint in OWNERSHIP_TEMPLATE_HINTS):
+            page_kind = "ownership_template"
+        elif "postmortem" in title_lower:
+            page_kind = "postmortem"
+        elif any(hint in title_lower for hint in DOC_FIELD_HINTS):
+            page_kind = "runbook"
+
+        docs.append(
+            {
+                "page_id": page_id,
+                "title": title,
+                "page_url": _page_url(page_id),
+                "last_edited_at": page.get("last_edited_time"),
+                "component_id": component_id,
+                "owner_emails": owner_emails,
+                "page_kind": page_kind,
+                "last_verified_at": last_verified,
+                "is_archived": _is_archived(page),
+            }
+        )
+        seen_ids.add(page_id)
+
+    for page in pages:
+        add_page(page)
+
+    return docs
+
+
+def fetch_notion_document_inventory(
+    token: str,
+    database_ids: str | None,
+    *,
+    component_names: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Return (document_pages, people_expertise_rows).
+
+    Combines Notion search results with configured database rows.
+    """
+    cleaned_token = token.strip()
+    if not cleaned_token:
+        return [], []
+
+    explicit_ids = [
+        item.strip() for item in (database_ids or "").split(",") if item.strip()
+    ]
+    ids = explicit_ids or discover_database_ids(cleaned_token)
+
+    db_rows: list[dict[str, Any]] = []
+    for database_id in ids:
+        try:
+            db_rows.extend(query_database_pages(cleaned_token, database_id))
+        except ValueError as exc:
+            logger.warning("Skipping Notion database %s: %s", database_id, exc)
+
+    try:
+        search_pages = search_notion_objects(cleaned_token, object_type="page")
+    except ValueError as exc:
+        logger.warning("Notion page search failed: %s", exc)
+        search_pages = []
+
+    docs = parse_document_pages(
+        search_pages + db_rows,
+        component_names=component_names,
+    )
+    expertise = parse_people_expertise_rows(db_rows)
+    return docs, expertise
+
+
+def load_fixture_document_inventory() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    import json
+    from pathlib import Path
+
+    fixture_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "tests"
+        / "fixtures"
+        / "notion_doc_inventory.json"
+    )
+    payload = json.loads(fixture_path.read_text())
+    return payload.get("pages", []), payload.get("people_expertise", [])
+

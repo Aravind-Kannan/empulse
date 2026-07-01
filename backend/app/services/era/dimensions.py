@@ -126,6 +126,17 @@ def compute_operational(
             provider="jira",
         ),
     ]
+    if signals.on_call_incidents_30d > 0:
+        factors.append(
+            DimensionFactor(
+                "on_call_incidents",
+                "On-call incidents (30d)",
+                float(signals.on_call_incidents_30d),
+                round(on_call_norm * 0.10, 1),
+                provider="slack" if signals.slack_connected else "internal",
+                synthetic=not signals.slack_connected,
+            )
+        )
     return DimensionResult(key="operational", score=round(score, 1), factors=factors)
 
 
@@ -134,14 +145,21 @@ def compute_documentation(signals: EmployeeSignals) -> DimensionResult:
     no_docs_term = signals.components_without_docs * 12
     stale_term = signals.stale_runbook_count * 5
     score = min(100.0, float(undocumented_term + no_docs_term + stale_term))
-    synthetic = signals.undocumented_solved_incidents > 0 and signals.stale_runbook_count == 0
+    notion_live = signals.notion_connected
+    slack_live = signals.slack_connected and notion_live
+    undocumented_provider = "slack" if slack_live else ("notion" if notion_live else "slack")
+    synthetic = (
+        not slack_live
+        and not notion_live
+        and signals.undocumented_solved_incidents > 0
+    )
     factors = [
         DimensionFactor(
             "undocumented_incidents",
             "Undocumented solved incidents",
             float(signals.undocumented_solved_incidents),
             float(undocumented_term),
-            provider="slack",
+            provider=undocumented_provider,
             synthetic=synthetic,
         ),
         DimensionFactor(
@@ -150,7 +168,7 @@ def compute_documentation(signals: EmployeeSignals) -> DimensionResult:
             float(signals.components_without_docs),
             float(no_docs_term),
             provider="notion",
-            synthetic=True,
+            synthetic=not notion_live,
         ),
         DimensionFactor(
             "stale_runbooks",
@@ -158,14 +176,14 @@ def compute_documentation(signals: EmployeeSignals) -> DimensionResult:
             float(signals.stale_runbook_count),
             float(stale_term),
             provider="notion",
-            synthetic=True,
+            synthetic=not notion_live,
         ),
     ]
     return DimensionResult(
         key="documentation",
         score=round(score, 1),
         factors=factors,
-        partial=synthetic,
+        partial=any(factor.synthetic for factor in factors),
     )
 
 
@@ -181,10 +199,11 @@ def compute_structural(signals: EmployeeSignals) -> DimensionResult:
     reports_term = min(40.0, signals.direct_reports * 8)
     sole_owner_term = signals.cross_team_sole_owner_count * 15
     epic_term = signals.sole_epic_owner_count * 10
+    escalation_term = min(40.0, signals.incident_escalation_threads * 4)
     roll_up_term = signals.high_risk_report_roll_up * 0.15
     score = min(
         100.0,
-        reports_term + sole_owner_term + epic_term + roll_up_term,
+        reports_term + sole_owner_term + epic_term + escalation_term + roll_up_term,
     )
     factors = [
         DimensionFactor(
@@ -198,6 +217,14 @@ def compute_structural(signals: EmployeeSignals) -> DimensionResult:
             "Cross-team sole ownership",
             float(signals.cross_team_sole_owner_count),
             float(sole_owner_term),
+        ),
+        DimensionFactor(
+            "incident_escalation_shadow",
+            "Incident escalation concentration",
+            float(signals.incident_escalation_threads),
+            round(escalation_term, 1),
+            provider="slack",
+            synthetic=not signals.slack_connected,
         ),
         DimensionFactor(
             "high_risk_roll_up",
@@ -265,4 +292,15 @@ def compute_burnout(
             synthetic=True,
         ),
     ]
+    if signals.on_call_off_hours_messages > 0:
+        factors.append(
+            DimensionFactor(
+                "on_call_off_hours_messages",
+                "After-hours on-call Slack activity",
+                float(signals.on_call_off_hours_messages),
+                round(messages_norm * 0.15, 1),
+                provider="slack",
+                synthetic=not signals.slack_connected,
+            )
+        )
     return DimensionResult(key="burnout", score=round(score, 1), factors=factors)

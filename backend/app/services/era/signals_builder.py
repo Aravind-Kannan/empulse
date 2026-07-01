@@ -13,7 +13,11 @@ from app.services.integration_telemetry import (
     get_github_employee_context,
     get_jira_epic_owner_count,
     get_jira_open_tasks,
+    get_notion_employee_signals,
+    get_slack_employee_signals,
     has_doa_ownership,
+    has_notion_sync,
+    has_slack_sync,
     has_review_network,
     has_jira_sync,
     is_github_spof,
@@ -21,10 +25,51 @@ from app.services.integration_telemetry import (
 from app.services.role_utils import is_leadership_role
 
 
-def _undocumented_solved_incidents(employee_id: str, role: str) -> int:
+def _undocumented_solved_incidents(
+    employee_id: str,
+    role: str,
+    *,
+    notion_connected: bool = False,
+    slack_connected: bool = False,
+) -> int:
     if is_leadership_role(role):
         return 0
+    if (
+        slack_connected
+        and notion_connected
+        and has_slack_sync()
+        and has_notion_sync()
+    ):
+        slack_signals = get_slack_employee_signals(employee_id)
+        if slack_signals is not None:
+            return slack_signals.undocumented_solved_incidents
+    if notion_connected and has_notion_sync():
+        signals = get_notion_employee_signals(employee_id)
+        if signals is not None:
+            return signals.undocumented_solved_incidents
     return sum(ord(char) for char in employee_id) % 6
+
+
+def _slack_signals(employee_id: str, *, slack_connected: bool):
+    if not slack_connected or not has_slack_sync():
+        return 0, 0, 0
+    signals = get_slack_employee_signals(employee_id)
+    if signals is None:
+        return 0, 0, 0
+    return (
+        signals.on_call_incidents_30d,
+        signals.on_call_off_hours_messages,
+        signals.incident_escalation_threads,
+    )
+
+
+def _notion_doc_signals(employee_id: str, *, notion_connected: bool):
+    if not notion_connected or not has_notion_sync():
+        return 0, 0
+    signals = get_notion_employee_signals(employee_id)
+    if signals is None:
+        return 0, 0
+    return signals.components_without_docs, signals.stale_runbook_count
 
 
 def _direct_reports(employee_id: str, employees: list[Employee]) -> int:
@@ -55,6 +100,8 @@ def build_signals_for_employee(
     jira_backlog_boost: int,
     github_connected: bool = False,
     jira_connected: bool = False,
+    notion_connected: bool = False,
+    slack_connected: bool = False,
 ) -> EmployeeSignals:
     assignments: list[Assignment] = employee.assignments
     component_ids = {assignment.component_id for assignment in assignments}
@@ -91,6 +138,12 @@ def build_signals_for_employee(
         and gh_context
         and (gh_context.recent_pr_count > 0 or gh_context.reviews_given_count > 0)
     )
+    without_docs, stale_runbooks = _notion_doc_signals(
+        employee.id, notion_connected=notion_connected
+    )
+    on_call_incidents, off_hours_messages, escalation_threads = _slack_signals(
+        employee.id, slack_connected=slack_connected
+    )
 
     return EmployeeSignals(
         employee_id=employee.id,
@@ -102,8 +155,16 @@ def build_signals_for_employee(
         unresolved_issues=unresolved_issues + jira_backlog_boost,
         open_tasks=open_tasks,
         undocumented_solved_incidents=_undocumented_solved_incidents(
-            employee.id, employee.role
+            employee.id,
+            employee.role,
+            notion_connected=notion_connected,
+            slack_connected=slack_connected,
         ),
+        components_without_docs=without_docs,
+        stale_runbook_count=stale_runbooks,
+        on_call_incidents_30d=on_call_incidents,
+        on_call_off_hours_messages=off_hours_messages,
+        incident_escalation_threads=escalation_threads,
         codebase_share_pct=codebase_share_pct,
         jira_backlog_boost=jira_backlog_boost,
         max_github_ownership_pct=max_ownership,
@@ -112,6 +173,8 @@ def build_signals_for_employee(
         owned_component_count=owned_count,
         max_criticality_multiplier=max_crit_mult,
         github_connected=github_connected,
+        notion_connected=notion_connected,
+        slack_connected=slack_connected,
         identity_coverage_github="confirmed" if github_connected else "missing",
         component_names=[component.name for component in components],
         backup_review_score=(

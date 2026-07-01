@@ -26,6 +26,8 @@ from app.services.integration_config_store import (
     get_all_configs,
     get_github_config,
     get_jira_config,
+    get_notion_config,
+    get_slack_config,
     get_source_config,
     is_source_configured,
     save_github_config,
@@ -338,6 +340,8 @@ async def sync_integration(
             tenant.id,
             use_github_fixture=use_fixture,
             use_jira_fixture=use_fixture,
+            use_notion_fixture=use_fixture,
+            use_slack_fixture=use_fixture,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -360,11 +364,15 @@ async def sync_all_configured(
         sources.append("github")
     if get_jira_config(db, tenant.id):
         sources.append("jira")
+    if get_notion_config(db, tenant.id):
+        sources.append("notion")
+    if get_slack_config(db, tenant.id):
+        sources.append("slack")
 
     if not sources:
         raise HTTPException(
             status_code=400,
-            detail="No GitHub or Jira integrations are configured for sync.",
+            detail="No configured integrations are available for sync.",
         )
 
     try:

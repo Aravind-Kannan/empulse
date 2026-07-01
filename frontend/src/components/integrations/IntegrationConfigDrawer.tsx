@@ -124,7 +124,8 @@ export function IntegrationConfigDrawer({
           previouslyConnected: true,
         });
         updateConfig("notion", { validated: true, previouslyConnected: true });
-        setSuccess(message);
+        await syncIntegrationSource("notion");
+        setSuccess(`${message} Sync started.`);
       } else if (app.id === "slack") {
         if (!config.slack.botToken.trim()) {
           throw new Error("Slack bot token is required.");
@@ -136,7 +137,8 @@ export function IntegrationConfigDrawer({
           previouslyConnected: true,
         });
         updateConfig("slack", { validated: true, previouslyConnected: true });
-        setSuccess(message);
+        await syncIntegrationSource("slack");
+        setSuccess(`${message} Sync started.`);
       } else if (app.id === "github") {
         await saveGitHubIntegrationConfig(config.github);
         await syncIntegrationSource("github");

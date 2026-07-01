@@ -110,7 +110,7 @@ export function EraKpiStrip({
           />
         </div>
         <p className="mt-1 text-xs text-zinc-500">
-          {integrationCount}/4 integrations
+          {integrationCount}/4 integrations synced
         </p>
       </div>
     </div>

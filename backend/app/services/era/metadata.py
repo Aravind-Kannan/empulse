@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models.operational import Employee, EmployeeIdentity
+from app.models.operational import Assignment, Component, Employee, EmployeeIdentity
 from app.schemas.era import (
     EraAffectedComponent,
     EraEmployeeMetrics,
@@ -227,6 +227,36 @@ def build_warnings(
     unmapped = build_unmapped_activity(db, tenant_id)
     if any(row.count > 0 for row in unmapped):
         warnings.append("partial_identity")
+
+    if not demo_mode:
+        employee_count = (
+            db.query(Employee.id)
+            .filter(Employee.tenant_id == tenant_id)
+            .count()
+        )
+        if employee_count:
+            component_count = (
+                db.query(Component.id)
+                .filter(Component.tenant_id == tenant_id)
+                .count()
+            )
+            assigned_employee_count = (
+                db.query(Assignment.employee_id)
+                .join(Employee, Employee.id == Assignment.employee_id)
+                .filter(Employee.tenant_id == tenant_id)
+                .distinct()
+                .count()
+            )
+            if component_count == 0:
+                warnings.append(
+                    "No components in org chart — add components and assignments "
+                    "so ERA can score employees differently."
+                )
+            elif assigned_employee_count == 0:
+                warnings.append(
+                    "No component assignments — ERA scores will be identical "
+                    "until employees own components."
+                )
 
     if demo_mode:
         warnings.append("demo_data")

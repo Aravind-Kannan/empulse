@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 import { fetchEraMetrics } from "@/lib/api";
@@ -9,6 +10,7 @@ import { useWorkspace } from "@/context/WorkspaceContext";
 import type { EraAnalyticsResponse, EraEmployeeMetrics } from "@/lib/types";
 
 import { EraCommandHeader } from "./EraCommandHeader";
+import { EraDetailDrawer } from "./EraDetailDrawer";
 import { EraEmployeePreview } from "./EraEmployeePreview";
 import { EraEvidenceFeed } from "./EraEvidenceFeed";
 import { EraKpiStrip } from "./EraKpiStrip";
@@ -21,13 +23,35 @@ import {
 } from "./era-utils";
 
 export function EraCommandCenter() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { operationalRevision } = useWorkspace();
   const [data, setData] = useState<EraAnalyticsResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [drawerEmployeeId, setDrawerEmployeeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+
+  const openDrawer = useCallback(
+    (employeeId: string) => {
+      setDrawerEmployeeId(employeeId);
+      setSelectedId(employeeId);
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("employee", employeeId);
+      router.replace(`/era?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const closeDrawer = useCallback(() => {
+    setDrawerEmployeeId(null);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("employee");
+    const query = params.toString();
+    router.replace(query ? `/era?${query}` : "/era", { scroll: false });
+  }, [router, searchParams]);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -63,6 +87,14 @@ export function EraCommandCenter() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    const deepLinked = searchParams.get("employee");
+    if (deepLinked) {
+      setDrawerEmployeeId(deepLinked);
+      setSelectedId((current) => current ?? deepLinked);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -204,11 +236,21 @@ export function EraCommandCenter() {
       <EraRiskHeatmap
         employees={employees}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={(employeeId) => {
+          setSelectedId(employeeId);
+          openDrawer(employeeId);
+        }}
       />
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <EraEmployeePreview employee={selectedEmployee} />
+        <EraEmployeePreview
+          employee={selectedEmployee}
+          onOpenDetail={
+            selectedEmployee
+              ? () => openDrawer(selectedEmployee.employee_id)
+              : undefined
+          }
+        />
         <EraTeamComposition
           employees={employees}
           topRiskDriver={data.team_summary.top_risk_driver}
@@ -218,8 +260,20 @@ export function EraCommandCenter() {
       <EraEvidenceFeed
         items={teamEvidence}
         selectedId={selectedId}
-        onSelectEmployee={setSelectedId}
+        onSelectEmployee={(employeeId) => {
+          setSelectedId(employeeId);
+          openDrawer(employeeId);
+        }}
       />
+
+      {drawerEmployeeId && data && (
+        <EraDetailDrawer
+          employeeId={drawerEmployeeId}
+          syncFreshness={data.sync_freshness}
+          demoMode={data.demo_mode}
+          onClose={closeDrawer}
+        />
+      )}
 
       <p className="text-xs text-zinc-600">
         Directors and leadership roles are excluded from ERA scoring.

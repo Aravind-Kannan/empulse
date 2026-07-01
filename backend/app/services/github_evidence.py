@@ -181,6 +181,8 @@ def merge_github_evidence(
     component_names: dict[str, str],
     github_connected: bool,
     limit: int = 5,
+    db=None,
+    tenant_id=None,
 ) -> list[dict]:
     github_items = build_github_evidence_items(
         employee_id,
@@ -188,6 +190,13 @@ def merge_github_evidence(
         component_names=component_names,
         github_connected=github_connected,
     )
+    if db is not None and tenant_id is not None and github_connected:
+        from app.services.github_file_risk import build_file_risk_evidence_items
+
+        github_items = (
+            build_file_risk_evidence_items(db, tenant_id, employee_id, employee_name)
+            + github_items
+        )
     if not github_items:
         return base_evidence[:limit]
 

@@ -14,7 +14,6 @@ import {
   deleteIntegrationConfig,
   fetchIntegrationConfig,
   saveAndSyncIntegration,
-  syncAllIntegrations,
   syncIntegrationSource,
   syncMemberRoster,
 } from "@/lib/api";
@@ -97,7 +96,7 @@ interface IntegrationsContextValue {
 
 const IntegrationsContext = createContext<IntegrationsContextValue | null>(null);
 
-const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira"]);
+const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira", "notion", "slack"]);
 
 function deriveStatuses(
   config: IntegrationConfigMap,
@@ -287,70 +286,28 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       BACKEND_SYNC_SOURCES.has(app.id),
     );
 
-    const company =
-      activeTenant?.companyName ?? session?.company ?? "My Company";
-
     setSyncProgress({
       active: true,
       currentSource: null,
       completed: [],
-      total: connected.length,
+      total: backendSources.length,
       error: null,
     });
     setSyncingIds(new Set(connected.map((app) => app.id)));
 
-    const completedNames = new Set<string>();
+    const completed: string[] = [];
 
     try {
-      if (memberSources.length > 0) {
+      for (const app of backendSources) {
         setSyncProgress((prev) => ({
           ...prev,
-          currentSource: "Member roster",
+          currentSource: app.name,
         }));
-
-        const result = await syncMemberRoster(memberSources, company, config);
-
-        if (result.source_errors?.length) {
-          setSyncProgress((prev) => ({
-            ...prev,
-            error: result.source_errors!.join(" "),
-          }));
-        }
-
-        for (const source of result.sources) {
-          const app = INTEGRATION_CATALOG.find((entry) => entry.id === source);
-          if (app) completedNames.add(app.name);
-        }
-
+        await saveAndSyncIntegration(app.id, config);
+        completed.push(app.name);
         setSyncProgress((prev) => ({
           ...prev,
-          completed: [...completedNames],
-        }));
-      }
-
-      if (backendSources.length > 0) {
-        setSyncProgress((prev) => ({
-          ...prev,
-          currentSource: "GitHub & Jira",
-        }));
-
-        if (backendSources.length === 2) {
-          const result = await syncAllIntegrations();
-          for (const item of result.results) {
-            const app = INTEGRATION_CATALOG.find(
-              (entry) => entry.id === item.source,
-            );
-            if (app) completedNames.add(app.name);
-          }
-        } else {
-          const source = backendSources[0]!.id as "github" | "jira";
-          await syncIntegrationSource(source);
-          completedNames.add(backendSources[0]!.name);
-        }
-
-        setSyncProgress((prev) => ({
-          ...prev,
-          completed: [...completedNames],
+          completed: [...completed],
         }));
       }
 
@@ -359,6 +316,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       setSyncProgress((prev) => ({
         ...prev,
         error: err instanceof Error ? err.message : "Global sync failed",
+        completed,
       }));
     } finally {
       setSyncingIds(new Set());
@@ -366,6 +324,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
         ...prev,
         active: false,
         currentSource: null,
+        completed,
       }));
     }
   }, [activeTenant?.companyName, config, refreshOperationalState, session?.company]);

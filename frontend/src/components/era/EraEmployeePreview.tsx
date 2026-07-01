@@ -8,6 +8,7 @@ import { dimensionValue } from "./era-utils";
 
 interface EraEmployeePreviewProps {
   employee: EraEmployeeMetrics | null;
+  onOpenDetail?: () => void;
 }
 
 function defaultDimensions(employee: EraEmployeeMetrics) {
@@ -20,7 +21,10 @@ function defaultDimensions(employee: EraEmployeeMetrics) {
   };
 }
 
-export function EraEmployeePreview({ employee }: EraEmployeePreviewProps) {
+export function EraEmployeePreview({
+  employee,
+  onOpenDetail,
+}: EraEmployeePreviewProps) {
   if (!employee) {
     return (
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
@@ -88,8 +92,9 @@ export function EraEmployeePreview({ employee }: EraEmployeePreviewProps) {
 
       <button
         type="button"
-        className="mt-4 text-xs font-medium text-violet-300 hover:text-violet-200"
-        title="Full profile drawer ships in Step 09"
+        onClick={onOpenDetail}
+        disabled={!onOpenDetail}
+        className="mt-4 text-xs font-medium text-violet-300 hover:text-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
       >
         View full profile →
       </button>

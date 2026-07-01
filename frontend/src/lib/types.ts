@@ -338,6 +338,42 @@ export interface KraBackupAssignmentResponse {
   is_spof_resolved: boolean;
 }
 
+export type FileRiskQuadrant =
+  | "critical"
+  | "stable_niche"
+  | "active_shared"
+  | "healthy";
+
+export interface FileRiskItem {
+  component_id: string;
+  component_name: string;
+  repo_path: string;
+  file_path: string;
+  churn_score: number;
+  contributor_count: number;
+  bus_factor: number;
+  quadrant: FileRiskQuadrant;
+  primary_owner_employee_id?: string | null;
+  primary_owner_name?: string | null;
+  primary_owner_doa_pct?: number | null;
+  github_url?: string | null;
+  computed_at: string;
+}
+
+export interface KraFileRiskResponse {
+  component_id: string | null;
+  component_name: string | null;
+  files: FileRiskItem[];
+  quadrant_counts: Record<string, number>;
+  cross_training_priority: FileRiskItem[];
+}
+
+export interface EraHotspotsResponse {
+  employee_id: string;
+  critical_count: number;
+  files: FileRiskItem[];
+}
+
 export type IncidentStatus =
   | "Open"
   | "Investigating"

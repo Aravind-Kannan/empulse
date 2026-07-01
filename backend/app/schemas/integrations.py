@@ -38,6 +38,8 @@ class SlackConfigRequest(BaseModel):
     workspace_url: str = ""
     bot_token: str = ""
     channel_ids: str = ""
+    incident_channel_ids: str = ""
+    on_call_channel_ids: str = ""
     validated: bool = False
     previously_connected: bool = False
 
@@ -53,6 +55,8 @@ class StoredSlackConfig(BaseModel):
     workspace_url: str = ""
     bot_token: str = ""
     channel_ids: str = ""
+    incident_channel_ids: str = ""
+    on_call_channel_ids: str = ""
     validated: bool = False
     previously_connected: bool = False
 

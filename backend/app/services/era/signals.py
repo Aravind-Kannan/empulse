@@ -39,6 +39,9 @@ class EmployeeSignals:
     max_criticality_multiplier: float = 1.0
     identity_coverage_github: str = "missing"
     github_connected: bool = False
+    notion_connected: bool = False
+    slack_connected: bool = False
+    incident_escalation_threads: int = 0
     uses_doa_ownership: bool = False
     uses_review_network: bool = False
     component_names: list[str] = field(default_factory=list)

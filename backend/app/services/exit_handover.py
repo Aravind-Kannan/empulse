@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.operational import Assignment, Employee
 from app.schemas.exit import EmployeeOption, HandoverResponse
 from app.schemas.org import ACME_ORG_CHART
-from app.services.era_analytics import _undocumented_solved_incidents
+from app.services.era.signals_builder import _undocumented_solved_incidents
 from app.services.role_utils import is_leadership_role
 
 

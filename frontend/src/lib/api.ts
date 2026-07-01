@@ -3,6 +3,7 @@ import type {
   EmployeeOption,
   EraAnalyticsResponse,
   EraEmployeeDetailResponse,
+  EraHotspotsResponse,
   EraReviewNetworkResponse,
   EraTeamRiskyChangesResponse,
   GlobalSyncResult,
@@ -13,6 +14,7 @@ import type {
   InvestigationDiagnostics,
   KraAnalyticsResponse,
   KraBackupAssignmentResponse,
+  KraFileRiskResponse,
   OrgChartIngestResponse,
   OrgChartPayload,
   IngestJobAcceptedResponse,
@@ -214,6 +216,35 @@ export async function fetchEraMetrics(): Promise<EraAnalyticsResponse> {
     throw new Error(`Failed to load ERA metrics (${response.status})`);
   }
 
+  return response.json();
+}
+
+export async function fetchEraEmployeeHotspots(
+  employeeId: string,
+): Promise<EraHotspotsResponse> {
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/era/${encodeURIComponent(employeeId)}/hotspots`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load ERA hotspots (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchKraFileRisk(
+  componentId?: string,
+): Promise<KraFileRiskResponse> {
+  const params = new URLSearchParams();
+  if (componentId) params.set("component_id", componentId);
+  const query = params.toString();
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/kra/file-risk${query ? `?${query}` : ""}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load file risk matrix (${response.status})`);
+  }
   return response.json();
 }
 
@@ -634,7 +665,7 @@ export async function saveJiraIntegrationConfig(
 }
 
 export async function syncIntegrationSource(
-  source: "github" | "jira",
+  source: "github" | "jira" | "notion" | "slack",
 ): Promise<IntegrationSyncResult> {
   const response = await apiFetch(`${API_BASE}/api/integrations/sync/${source}`, {
     method: "POST",
@@ -666,6 +697,14 @@ export async function saveAndSyncIntegration(
   if (id === "jira") {
     await connectJiraIntegration(config.jira);
     return syncIntegrationSource("jira");
+  }
+  if (id === "notion") {
+    await saveNotionIntegrationConfig(config.notion);
+    return syncIntegrationSource("notion");
+  }
+  if (id === "slack") {
+    await saveSlackIntegrationConfig(config.slack);
+    return syncIntegrationSource("slack");
   }
   return null;
 }

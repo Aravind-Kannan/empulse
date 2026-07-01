@@ -7,6 +7,7 @@ from app.schemas.era import (
     EraReviewNetworkResponse,
     EraTeamRiskyChangesResponse,
 )
+from app.schemas.file_risk import EraHotspotsResponse, KraFileRiskResponse
 from app.schemas.kra import (
     KraAnalyticsResponse,
     KraBackupAssignmentRequest,
@@ -18,6 +19,7 @@ from app.services.era_analytics import (
     get_era_review_network,
     get_era_team_risky_changes,
 )
+from app.services.github_file_risk import get_employee_hotspots, get_kra_file_risk
 from app.services.kra_analytics import (
     assign_backup_engineer,
     get_kra_graph,
@@ -55,6 +57,24 @@ def era_team_risky_changes(
     since: str = Query(default="90d"),
 ) -> EraTeamRiskyChangesResponse:
     return get_era_team_risky_changes(db, tenant, since=since)
+
+
+@router.get("/era/{employee_id}/hotspots", response_model=EraHotspotsResponse)
+def era_employee_hotspots(
+    employee_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EraHotspotsResponse:
+    return EraHotspotsResponse(**get_employee_hotspots(db, tenant.id, employee_id))
+
+
+@router.get("/kra/file-risk", response_model=KraFileRiskResponse)
+def kra_file_risk(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+    component_id: str | None = Query(default=None),
+) -> KraFileRiskResponse:
+    return KraFileRiskResponse(**get_kra_file_risk(db, tenant.id, component_id=component_id))
 
 
 @router.get("/era/{employee_id}", response_model=EraEmployeeDetailResponse)

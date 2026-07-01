@@ -29,6 +29,14 @@ _github_activities: list[GitHubPullRequestActivity] = []
 _review_network = None
 _jira_synced = False
 _github_synced = False
+_notion_synced = False
+_notion_component_sources: dict[str, list[str]] = {}
+_notion_employee_signals: dict[str, object] = {}
+_notion_expertise_warnings: list[dict] = []
+_slack_synced = False
+_slack_employee_signals: dict[str, object] = {}
+_slack_escalation_warnings: list[dict] = []
+_slack_threads_cache: list = []
 _sync_timestamps: dict[str, str] = {}
 
 HIGH_PRIORITIES = {"High", "Critical"}
@@ -455,6 +463,23 @@ def apply_github_telemetry(
     _employee_max_doa_pct.update(doa_result.employee_max_doa_pct)
     _doa_decay_evidence = list(doa_result.decay_evidence)
 
+    from app.services.github_file_risk import persist_file_risk_snapshots
+    from app.services.integration_config_store import get_github_config
+
+    github_config = get_github_config(db, tenant_id)
+    repo_path = ""
+    if github_config and github_config.repository_url:
+        from app.services.github_client import parse_repository_url
+
+        owner, repo = parse_repository_url(github_config.repository_url)
+        repo_path = f"{owner}/{repo}"
+    persist_file_risk_snapshots(
+        db,
+        tenant_id,
+        activities,
+        repo_path=repo_path,
+    )
+
     ownership, spof_components, employee_context = _compute_ownership_from_activities(
         db,
         tenant_id,
@@ -604,10 +629,137 @@ def has_review_network() -> bool:
     return _review_network is not None
 
 
+def has_notion_sync() -> bool:
+    return _notion_synced
+
+
+def get_notion_component_sources(component_id: str) -> list[str]:
+    return list(_notion_component_sources.get(component_id, []))
+
+
+def get_notion_employee_signals(employee_id: str):
+    return _notion_employee_signals.get(employee_id)
+
+
+def get_notion_expertise_warnings() -> list[dict]:
+    return list(_notion_expertise_warnings)
+
+
+def _github_active_components() -> set[str]:
+    return {component_id for component_id, rows in _github_ownership.items() if rows}
+
+
+def apply_notion_telemetry(
+    db: Session,
+    tenant_id: uuid.UUID,
+    snapshot,
+) -> dict[str, object]:
+    global _notion_synced, _notion_component_sources, _notion_employee_signals
+    global _notion_expertise_warnings
+
+    from app.services.notion_telemetry import persist_notion_snapshots
+
+    persist_notion_snapshots(db, tenant_id, snapshot)
+    _notion_component_sources.clear()
+    _notion_component_sources.update(snapshot.component_sources)
+    _notion_employee_signals.clear()
+    _notion_employee_signals.update(snapshot.employee_signals)
+    _notion_expertise_warnings.clear()
+    _notion_expertise_warnings.extend(snapshot.expertise_sole_owner_warnings)
+    _notion_synced = True
+    return {
+        "docs_indexed": len(snapshot.docs),
+        "components_with_docs": len(snapshot.component_sources),
+        "employees_tracked": len(snapshot.employee_signals),
+    }
+
+
+def hydrate_notion_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
+    global _notion_synced, _notion_component_sources, _notion_employee_signals
+    global _notion_expertise_warnings
+
+    if _notion_synced:
+        return True
+
+    from app.models.operational import NotionDocSnapshot
+    from app.services.notion_telemetry import compute_notion_telemetry
+    from app.services.notion_types import NotionDocRecord
+
+    rows = (
+        db.query(NotionDocSnapshot)
+        .filter(NotionDocSnapshot.tenant_id == tenant_id)
+        .all()
+    )
+    if not rows:
+        return False
+
+    docs = [
+        NotionDocRecord(
+            page_id=row.page_id,
+            title=row.title,
+            page_url=row.page_url,
+            last_edited_at=row.last_edited_at or datetime.now(UTC),
+            component_id=row.component_id,
+            owner_employee_id=row.owner_employee_id,
+            page_kind=row.page_kind,
+            is_archived=row.is_archived,
+            last_verified_at=row.last_verified_at,
+            expertise_tags=list(row.expertise_tags or []),
+        )
+        for row in rows
+    ]
+    snapshot = compute_notion_telemetry(
+        db,
+        tenant_id,
+        docs,
+        components_with_github_activity=_github_active_components(),
+    )
+    _notion_component_sources.clear()
+    _notion_component_sources.update(snapshot.component_sources)
+    _notion_employee_signals.clear()
+    _notion_employee_signals.update(snapshot.employee_signals)
+    _notion_expertise_warnings.clear()
+    _notion_expertise_warnings.extend(snapshot.expertise_sole_owner_warnings)
+    _notion_synced = True
+    return True
+
+
+def has_slack_sync() -> bool:
+    return _slack_synced
+
+
+def get_slack_employee_signals(employee_id: str):
+    return _slack_employee_signals.get(employee_id)
+
+
+def get_slack_escalation_warnings() -> list[dict]:
+    return list(_slack_escalation_warnings)
+
+
+def apply_slack_telemetry(snapshot) -> dict[str, object]:
+    global _slack_synced, _slack_employee_signals, _slack_escalation_warnings
+    global _slack_threads_cache
+
+    _slack_employee_signals.clear()
+    _slack_employee_signals.update(snapshot.employee_signals)
+    _slack_escalation_warnings.clear()
+    _slack_escalation_warnings.extend(snapshot.escalation_warnings)
+    _slack_threads_cache.clear()
+    _slack_threads_cache.extend(snapshot.threads)
+    _slack_synced = True
+    return {
+        "threads_indexed": len(snapshot.threads),
+        "employees_tracked": len(snapshot.employee_signals),
+        "escalation_warnings": len(snapshot.escalation_warnings),
+    }
+
+
 def get_telemetry_snapshot() -> dict[str, object]:
     return {
         "jira_synced": _jira_synced,
         "github_synced": _github_synced,
+        "notion_synced": _notion_synced,
+        "slack_synced": _slack_synced,
         "doa_available": _doa_available,
         "jira_backlog_by_employee": dict(_jira_backlog_by_employee),
         "jira_employee_signals": {
@@ -627,7 +779,9 @@ def get_telemetry_snapshot() -> dict[str, object]:
 
 def reset_telemetry_for_tests() -> None:
     """Clear in-memory telemetry state (tests only)."""
-    global _jira_synced, _github_synced, _doa_available, _review_network
+    global _jira_synced, _github_synced, _notion_synced, _slack_synced, _doa_available, _review_network
+    global _notion_component_sources, _notion_employee_signals, _notion_expertise_warnings
+    global _slack_employee_signals, _slack_escalation_warnings, _slack_threads_cache
     _jira_backlog_by_employee.clear()
     _jira_employee_signals.clear()
     _jira_issues_cache.clear()
@@ -643,4 +797,12 @@ def reset_telemetry_for_tests() -> None:
     _review_network = None
     _jira_synced = False
     _github_synced = False
+    _notion_synced = False
+    _notion_component_sources.clear()
+    _notion_employee_signals.clear()
+    _notion_expertise_warnings.clear()
+    _slack_synced = False
+    _slack_employee_signals.clear()
+    _slack_escalation_warnings.clear()
+    _slack_threads_cache.clear()
     _doa_available = False
