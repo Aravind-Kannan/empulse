@@ -6,6 +6,7 @@ from collections import defaultdict
 from urllib.parse import urlparse
 
 import requests
+from sqlalchemy.orm import Session
 
 from app.services.notion_client import fetch_notion_member_records
 from app.schemas.employee_master import (
@@ -16,6 +17,38 @@ from app.schemas.employee_master import (
 )
 from app.services.employee_ids import employee_id_from_email
 from app.services.integration_sync import get_github_config, get_jira_config
+
+
+def enrich_jira_credentials_from_db(
+    credentials: FetchUsersRequest,
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> FetchUsersRequest:
+    """Fill missing Jira fields from the tenant's saved PostgreSQL integration."""
+    if "jira" not in credentials.sources:
+        return credentials
+
+    from app.services.credential_crypto import decrypt_secret
+    from app.services.jira_service import get_jira_integration
+
+    integration = get_jira_integration(db, tenant_id)
+    if not integration:
+        return credentials
+
+    updates: dict[str, str] = {}
+    if not (credentials.jira_site_url or "").strip():
+        updates["jira_site_url"] = integration.jira_domain
+    if not (credentials.jira_auth_email or "").strip():
+        updates["jira_auth_email"] = integration.auth_email
+    if not (credentials.jira_api_token or "").strip():
+        updates["jira_api_token"] = decrypt_secret(integration.encrypted_api_token)
+    if not (credentials.jira_project_keys or "").strip() and integration.project_keys:
+        updates["jira_project_keys"] = integration.project_keys
+
+    if updates:
+        return credentials.model_copy(update=updates)
+    return credentials
+
 
 SOURCE_PRIORITY = ("notion", "slack", "jira", "github")
 MANAGER_FIELD_HINTS = ("manager", "reports to", "reporting", "reports_to", "lead")
@@ -226,6 +259,321 @@ def _fetch_slack_users_fallback() -> list[MasterDataRecord]:
     ]
 
 
+JIRA_APP_ACCOUNT_TYPES = frozenset({"app"})
+JIRA_PERSON_ACCOUNT_TYPES = frozenset({"atlassian", "customer"})
+JIRA_NON_PERSON_NAME_HINTS = (
+    "automation for jira",
+    "jira spreadsheets",
+    "atlassian assist",
+    "jira service management",
+    "system user",
+    "add-on",
+    "addon",
+    "[bot]",
+)
+
+
+def _is_jira_person(user: dict) -> bool:
+    """Keep real people; drop Jira apps, automation actors, and service accounts."""
+    account_type = (user.get("accountType") or "atlassian").lower()
+    if account_type in JIRA_APP_ACCOUNT_TYPES:
+        return False
+    if account_type not in JIRA_PERSON_ACCOUNT_TYPES:
+        return False
+    if user.get("active") is False:
+        return False
+
+    name = (user.get("displayName") or user.get("name") or "").lower()
+    if any(hint in name for hint in JIRA_NON_PERSON_NAME_HINTS):
+        return False
+    if name.endswith(" bot") or name.startswith("bot "):
+        return False
+    return bool(name.strip())
+
+
+def _synthetic_jira_email(account_id: str, display_name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-") or "user"
+    short_id = re.sub(r"[^a-zA-Z0-9]", "", account_id)[:12] or "id"
+    return f"{slug}+{short_id}@jira.import"
+
+
+def _resolve_jira_user_email(
+    base: str,
+    auth: tuple[str, str],
+    headers: dict[str, str],
+    account_id: str,
+) -> str | None:
+    try:
+        response = requests.get(
+            f"{base}/rest/api/3/user/email",
+            params={"accountId": account_id},
+            auth=auth,
+            headers=headers,
+            timeout=15,
+        )
+        if response.status_code == 200:
+            email = (response.json().get("email") or "").strip()
+            if email and "@" in email:
+                return email
+    except requests.RequestException:
+        pass
+    return None
+
+
+def _fetch_jira_project_keys(
+    base: str,
+    auth: tuple[str, str],
+    headers: dict[str, str],
+) -> list[str]:
+    """Discover accessible project keys when none are configured."""
+    response = requests.get(
+        f"{base}/rest/api/3/project/search",
+        params={"maxResults": 50, "orderBy": "key"},
+        auth=auth,
+        headers=headers,
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        return []
+    values = response.json().get("values", [])
+    return [str(project["key"]).upper() for project in values if project.get("key")]
+
+
+def _jira_search_issues(
+    base: str,
+    auth: tuple[str, str],
+    headers: dict[str, str],
+    jql: str,
+    *,
+    fields: list[str] | None = None,
+    max_issues: int = 100,
+) -> list[dict]:
+    """
+    Search issues using Jira's enhanced JQL API.
+
+    Legacy GET /rest/api/3/search is deprecated/removed on many Cloud sites.
+    """
+    issue_fields = fields or ["assignee", "reporter"]
+    issues: list[dict] = []
+    next_page_token: str | None = None
+    errors: list[str] = []
+
+    while len(issues) < max_issues:
+        payload: dict[str, object] = {
+            "jql": jql,
+            "maxResults": min(50, max_issues - len(issues)),
+            "fields": issue_fields,
+        }
+        if next_page_token:
+            payload["nextPageToken"] = next_page_token
+
+        response = requests.post(
+            f"{base}/rest/api/3/search/jql",
+            json=payload,
+            auth=auth,
+            headers={**headers, "Content-Type": "application/json"},
+            timeout=25,
+        )
+        if response.status_code == 401:
+            raise ValueError(
+                "Jira rejected these credentials (401). Re-verify your account "
+                "email and API token."
+            )
+        if response.status_code >= 400:
+            errors.append(f"search/jql {response.status_code}: {response.text[:180]}")
+            break
+
+        body = response.json()
+        batch = body.get("issues", [])
+        if not isinstance(batch, list):
+            break
+        issues.extend(batch)
+        next_page_token = body.get("nextPageToken")
+        if not next_page_token or not batch:
+            break
+
+    if issues:
+        return issues
+
+    # Last resort for tenants that still expose the legacy endpoint briefly
+    legacy = requests.get(
+        f"{base}/rest/api/3/search",
+        params={
+            "jql": jql,
+            "maxResults": max_issues,
+            "fields": ",".join(issue_fields),
+        },
+        auth=auth,
+        headers=headers,
+        timeout=25,
+    )
+    if legacy.status_code == 401:
+        raise ValueError(
+            "Jira rejected these credentials (401). Re-verify your account "
+            "email and API token."
+        )
+    if legacy.status_code < 400:
+        return legacy.json().get("issues", [])
+
+    detail = errors[0] if errors else f"legacy search {legacy.status_code}"
+    raise ValueError(f"Jira issue search failed: {detail}")
+
+
+def _fetch_jira_issue_people(
+    base: str,
+    auth: tuple[str, str],
+    headers: dict[str, str],
+    project_keys: list[str],
+) -> list[dict]:
+    """Collect unique human assignees/reporters from issues in projects."""
+    if project_keys:
+        quoted = ", ".join(project_keys)
+        jql = f"project in ({quoted}) AND (assignee IS NOT EMPTY OR reporter IS NOT EMPTY)"
+    else:
+        jql = "(assignee IS NOT EMPTY OR reporter IS NOT EMPTY) ORDER BY updated DESC"
+
+    issues = _jira_search_issues(base, auth, headers, jql)
+
+    people: dict[str, dict] = {}
+    for issue in issues:
+        fields = issue.get("fields") or {}
+        for field_name in ("assignee", "reporter"):
+            person = fields.get(field_name)
+            if not person or not _is_jira_person(person):
+                continue
+            account_id = person.get("accountId")
+            if account_id and account_id not in people:
+                people[account_id] = person
+    return list(people.values())
+
+
+def _fetch_jira_assignable_humans(
+    base: str,
+    auth: tuple[str, str],
+    headers: dict[str, str],
+    project_keys: list[str],
+) -> list[dict]:
+    """Fallback: humans who can be assigned in configured projects."""
+    people: dict[str, dict] = {}
+    for key in project_keys:
+        response = requests.get(
+            f"{base}/rest/api/3/user/assignable/multiProjectSearch",
+            params={"projectKeys": key, "maxResults": 100},
+            auth=auth,
+            headers=headers,
+            timeout=20,
+        )
+        if response.status_code == 401:
+            raise ValueError(
+                "Jira rejected these credentials (401). Re-verify your account "
+                "email and API token."
+            )
+        if response.status_code >= 400:
+            continue
+        payload = response.json()
+        if not isinstance(payload, list):
+            continue
+        for user in payload:
+            if not _is_jira_person(user):
+                continue
+            account_id = user.get("accountId")
+            if account_id and account_id not in people:
+                people[account_id] = user
+    return list(people.values())
+
+
+def _fetch_jira_issue_assignees(
+    base: str,
+    auth: tuple[str, str],
+    headers: dict[str, str],
+    project_keys: list[str],
+) -> list[dict]:
+    """Backward-compatible alias for issue people fetch."""
+    return _fetch_jira_issue_people(base, auth, headers, project_keys)
+
+
+def _fetch_jira_users_live(
+    site_url: str,
+    auth_email: str,
+    api_token: str,
+    project_keys: str | None = None,
+) -> list[MasterDataRecord]:
+    """
+    Import people assigned to Jira issues in configured projects.
+
+    Only human assignees are included (accountType atlassian/customer).
+    Apps like Automation for Jira and Jira Spreadsheets are excluded.
+    """
+    base = site_url.rstrip("/")
+    auth = (auth_email.strip(), api_token.strip())
+    headers = {"Accept": "application/json"}
+    records: list[MasterDataRecord] = []
+    seen: set[str] = set()
+
+    keys = [
+        key.strip().upper()
+        for key in (project_keys or "").split(",")
+        if key.strip()
+    ]
+    if not keys:
+        keys = _fetch_jira_project_keys(base, auth, headers)
+
+    def _append_user(user: dict, *, default_title: str = "Jira Assignee") -> None:
+        if not _is_jira_person(user):
+            return
+        account_id = user.get("accountId") or user.get("account_id")
+        if not account_id or account_id in seen:
+            return
+
+        display = (user.get("displayName") or user.get("name") or "").strip()
+        email = (user.get("emailAddress") or user.get("email") or "").strip()
+        if not email or "@" not in email:
+            email = _resolve_jira_user_email(base, auth, headers, str(account_id))
+        if not email:
+            email = _synthetic_jira_email(str(account_id), display or str(account_id))
+
+        seen.add(str(account_id))
+        records.append(
+            MasterDataRecord(
+                source="jira",
+                external_id=str(account_id),
+                name=display or email.split("@")[0],
+                email=email,
+                title=default_title,
+            )
+        )
+
+    search_error: str | None = None
+
+    # Issue assignees/reporters — people on real tickets in your projects
+    try:
+        for person in _fetch_jira_issue_people(base, auth, headers, keys):
+            _append_user(person)
+    except (ValueError, requests.RequestException) as exc:
+        search_error = str(exc)
+
+    # Fallback: assignable humans in project(s), still filtered (no apps)
+    if not records and keys:
+        try:
+            for person in _fetch_jira_assignable_humans(base, auth, headers, keys):
+                _append_user(person, default_title="Jira Team Member")
+        except (ValueError, requests.RequestException) as exc:
+            if not search_error:
+                search_error = str(exc)
+
+    if not records:
+        scope = f"project(s) {', '.join(keys)}" if keys else "your site"
+        hint = (
+            f" {search_error}" if search_error else ""
+        )
+        raise ValueError(
+            f"Jira returned no human assignees for {scope}. "
+            "Ensure issues have real people assigned (not automation apps)."
+            f"{hint}"
+        )
+    return records
+
+
 def _fetch_jira_users_fallback() -> list[MasterDataRecord]:
     rows = [
         ("jira-alice", "Alice Chen", "alice.chen@acme.com", "Engineering Manager", None),
@@ -298,8 +646,8 @@ def _source_credentials_provided(source: str, creds: FetchUsersRequest) -> bool:
         return bool(repo_url and token)
     if source == "jira":
         return bool((creds.jira_site_url or "").strip()) and bool(
-            (creds.jira_api_token or "").strip()
-        )
+            (creds.jira_auth_email or "").strip()
+        ) and bool((creds.jira_api_token or "").strip())
     return False
 
 
@@ -345,8 +693,24 @@ def _fetch_source_records(
         return _fetch_github_users_fallback_demo()
 
     if source == "jira":
+        site = (creds.jira_site_url or "").strip()
+        auth_email = (creds.jira_auth_email or "").strip()
+        token = (creds.jira_api_token or "").strip()
+        project_keys = creds.jira_project_keys or ""
+        if site and auth_email and token:
+            try:
+                return _fetch_jira_users_live(
+                    site,
+                    auth_email,
+                    token,
+                    project_keys=project_keys or None,
+                )
+            except (ValueError, requests.RequestException) as exc:
+                raise ValueError(f"Jira member import failed: {exc}") from exc
         if live_requested:
-            return []
+            raise ValueError(
+                "Jira site URL, account email, and API token are required."
+            )
         return _fetch_jira_users_fallback()
 
     if source == "notion":

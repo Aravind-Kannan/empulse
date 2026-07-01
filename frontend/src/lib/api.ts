@@ -406,21 +406,47 @@ export async function saveGitHubIntegrationConfig(
   }
 }
 
-export async function saveJiraIntegrationConfig(
+export async function validateJiraIntegration(
   config: IntegrationConfigMap["jira"],
-): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/api/integrations/jira/config`, {
+): Promise<string> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/jira/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      site_url: config.siteUrl,
-      project_keys: config.projectKeys,
+      jira_domain: config.siteUrl,
+      auth_email: config.authEmail,
       api_token: config.apiToken,
     }),
   });
   if (!response.ok) {
-    throw new Error(await parseApiError(response, "Jira config save failed"));
+    throw new Error(await parseApiError(response, "Jira credential validation failed"));
   }
+  const data = (await response.json()) as { message: string };
+  return data.message;
+}
+
+export async function connectJiraIntegration(
+  config: IntegrationConfigMap["jira"],
+): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/jira/connect`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jira_domain: config.siteUrl,
+      auth_email: config.authEmail,
+      api_token: config.apiToken,
+      project_keys: config.projectKeys,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Jira connect failed"));
+  }
+}
+
+export async function saveJiraIntegrationConfig(
+  config: IntegrationConfigMap["jira"],
+): Promise<void> {
+  await connectJiraIntegration(config);
 }
 
 export async function syncIntegrationSource(
@@ -454,7 +480,7 @@ export async function saveAndSyncIntegration(
     return syncIntegrationSource("github");
   }
   if (id === "jira") {
-    await saveJiraIntegrationConfig(config.jira);
+    await connectJiraIntegration(config.jira);
     return syncIntegrationSource("jira");
   }
   return null;
@@ -517,7 +543,9 @@ export async function fetchEmployeeMasterData(
       github_personal_access_token:
         integrationConfig?.github.personalAccessToken ?? null,
       jira_site_url: integrationConfig?.jira.siteUrl ?? null,
+      jira_auth_email: integrationConfig?.jira.authEmail ?? null,
       jira_api_token: integrationConfig?.jira.apiToken ?? null,
+      jira_project_keys: integrationConfig?.jira.projectKeys ?? null,
     }),
     cache: "no-store",
   });

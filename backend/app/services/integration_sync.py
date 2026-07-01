@@ -64,7 +64,16 @@ def get_github_config() -> GitHubConfigRequest | None:
     return config if isinstance(config, GitHubConfigRequest) else None
 
 
-def get_jira_config() -> JiraConfigRequest | None:
+def get_jira_config(
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
+) -> JiraConfigRequest | None:
+    if db is not None and tenant_id is not None:
+        from app.services.jira_service import get_jira_config_for_tenant
+
+        db_config = get_jira_config_for_tenant(db, tenant_id)
+        if db_config:
+            return db_config
     config = _integration_configs.get("jira")
     return config if isinstance(config, JiraConfigRequest) else None
 
@@ -188,6 +197,8 @@ def analyze_jira_payload(
     config: JiraConfigRequest,
     employee_nodes: dict[str, GraphEmployee],
     component_nodes: dict[str, GraphComponent],
+    *,
+    issues: list[dict] | None = None,
 ) -> tuple[str, list[GraphJiraTicket], int]:
     """Mock document analyzer for Jira tickets, priorities, and assignments."""
     project_filter = {
@@ -195,15 +206,16 @@ def analyze_jira_payload(
         for key in config.project_keys.split(",")
         if key.strip()
     }
+    source_issues = issues if issues is not None else MOCK_JIRA_ISSUES
     narrative_lines = [
         f"Jira site sync: {config.site_url}",
         f"Project keys: {config.project_keys or 'all'}",
-        "Issue tracker feed with bugs, tasks, priorities, and assignees.",
+        "Issue tracker feed with bugs, tasks, epics, priorities, and assignees.",
     ]
     data_points: list[GraphJiraTicket] = []
     edge_count = 0
 
-    for issue in MOCK_JIRA_ISSUES:
+    for issue in source_issues:
         if project_filter and issue["project_key"] not in project_filter:
             continue
 
@@ -239,10 +251,12 @@ def analyze_jira_payload(
         data_points.append(ticket_node)
         assignee_name = assignee.name if assignee else "Unassigned"
         component_name = component.name if component else issue["component_id"]
+        description = issue.get("description", "")
         narrative_lines.append(
             f"{issue['ticket_id']} ({issue['issue_type']}, {issue['priority']}, "
             f"{issue['status']}) assigned to {assignee_name}, "
             f"blocking component {component_name}."
+            + (f" {description}" if description else "")
         )
 
     return "\n".join(narrative_lines), data_points, edge_count
@@ -273,17 +287,16 @@ async def process_external_app_sync(
             "via contributedTo and modifies relationships."
         )
     elif normalized == "jira":
-        config = get_jira_config()
+        config = get_jira_config(db, tenant_id)
         if not config:
             raise ValueError("Jira integration is not configured.")
-        narrative, data_points, edge_count = analyze_jira_payload(
-            config, employee_nodes, component_nodes
-        )
-        custom_prompt = (
-            "Extract Jira issue metadata including ticket IDs, issue types, priorities, "
-            "status indicators, and link assignees and blocked components via "
-            "assignedTo and blocksComponent relationships."
-        )
+        from app.services.jira_service import sync_jira_to_cognee
+
+        result = await sync_jira_to_cognee(tenant_id, db)
+        return {
+            **result,
+            "telemetry": get_telemetry_snapshot(),
+        }
     else:
         raise ValueError(f"Unsupported integration source '{source}'.")
 
@@ -300,8 +313,6 @@ async def process_external_app_sync(
     telemetry: dict[str, object] = {}
     if normalized == "github":
         telemetry["github_ownership"] = apply_github_telemetry(db, tenant_id)
-    elif normalized == "jira":
-        telemetry["jira_backlog"] = apply_jira_telemetry(db, tenant_id)
 
     return {
         "source": normalized,
