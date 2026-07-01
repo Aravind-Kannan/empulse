@@ -55,6 +55,19 @@ export interface EmployeeMasterDataResponse {
   hierarchy_mode?: "flat" | "structured";
 }
 
+export interface MemberRosterSyncResult {
+  sources: string[];
+  employees_imported: number;
+  employees_added: number;
+  employees_updated: number;
+  employees_persisted: number;
+  hierarchy_mode: string;
+  cognee_dataset: string;
+  graph_nodes_created: number;
+  graph_edges_created: number;
+  source_errors?: string[];
+}
+
 export interface BulkCsvRow {
   id: string;
   name: string;

@@ -49,3 +49,16 @@ class GlobalSyncResponse(BaseModel):
     results: list[IntegrationSyncResponse]
     total_nodes_created: int
     total_edges_created: int
+
+
+class MemberRosterSyncResponse(BaseModel):
+    sources: list[str]
+    employees_imported: int
+    employees_added: int
+    employees_updated: int
+    employees_persisted: int
+    hierarchy_mode: str
+    cognee_dataset: str
+    graph_nodes_created: int
+    graph_edges_created: int
+    source_errors: list[str] = Field(default_factory=list)

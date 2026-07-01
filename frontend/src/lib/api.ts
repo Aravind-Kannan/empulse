@@ -20,6 +20,7 @@ import type {
   EmployeeIdentityMapping,
   IdentityProvider,
   EmployeeMasterDataResponse,
+  MemberRosterSyncResult,
   BulkCsvRow,
   BulkUploadResponse,
   EmployeeUpdateResponse,
@@ -551,6 +552,46 @@ export async function fetchEmployeeMasterData(
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Employee master data fetch failed"));
+  }
+  return response.json();
+}
+
+function memberSyncRequestBody(
+  sources: IntegrationId[],
+  company: string,
+  integrationConfig: IntegrationConfigMap,
+) {
+  return {
+    sources,
+    company,
+    flat_hierarchy: false,
+    slack_bot_token: integrationConfig.slack.botToken.trim() || null,
+    notion_integration_token: integrationConfig.notion.integrationToken.trim() || null,
+    notion_database_ids: integrationConfig.notion.databaseIds.trim() || null,
+    github_repository_url: integrationConfig.github.repositoryUrl.trim() || null,
+    github_personal_access_token:
+      integrationConfig.github.personalAccessToken.trim() || null,
+    jira_site_url: integrationConfig.jira.siteUrl.trim() || null,
+    jira_auth_email: integrationConfig.jira.authEmail.trim() || null,
+    jira_api_token: integrationConfig.jira.apiToken.trim() || null,
+    jira_project_keys: integrationConfig.jira.projectKeys.trim() || null,
+  };
+}
+
+export async function syncMemberRoster(
+  sources: IntegrationId[],
+  company: string,
+  integrationConfig: IntegrationConfigMap,
+): Promise<MemberRosterSyncResult> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/sync-members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(
+      memberSyncRequestBody(sources, company, integrationConfig),
+    ),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Member roster sync failed"));
   }
   return response.json();
 }

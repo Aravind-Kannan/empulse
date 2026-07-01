@@ -34,6 +34,7 @@ class EmployeeMasterDataResponse(BaseModel):
         default="flat",
         description="flat = all members at root; structured = reporting lines resolved",
     )
+    source_errors: list[str] = Field(default_factory=list)
 
 
 class FetchUsersRequest(BaseModel):

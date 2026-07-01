@@ -114,23 +114,56 @@ def _resolve_manager_email(
     return None
 
 
-def _fetch_slack_users_live(token: str) -> list[MasterDataRecord]:
-    response = requests.get(
-        "https://slack.com/api/users.list",
-        headers={"Authorization": f"Bearer {token.strip()}"},
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if not payload.get("ok"):
-        raise ValueError(
-            f"Slack users.list failed: {payload.get('error', 'unknown_error')}"
+def _format_slack_api_error(error: str) -> str:
+    if error == "missing_scope":
+        return (
+            "Slack bot token is missing required scopes. Add users:read and "
+            "users:read.email under OAuth & Permissions, reinstall the app to "
+            "your workspace, and copy a fresh xoxb- token."
         )
+    if error == "invalid_auth":
+        return (
+            "Slack rejected this token (invalid_auth). Reinstall the app to your "
+            "workspace and copy a fresh Bot User OAuth Token (xoxb-…)."
+        )
+    if error == "token_revoked":
+        return (
+            "Slack token was revoked. Reinstall the app and copy a fresh xoxb- token."
+        )
+    return f"Slack users.list failed: {error}"
+
+
+def _fetch_slack_users_live(token: str) -> list[MasterDataRecord]:
+    headers = {"Authorization": f"Bearer {token.strip()}"}
+    members: list[dict] = []
+    cursor: str | None = None
+
+    while True:
+        params: dict[str, str] = {"limit": "200"}
+        if cursor:
+            params["cursor"] = cursor
+        response = requests.get(
+            "https://slack.com/api/users.list",
+            headers=headers,
+            params=params,
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            raise ValueError(
+                _format_slack_api_error(payload.get("error", "unknown_error"))
+            )
+
+        members.extend(payload.get("members", []))
+        cursor = (payload.get("response_metadata") or {}).get("next_cursor")
+        if not cursor:
+            break
 
     slack_id_to_email: dict[str, str] = {}
     pending: list[tuple[dict, dict, str, str | None]] = []
 
-    for member in payload.get("members", []):
+    for member in members:
         if member.get("deleted") or member.get("is_bot"):
             continue
         profile = member.get("profile") or {}
@@ -166,6 +199,21 @@ def _fetch_slack_users_live(token: str) -> list[MasterDataRecord]:
                 manager_email=manager_email,
             )
         )
+
+    if not records:
+        human_members = [
+            member
+            for member in members
+            if not member.get("deleted") and not member.get("is_bot")
+        ]
+        if human_members:
+            raise ValueError(
+                "Slack returned workspace members but none have email addresses. "
+                "Add the users:read.email bot scope under OAuth & Permissions, "
+                "reinstall the app to your workspace, and try again."
+            )
+        raise ValueError("Slack returned no importable workspace members.")
+
     return records
 
 
@@ -824,6 +872,7 @@ def fetch_employee_master_data(
     credentials: FetchUsersRequest | None = None,
     flat_hierarchy: bool = False,
     tenant_id: uuid.UUID | None = None,
+    skip_failed_sources: bool = False,
 ) -> EmployeeMasterDataResponse:
     """
     Import workspace members from connected platforms.
@@ -839,10 +888,28 @@ def fetch_employee_master_data(
         )
 
     raw_records: list[MasterDataRecord] = []
+    sources_queried: list[str] = []
+    source_errors: list[str] = []
     for source in active_sources:
-        raw_records.extend(_fetch_source_records(source, credentials))
+        try:
+            records = _fetch_source_records(source, credentials)
+        except ValueError as exc:
+            if skip_failed_sources:
+                source_errors.append(f"{source}: {exc}")
+                continue
+            raise
+        if not records:
+            message = f"{source}: no importable members returned."
+            if skip_failed_sources:
+                source_errors.append(message)
+                continue
+            raise ValueError(message)
+        raw_records.extend(records)
+        sources_queried.append(source)
 
     if not raw_records:
+        if source_errors:
+            raise ValueError("; ".join(source_errors))
         raise ValueError(
             "No members imported from the selected sources. "
             "Verify integration permissions and try again."
@@ -863,8 +930,9 @@ def fetch_employee_master_data(
     return EmployeeMasterDataResponse(
         company=company,
         employees=employees,
-        sources_queried=active_sources,
+        sources_queried=sources_queried,
         roles_discovered=roles,
         records_merged=len(raw_records),
         hierarchy_mode=hierarchy_mode,
+        source_errors=source_errors,
     )

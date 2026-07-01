@@ -29,9 +29,9 @@ export function GlobalSyncBanner() {
             Trigger Global Graph Sync
           </h2>
           <p className="mt-1 max-w-xl text-sm text-zinc-400">
-            Ingest metadata from all connected sources into the Cognee knowledge
-            graph. {connectedCount} source{connectedCount === 1 ? "" : "s"}{" "}
-            ready.
+            Ingest metadata and member rosters from all connected sources into the
+            Cognee knowledge graph. {connectedCount} source
+            {connectedCount === 1 ? "" : "s"} ready.
           </p>
         </div>
 
@@ -85,6 +85,13 @@ export function GlobalSyncBanner() {
               const done = syncProgress.completed.includes(app.name);
               const active =
                 syncProgress.currentSource === app.name ||
+                (syncProgress.currentSource === "Member roster" &&
+                  (app.id === "slack" ||
+                    app.id === "notion" ||
+                    app.id === "github" ||
+                    app.id === "jira") &&
+                  syncProgress.active &&
+                  !done) ||
                 (syncProgress.currentSource === "GitHub & Jira" &&
                   (app.id === "github" || app.id === "jira") &&
                   syncProgress.active &&

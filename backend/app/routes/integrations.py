@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -9,9 +10,11 @@ from app.schemas.integrations import (
     IntegrationSyncResponse,
     IntegrationValidateResponse,
     JiraConfigRequest,
+    MemberRosterSyncResponse,
     NotionValidateRequest,
     SlackValidateRequest,
 )
+from app.services.member_roster_sync import sync_member_roster
 from app.services.integration_sync import (
     get_github_config,
     get_jira_config,
@@ -35,6 +38,7 @@ from app.services.integration_validate import (
 from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/github/config", response_model=IntegrationConfigResponse)
@@ -149,6 +153,40 @@ def fetch_users_post(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/sync-members", response_model=MemberRosterSyncResponse)
+async def sync_members(
+    payload: FetchUsersRequest,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> MemberRosterSyncResponse:
+    member_sources = [
+        source
+        for source in payload.sources
+        if source in ("slack", "jira", "notion", "github")
+    ]
+    if not member_sources:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one member source: slack, jira, notion, or github.",
+        )
+    try:
+        result = await sync_member_roster(
+            db,
+            tenant,
+            payload.model_copy(update={"sources": member_sources}),
+        )
+    except ValueError as exc:
+        logger.warning("sync-members rejected: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Member roster sync failed: {exc}",
+        ) from exc
+
+    return MemberRosterSyncResponse(**result)
 
 
 @router.post("/sync/{source}", response_model=IntegrationSyncResponse)

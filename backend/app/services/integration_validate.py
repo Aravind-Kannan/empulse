@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import requests
 
+from app.services.employee_master_fetch import _format_slack_api_error
 from app.services.notion_client import NOTION_VERSION, count_accessible_resources
 
 
@@ -79,4 +80,21 @@ def validate_slack_bot_token(token: str) -> str:
 
     team = payload.get("team") or "workspace"
     bot = payload.get("user") or "bot"
-    return f"Slack token valid — {bot} on {team}."
+
+    try:
+        users_response = requests.get(
+            "https://slack.com/api/users.list",
+            headers={"Authorization": f"Bearer {cleaned}"},
+            params={"limit": "1"},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise ValueError(f"Could not verify Slack member import scopes: {exc}") from exc
+
+    users_payload = users_response.json()
+    if not users_payload.get("ok"):
+        raise ValueError(
+            _format_slack_api_error(users_payload.get("error", "unknown_error"))
+        )
+
+    return f"Slack token valid — {bot} on {team}. Member import scopes verified."

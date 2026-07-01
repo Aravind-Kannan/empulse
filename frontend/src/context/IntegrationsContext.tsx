@@ -14,11 +14,13 @@ import {
   saveAndSyncIntegration,
   syncAllIntegrations,
   syncIntegrationSource,
+  syncMemberRoster,
 } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import {
   DEFAULT_INTEGRATION_CONFIG,
+  getConnectedMemberImportSources,
   INTEGRATION_CATALOG,
   isIntegrationConnected,
   isIntegrationDraft,
@@ -105,7 +107,7 @@ function deriveStatuses(
 }
 
 export function IntegrationsProvider({ children }: { children: ReactNode }) {
-  const { activeTenant } = useAuth();
+  const { activeTenant, session } = useAuth();
   const tenantId = activeTenant?.id ?? null;
   const { refreshOperationalState } = useWorkspace();
   const [config, setConfig] = useState<IntegrationConfigMap>(
@@ -236,12 +238,13 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     );
     if (connected.length === 0) return;
 
+    const memberSources = getConnectedMemberImportSources(config);
     const backendSources = connected.filter((app) =>
       BACKEND_SYNC_SOURCES.has(app.id),
     );
-    const localOnly = connected.filter(
-      (app) => !BACKEND_SYNC_SOURCES.has(app.id),
-    );
+
+    const company =
+      activeTenant?.companyName ?? session?.company ?? "My Company";
 
     setSyncProgress({
       active: true,
@@ -252,7 +255,35 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     });
     setSyncingIds(new Set(connected.map((app) => app.id)));
 
+    const completedNames = new Set<string>();
+
     try {
+      if (memberSources.length > 0) {
+        setSyncProgress((prev) => ({
+          ...prev,
+          currentSource: "Member roster",
+        }));
+
+        const result = await syncMemberRoster(memberSources, company, config);
+
+        if (result.source_errors?.length) {
+          setSyncProgress((prev) => ({
+            ...prev,
+            error: result.source_errors!.join(" "),
+          }));
+        }
+
+        for (const source of result.sources) {
+          const app = INTEGRATION_CATALOG.find((entry) => entry.id === source);
+          if (app) completedNames.add(app.name);
+        }
+
+        setSyncProgress((prev) => ({
+          ...prev,
+          completed: [...completedNames],
+        }));
+      }
+
       if (backendSources.length > 0) {
         setSyncProgress((prev) => ({
           ...prev,
@@ -261,35 +292,21 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
 
         if (backendSources.length === 2) {
           const result = await syncAllIntegrations();
-          setSyncProgress((prev) => ({
-            ...prev,
-            completed: result.results.map((item) => {
-              const app = INTEGRATION_CATALOG.find((entry) => entry.id === item.source);
-              return app?.name ?? item.source;
-            }),
-          }));
+          for (const item of result.results) {
+            const app = INTEGRATION_CATALOG.find(
+              (entry) => entry.id === item.source,
+            );
+            if (app) completedNames.add(app.name);
+          }
         } else {
           const source = backendSources[0]!.id as "github" | "jira";
           await syncIntegrationSource(source);
-          setSyncProgress((prev) => ({
-            ...prev,
-            completed: [
-              ...prev.completed,
-              backendSources[0]!.name,
-            ],
-          }));
+          completedNames.add(backendSources[0]!.name);
         }
-      }
 
-      for (const app of localOnly) {
         setSyncProgress((prev) => ({
           ...prev,
-          currentSource: app.name,
-        }));
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        setSyncProgress((prev) => ({
-          ...prev,
-          completed: [...prev.completed, app.name],
+          completed: [...completedNames],
         }));
       }
 
@@ -307,7 +324,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
         currentSource: null,
       }));
     }
-  }, [config, refreshOperationalState]);
+  }, [activeTenant?.companyName, config, refreshOperationalState, session?.company]);
 
   const value = useMemo(
     () => ({
