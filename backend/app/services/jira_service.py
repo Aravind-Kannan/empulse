@@ -12,7 +12,6 @@ from typing import Any
 
 import cognee
 import requests
-from cognee.tasks.storage import add_data_points
 from sqlalchemy.orm import Session
 
 from app.models.jira_integration import JiraIntegration
@@ -27,7 +26,11 @@ from app.schemas.jira import (
 from app.services.credential_crypto import encrypt_secret
 from app.services.integration_feeds import MOCK_JIRA_ISSUES
 from app.services.integration_telemetry import apply_jira_telemetry
-from app.services.tenant_cognee import tenant_add_and_cognify
+from app.services.tenant_cognee import (
+    tenant_add_and_cognify,
+    tenant_add_data_points,
+    tenant_cognee_context,
+)
 from app.tenancy import tenant_dataset_name
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -316,9 +319,10 @@ async def sync_jira_to_cognee(tenant_id: uuid.UUID, db: Session) -> dict[str, An
         _update_stage(state, "Vector Append", status="running", started_at=_iso_now())
         payload = "\n\n---\n\n".join(documents)
         dataset = tenant_dataset_name(tenant_id)
-        await cognee.add(payload, dataset_name=dataset)
+        async with tenant_cognee_context(tenant_id):
+            await cognee.add(payload, dataset_name=dataset)
         if data_points:
-            await add_data_points(data_points)
+            await tenant_add_data_points(tenant_id, data_points)
         append_ms = int((time.perf_counter() - t2) * 1000)
         state.documents_appended = len(documents)
         _update_stage(
