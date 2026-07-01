@@ -7,6 +7,7 @@ from app.models.operational import (
     EmployeeIdentity,
     IncidentRecord,
     RoleHistory,
+    UnmappedActivity,
 )
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -20,6 +21,7 @@ __all__ = [
     "Component",
     "Assignment",
     "EmployeeIdentity",
+    "UnmappedActivity",
     "RoleHistory",
     "IncidentRecord",
     "IngestJob",

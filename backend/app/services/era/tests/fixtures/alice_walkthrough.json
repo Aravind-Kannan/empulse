@@ -1,0 +1,20 @@
+{
+  "employee_id": "emp-alice-chen",
+  "name": "Alice Chen",
+  "role": "Principal Engineer",
+  "email": "alice.chen@acme.com",
+  "role_profile": "ic",
+  "tenure_months": 78,
+  "dimensions": {
+    "knowledge": 78,
+    "operational": 34,
+    "documentation": 65,
+    "structural": 35,
+    "burnout": 55
+  },
+  "expected": {
+    "risk_factor_score": 58.2,
+    "risk_level": "medium"
+  },
+  "notes": "Walkthrough from design-docs/era/employee-risk-assessment.md section 10"
+}

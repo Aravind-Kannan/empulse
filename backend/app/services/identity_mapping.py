@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
-from app.models.operational import Employee, EmployeeIdentity
+from app.models.operational import Employee, EmployeeIdentity, UnmappedActivity
 from app.schemas.identity import (
     EmployeeIdentityMapping,
     EmployeeIdentityRecord,
     EmployeeIdentityRow,
     IdentityReconciliationResponse,
     ProviderMember,
+)
+from app.services.unmapped_activity import (
+    get_total_unmapped_count,
+    get_unmapped_counts_by_provider,
 )
 
 PROVIDERS = ("github", "jira", "slack", "notion")
@@ -133,6 +139,8 @@ def get_reconciliation(
         employees=rows,
         provider_members=provider_members,
         connected_providers=active_providers,
+        unmapped_activity=get_unmapped_counts_by_provider(db, tenant.id),
+        total_unmapped_count=get_total_unmapped_count(db, tenant.id),
     )
 
 
@@ -163,16 +171,27 @@ def save_identity_mappings(
             continue
 
         value = mapping.provider_username_or_id.strip()
+        now = datetime.utcnow()
         if row:
             row.provider_username_or_id = value
+            row.confidence = "confirmed"
+            row.verified_at = now
         else:
             row = EmployeeIdentity(
                 tenant_id=tenant.id,
                 employee_id=mapping.employee_id,
                 provider=mapping.provider,
                 provider_username_or_id=value,
+                confidence="confirmed",
+                verified_at=now,
             )
             db.add(row)
+
+        db.query(UnmappedActivity).filter(
+            UnmappedActivity.tenant_id == tenant.id,
+            UnmappedActivity.provider == mapping.provider,
+            UnmappedActivity.provider_user_id == value,
+        ).delete(synchronize_session=False)
 
         db.flush()
         if row:

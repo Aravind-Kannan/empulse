@@ -17,11 +17,13 @@ from app.services.integration_telemetry import (
     apply_github_telemetry,
     apply_jira_telemetry,
     get_telemetry_snapshot,
+    mark_sync_completed,
 )
 from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
 from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
+from app.services.identity_resolver import resolve_author_employee_id
 
 
 class GraphPullRequest(DataPoint):
@@ -135,6 +137,8 @@ def analyze_github_payload(
     config: GitHubConfigRequest,
     employee_nodes: dict[str, GraphEmployee],
     component_nodes: dict[str, GraphComponent],
+    db: Session,
+    tenant_id: uuid.UUID,
 ) -> tuple[str, list[GraphPullRequest], int]:
     """Mock document analyzer for GitHub commits, PRs, diffs, and LOC."""
     narrative_lines = [
@@ -146,7 +150,19 @@ def analyze_github_payload(
     edge_count = 0
 
     for activity in MOCK_GITHUB_ACTIVITY:
-        author = employee_nodes.get(activity["author_employee_id"])
+        author_employee_id = resolve_author_employee_id(
+            db,
+            tenant_id,
+            activity.get("author_provider", "github"),
+            activity["author_provider_user_id"],
+            demo_fallback_employee_id=activity.get("author_employee_id"),
+            quarantine_event_type="github_pr",
+            quarantine_payload={
+                "pr_number": activity.get("pr_number"),
+                "commit_sha": activity.get("commit_sha"),
+            },
+        )
+        author = employee_nodes.get(author_employee_id) if author_employee_id else None
         for file_change in activity["files"]:
             component = component_nodes.get(file_change["component_id"])
             pr_node = GraphPullRequest(
@@ -197,8 +213,8 @@ def analyze_jira_payload(
     config: JiraConfigRequest,
     employee_nodes: dict[str, GraphEmployee],
     component_nodes: dict[str, GraphComponent],
-    *,
-    issues: list[dict] | None = None,
+    db: Session,
+    tenant_id: uuid.UUID,
 ) -> tuple[str, list[GraphJiraTicket], int]:
     """Mock document analyzer for Jira tickets, priorities, and assignments."""
     project_filter = {
@@ -219,10 +235,20 @@ def analyze_jira_payload(
         if project_filter and issue["project_key"] not in project_filter:
             continue
 
+        assignee_provider_id = issue.get("assignee_provider_user_id")
+        assignee_employee_id: str | None = None
+        if assignee_provider_id:
+            assignee_employee_id = resolve_author_employee_id(
+                db,
+                tenant_id,
+                issue.get("assignee_provider", "jira"),
+                assignee_provider_id,
+                demo_fallback_employee_id=issue.get("assignee_employee_id"),
+                quarantine_event_type="jira_issue",
+                quarantine_payload={"ticket_id": issue.get("ticket_id")},
+            )
         assignee = (
-            employee_nodes.get(issue["assignee_employee_id"])
-            if issue.get("assignee_employee_id")
-            else None
+            employee_nodes.get(assignee_employee_id) if assignee_employee_id else None
         )
         component = component_nodes.get(issue["component_id"])
         ticket_node = GraphJiraTicket(
@@ -279,7 +305,7 @@ async def process_external_app_sync(
         if not config:
             raise ValueError("GitHub integration is not configured.")
         narrative, data_points, edge_count = analyze_github_payload(
-            config, employee_nodes, component_nodes
+            config, employee_nodes, component_nodes, db, tenant_id
         )
         custom_prompt = (
             "Extract GitHub engineering activity including pull requests, commits, "
@@ -290,13 +316,14 @@ async def process_external_app_sync(
         config = get_jira_config(db, tenant_id)
         if not config:
             raise ValueError("Jira integration is not configured.")
-        from app.services.jira_service import sync_jira_to_cognee
-
-        result = await sync_jira_to_cognee(tenant_id, db)
-        return {
-            **result,
-            "telemetry": get_telemetry_snapshot(),
-        }
+        narrative, data_points, edge_count = analyze_jira_payload(
+            config, employee_nodes, component_nodes, db, tenant_id
+        )
+        custom_prompt = (
+            "Extract Jira issue metadata including ticket IDs, issue types, priorities, "
+            "status indicators, and link assignees and blocked components via "
+            "assignedTo and blocksComponent relationships."
+        )
     else:
         raise ValueError(f"Unsupported integration source '{source}'.")
 
@@ -313,6 +340,10 @@ async def process_external_app_sync(
     telemetry: dict[str, object] = {}
     if normalized == "github":
         telemetry["github_ownership"] = apply_github_telemetry(db, tenant_id)
+
+    db.commit()
+
+    mark_sync_completed(normalized)
 
     return {
         "source": normalized,

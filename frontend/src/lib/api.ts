@@ -2,6 +2,7 @@ import type {
   DashboardMetrics,
   EmployeeOption,
   EraAnalyticsResponse,
+  EraEmployeeDetailResponse,
   GlobalSyncResult,
   HandoverResponse,
   IncidentStatus,
@@ -205,6 +206,30 @@ export async function fetchEraMetrics(): Promise<EraAnalyticsResponse> {
 
   if (!response.ok) {
     throw new Error(`Failed to load ERA metrics (${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function fetchEraEmployeeDetail(
+  employeeId: string,
+  options?: { limit?: number; offset?: number },
+): Promise<EraEmployeeDetailResponse> {
+  const params = new URLSearchParams();
+  if (options?.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+  if (options?.offset !== undefined) {
+    params.set("offset", String(options.offset));
+  }
+  const query = params.toString();
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/era/${encodeURIComponent(employeeId)}${query ? `?${query}` : ""}`,
+    { cache: "no-store" },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to load ERA employee detail (${response.status})`);
   }
 
   return response.json();

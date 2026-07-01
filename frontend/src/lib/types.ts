@@ -143,6 +143,75 @@ export interface IngestJobStatusResponse {
   completed_at: string | null;
 }
 
+export type EraDimensionKey =
+  | "knowledge"
+  | "operational"
+  | "documentation"
+  | "structural"
+  | "burnout";
+
+export type IdentityCoverageLevel = "confirmed" | "high" | "missing";
+
+export type IntegrationId = "github" | "jira" | "slack" | "notion";
+
+export interface EraDimensions {
+  knowledge: number;
+  operational: number;
+  documentation: number;
+  structural: number;
+  burnout: number;
+  partial?: Partial<Record<EraDimensionKey, boolean>>;
+}
+
+export interface EraEvidenceSource {
+  provider: string;
+  label: string;
+  url: string | null;
+}
+
+export interface EraEvidenceItem {
+  id: string;
+  dimension: EraDimensionKey;
+  severity: "high" | "medium" | "low";
+  title: string;
+  description: string;
+  impact_points: number;
+  sources: EraEvidenceSource[];
+  synthetic?: boolean;
+  mitigation_status?: "open" | "in_progress" | "done" | "dismissed";
+}
+
+export interface EraAffectedComponent {
+  id: string;
+  name: string;
+  spof: boolean;
+  criticality: "tier1_revenue" | "tier2_core" | "tier3_support";
+  ownership_pct?: number | null;
+}
+
+export interface EraRecoveryEstimate {
+  min: number;
+  max: number;
+}
+
+export interface EraUnmappedActivityCount {
+  provider: IntegrationId;
+  count: number;
+}
+
+export interface EraTeamSummary {
+  avg_risk_score: number;
+  high_risk_count: number;
+  medium_risk_count: number;
+  low_risk_count: number;
+  spof_component_count: number;
+  open_p1_count: number;
+  undocumented_incident_count: number;
+  top_risk_driver: EraDimensionKey;
+  estimated_recovery_weeks: EraRecoveryEstimate;
+  data_health_pct: number;
+}
+
 export interface EraEmployeeMetrics {
   employee_id: string;
   name: string;
@@ -155,11 +224,38 @@ export interface EraEmployeeMetrics {
   risk_factor_score: number;
   risk_level: "low" | "medium" | "high";
   jira_backlog_boost?: number;
+  dimensions?: EraDimensions | null;
+  evidence?: EraEvidenceItem[];
+  evidence_total_count?: number;
+  affected_components?: EraAffectedComponent[];
+  identity_coverage?: Partial<Record<IntegrationId, IdentityCoverageLevel>>;
+  data_completeness_pct?: number;
+  recovery_estimate_weeks?: EraRecoveryEstimate;
+  departure_watchlist?: boolean;
+  trend_7d?: number | null;
+  excluded?: boolean;
+  exclusion_reason?: string | null;
 }
 
 export interface EraAnalyticsResponse {
+  computed_at: string;
+  demo_mode: boolean;
+  warnings: string[];
+  team_summary: EraTeamSummary;
   employees: EraEmployeeMetrics[];
+  unmapped_activity: EraUnmappedActivityCount[];
+  sync_freshness: Partial<Record<IntegrationId, string | null>>;
 }
+
+export interface EraEmployeeDetailResponse {
+  computed_at: string;
+  employee: EraEmployeeMetrics;
+  evidence: EraEvidenceItem[];
+  evidence_total_count: number;
+  limit: number;
+  offset: number;
+}
+
 
 export interface KraNode {
   id: string;

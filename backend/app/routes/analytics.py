@@ -1,14 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.era import EraAnalyticsResponse
+from app.schemas.era import EraAnalyticsResponse, EraEmployeeDetailResponse
 from app.schemas.kra import (
     KraAnalyticsResponse,
     KraBackupAssignmentRequest,
     KraBackupAssignmentResponse,
 )
-from app.services.era_analytics import get_era_metrics
+from app.services.era_analytics import get_era_employee_detail, get_era_metrics
 from app.services.kra_analytics import (
     assign_backup_engineer,
     get_kra_graph,
@@ -25,6 +25,26 @@ def era_analytics(
     db: Session = Depends(get_db),
 ) -> EraAnalyticsResponse:
     return get_era_metrics(db, tenant)
+
+
+@router.get("/era/{employee_id}", response_model=EraEmployeeDetailResponse)
+def era_employee_detail(
+    employee_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> EraEmployeeDetailResponse:
+    detail = get_era_employee_detail(
+        db,
+        tenant,
+        employee_id,
+        limit=limit,
+        offset=offset,
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found.")
+    return detail
 
 
 @router.get("/kra", response_model=KraAnalyticsResponse)

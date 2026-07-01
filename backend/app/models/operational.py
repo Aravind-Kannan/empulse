@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -76,8 +76,40 @@ class EmployeeIdentity(Base):
     )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_username_or_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     employee: Mapped["Employee"] = relationship("Employee", back_populates="identities")
+
+
+class UnmappedActivity(Base):
+    __tablename__ = "unmapped_activities"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "provider_user_id",
+            "event_type",
+            name="uq_unmapped_activity_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
 
 
 class Component(Base):
@@ -91,6 +123,9 @@ class Component(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     open_tasks_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unresolved_incidents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    criticality: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="tier2_core"
+    )
 
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="components")
     assignments: Mapped[list["Assignment"]] = relationship(
