@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.operational import Employee, EmployeeIdentity
 from app.schemas.identity import ProviderMember
 from app.services.identity_mapping import MOCK_PROVIDER_MEMBERS, PROVIDERS
+from app.services.provider_members import find_provider_member
 
 IdentityConfidence = Literal["confirmed", "high", "medium", "low", "none"]
 ATTRIBUTABLE_CONFIDENCE: frozenset[str] = frozenset({"confirmed", "high", "medium"})
@@ -39,11 +40,15 @@ def is_identity_gating_active(db: Session, tenant_id: uuid.UUID) -> bool:
     )
 
 
-def _find_provider_member(provider: str, provider_user_id: str) -> ProviderMember | None:
-    for member in MOCK_PROVIDER_MEMBERS.get(provider, []):
-        if member.id == provider_user_id:
-            return member
-    return None
+def _find_provider_member(
+    provider: str,
+    provider_user_id: str,
+) -> ProviderMember | None:
+    return find_provider_member(
+        provider,
+        provider_user_id,
+        fallback_members=MOCK_PROVIDER_MEMBERS.get(provider, []),
+    )
 
 
 def _normalize_email(email: str) -> str:

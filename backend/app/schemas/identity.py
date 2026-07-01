@@ -38,6 +38,7 @@ class IdentityReconciliationResponse(BaseModel):
     employees: list[EmployeeIdentityRow]
     provider_members: dict[str, list[ProviderMember]]
     connected_providers: list[str]
+    provider_warnings: dict[str, str] = Field(default_factory=dict)
     unmapped_activity: list[UnmappedCountByProvider] = Field(default_factory=list)
     total_unmapped_count: int = 0
 

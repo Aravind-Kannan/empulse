@@ -375,7 +375,7 @@ export function IntegrationConfigDrawer({
             </Field>
             <Field
               label="Account email"
-              hint="Atlassian account email used with the API token"
+              hint="Atlassian account email for this API token (not your Empulse login)"
             >
               <input
                 type="email"

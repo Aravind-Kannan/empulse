@@ -729,6 +729,7 @@ export async function fetchEmployeeMasterData(
       jira_site_url: integrationConfig?.jira.siteUrl ?? null,
       jira_auth_email: integrationConfig?.jira.authEmail ?? null,
       jira_api_token: integrationConfig?.jira.apiToken ?? null,
+      jira_account_email: integrationConfig?.jira.accountEmail ?? null,
       jira_project_keys: integrationConfig?.jira.projectKeys ?? null,
     }),
     cache: "no-store",
@@ -792,7 +793,9 @@ export async function fetchIdentityReconciliation(
     { cache: "no-store" },
   );
   if (!response.ok) {
-    throw new Error(`Failed to load identity reconciliation (${response.status})`);
+    throw new Error(
+      await parseApiError(response, "Failed to load identity reconciliation"),
+    );
   }
   return response.json();
 }

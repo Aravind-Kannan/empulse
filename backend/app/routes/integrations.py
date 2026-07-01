@@ -26,12 +26,14 @@ from app.services.integration_config_store import (
     get_all_configs,
     get_github_config,
     get_jira_config,
+    get_source_config,
     is_source_configured,
     save_github_config,
     save_jira_config,
     save_notion_config,
     save_slack_config,
 )
+from app.services.integration_validate import validate_jira_credentials
 from app.services.integration_sync import (
     process_external_app_sync,
     process_global_sync,
@@ -102,14 +104,50 @@ def configure_jira(
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> IntegrationConfigResponse:
-    existing = get_jira_config(db, tenant.id)
-    if not payload.api_token.strip() and not existing:
+    stored = get_source_config(db, tenant.id, "jira")
+    token = payload.api_token.strip() or (stored.get("api_token") or "").strip()
+    account_email = payload.account_email.strip() or (stored.get("account_email") or "").strip()
+    project_keys = payload.project_keys.strip() or (stored.get("project_keys") or "").strip()
+    site_url = payload.site_url.strip() or (stored.get("site_url") or "").strip()
+
+    if not token:
         raise HTTPException(status_code=422, detail="Jira API token is required.")
-    save_jira_config(db, tenant.id, payload)
+    if not site_url:
+        raise HTTPException(status_code=422, detail="Jira site URL is required.")
+    if not project_keys:
+        raise HTTPException(
+            status_code=422,
+            detail="Jira project keys are required (comma-separated, e.g. SCRUM).",
+        )
+
+    try:
+        resolved_email, validation_message = validate_jira_credentials(
+            site_url,
+            token,
+            account_email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    save_jira_config(
+        db,
+        tenant.id,
+        JiraConfigRequest(
+            site_url=site_url,
+            project_keys=project_keys,
+            api_token=token,
+            account_email=resolved_email,
+            component_field_map=payload.component_field_map or stored.get("component_field_map") or {},
+            label_component_map=payload.label_component_map or stored.get("label_component_map") or {},
+            project_component_map=payload.project_component_map or stored.get("project_component_map") or {},
+            default_component_id=payload.default_component_id or stored.get("default_component_id"),
+            high_priorities=payload.high_priorities or stored.get("high_priorities") or ["Highest", "High", "Critical"],
+        ),
+    )
     return IntegrationConfigResponse(
         source="jira",
         configured=True,
-        message="Jira integration configuration saved.",
+        message=validation_message,
     )
 
 

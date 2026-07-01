@@ -483,4 +483,5 @@ export interface IdentityReconciliationResponse {
   employees: EmployeeIdentityRow[];
   provider_members: Partial<Record<IdentityProvider, ProviderMember[]>>;
   connected_providers: IdentityProvider[];
+  provider_warnings?: Partial<Record<IdentityProvider, string>>;
 }

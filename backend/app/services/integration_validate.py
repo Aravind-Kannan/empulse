@@ -51,6 +51,60 @@ def validate_notion_token(token: str) -> str:
         return f"Notion token valid — authenticated as {name}."
 
 
+def validate_jira_credentials(
+    site_url: str,
+    api_token: str,
+    account_email: str = "",
+) -> tuple[str, str]:
+    """Verify Jira token and return the canonical Atlassian account email."""
+    from app.services.jira_client import _auth_headers, _normalize_site_url
+
+    token = api_token.strip()
+    if not token:
+        raise ValueError("Jira API token is required.")
+
+    email = account_email.strip()
+    if not email:
+        raise ValueError(
+            "Atlassian account email is required with the API token "
+            "(use the email for your Atlassian account, not your Empulse login)."
+        )
+
+    config = __import__(
+        "app.schemas.integrations", fromlist=["JiraConfigRequest"]
+    ).JiraConfigRequest(
+        site_url=site_url,
+        api_token=token,
+        account_email=email,
+    )
+    url = f"{_normalize_site_url(site_url)}/rest/api/3/myself"
+    try:
+        response = requests.get(
+            url,
+            headers=_auth_headers(config),
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        raise ValueError(f"Could not reach Jira API: {exc}") from exc
+
+    if response.status_code == 401:
+        raise ValueError(
+            "Jira rejected these credentials (401). Confirm the API token is valid "
+            "and the account email matches the Atlassian account that created the token."
+        )
+    if response.status_code >= 400:
+        detail = response.text[:200] if response.text else response.reason
+        raise ValueError(f"Jira API error ({response.status_code}): {detail}")
+
+    payload = response.json()
+    resolved_email = (payload.get("emailAddress") or email).strip()
+    display_name = (payload.get("displayName") or resolved_email).strip()
+    return (
+        resolved_email,
+        f"Jira token valid — authenticated as {display_name} ({resolved_email}).",
+    )
+
+
 def validate_slack_bot_token(token: str) -> str:
     cleaned = token.strip()
     if not cleaned:

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from app.schemas.identity import ProviderMember
 from app.schemas.integrations import JiraConfigRequest
 from app.services.jira_mapper import issue_browse_url
 from app.services.jira_types import JiraIssueActivity
@@ -221,6 +222,99 @@ class JiraClient:
                 f"{response.text[:200]}"
             )
         return response
+
+
+def fetch_jira_provider_members(config: JiraConfigRequest) -> list[ProviderMember]:
+    """List Jira users for identity mapping (accountId is the canonical provider id)."""
+    if not config.api_token.strip():
+        raise JiraClientError("Jira API token is required to list users.")
+
+    site_url = _normalize_site_url(config.site_url)
+    headers = _auth_headers(config)
+    members_by_id: dict[str, ProviderMember] = {}
+
+    def _add_user(user: dict) -> None:
+        account_id = (user.get("accountId") or user.get("name") or "").strip()
+        if not account_id or account_id in members_by_id:
+            return
+        display = (user.get("displayName") or user.get("name") or account_id).strip()
+        email = (user.get("emailAddress") or "").strip() or None
+        label = display
+        if email and email.lower() not in label.lower():
+            label = f"{display} ({email})"
+        members_by_id[account_id] = ProviderMember(
+            id=account_id,
+            label=label,
+            email=email,
+        )
+
+    project_keys = [
+        key.strip().upper()
+        for key in config.project_keys.split(",")
+        if key.strip()
+    ]
+    if project_keys:
+        response = requests.get(
+            f"{site_url}/rest/api/3/user/assignable/multiProjectSearch",
+            headers=headers,
+            params={
+                "projectKeys": ",".join(project_keys),
+                "maxResults": 100,
+            },
+            timeout=30,
+        )
+        if response.status_code < 400:
+            for user in response.json() or []:
+                if isinstance(user, dict):
+                    _add_user(user)
+        elif response.status_code != 404:
+            logger.warning(
+                "Jira assignable user search failed (%s): %s",
+                response.status_code,
+                response.text[:200],
+            )
+
+    if not members_by_id:
+        for query in ("a", "s"):
+            response = requests.get(
+                f"{site_url}/rest/api/3/user/search",
+                headers=headers,
+                params={"query": query, "maxResults": 50},
+                timeout=30,
+            )
+            if response.status_code >= 400:
+                break
+            for user in response.json() or []:
+                if isinstance(user, dict):
+                    _add_user(user)
+
+    try:
+        for issue in JiraClient(config).fetch_open_issues():
+            if not issue.assignee_provider_user_id:
+                continue
+            account_id = issue.assignee_provider_user_id
+            if account_id in members_by_id:
+                continue
+            email = (issue.assignee_email or "").strip() or None
+            label = email or account_id
+            members_by_id[account_id] = ProviderMember(
+                id=account_id,
+                label=label,
+                email=email,
+            )
+    except JiraClientError as exc:
+        logger.warning("Could not supplement Jira users from issues: %s", exc)
+
+    if not members_by_id:
+        logger.warning(
+            "No Jira users returned for %s (projects=%s). "
+            "Check API token, account email, and project keys.",
+            site_url,
+            ",".join(project_keys) or "none",
+        )
+        return []
+
+    return sorted(members_by_id.values(), key=lambda member: member.label.lower())
 
 
 def fetch_jira_issues(

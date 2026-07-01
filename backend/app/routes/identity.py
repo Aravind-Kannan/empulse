@@ -35,10 +35,17 @@ def read_identity_mappings(
 
 
 @router.get("/providers/{provider}/members", response_model=list[ProviderMember])
-def read_provider_members(provider: str) -> list[ProviderMember]:
+def read_provider_members(
+    provider: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> list[ProviderMember]:
     if provider not in PROVIDERS:
         raise HTTPException(status_code=404, detail=f"Unknown provider '{provider}'.")
-    return get_provider_members(provider)
+    try:
+        return get_provider_members(provider, db, tenant.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/reconciliation", response_model=IdentityReconciliationResponse)

@@ -180,6 +180,16 @@ export function IdentityMappingPage() {
         </div>
       )}
 
+      {data?.provider_warnings &&
+        Object.entries(data.provider_warnings).map(([provider, warning]) => (
+          <div
+            key={provider}
+            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+          >
+            <span className="font-medium capitalize">{provider}:</span> {warning}
+          </div>
+        ))}
+
       {savedMessage && (
         <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
           {savedMessage}
