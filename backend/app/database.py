@@ -24,7 +24,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from app.models import operational, tenant, user, user_tenant_membership  # noqa: F401
+    from app.models import ingest_job, operational, tenant, user, user_tenant_membership  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 

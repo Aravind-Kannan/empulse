@@ -23,6 +23,7 @@ export interface OrgWorkspaceProps {
   masterDataSources?: string[] | null;
   hierarchyMode?: "flat" | "structured" | null;
   isSaving?: boolean;
+  savingLabel?: string;
   error?: string | null;
   onReparent: (employeeId: string, managerId: string | null) => void;
   onAssignTeam: (employeeIds: string[], teamName: string) => void;
@@ -43,6 +44,7 @@ export function OrgWorkspace({
   masterDataSources,
   hierarchyMode,
   isSaving = false,
+  savingLabel,
   error,
   onReparent,
   onAssignTeam,
@@ -276,7 +278,10 @@ export function OrgWorkspace({
           {isSaving ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              {mode === "onboarding" ? "Ingesting to Cognee…" : "Saving…"}
+              {savingLabel ??
+                (mode === "onboarding"
+                  ? "Ingesting to Cognee…"
+                  : "Saving…")}
             </>
           ) : (
             <>

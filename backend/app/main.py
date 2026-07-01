@@ -13,6 +13,7 @@ from app.database import init_db
 from app.routes.analytics import router as analytics_router
 from app.routes.auth import router as auth_router
 from app.routes.test_simulation import router as test_simulation_router
+from app.routes.internal import router as internal_router
 from app.routes.integrations import router as integrations_router
 from app.routes.ingest import router as ingest_router
 from app.routes.exit import router as exit_router
@@ -27,6 +28,22 @@ from app.routes.tenants import router as tenants_router
 async def lifespan(_: FastAPI):
     setup_cognee()
     init_db()
+
+    from cognee.run_migrations import run_relational_migrations
+
+    await run_relational_migrations()
+
+    from app.database import SessionLocal
+    from app.services.tenant_bootstrap import bootstrap_tenancy
+    from app.services.tenant_cognee import ensure_tenant_cognee_dataset
+
+    db = SessionLocal()
+    try:
+        tenant = bootstrap_tenancy(db)
+        await ensure_tenant_cognee_dataset(tenant.id)
+    finally:
+        db.close()
+
     yield
 
 
@@ -56,6 +73,7 @@ app.include_router(org_bulk_router)
 app.include_router(org_employees_router)
 app.include_router(exit_router)
 app.include_router(tenants_router)
+app.include_router(internal_router)
 
 
 @app.get("/")

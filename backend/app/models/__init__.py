@@ -1,3 +1,4 @@
+from app.models.ingest_job import IngestJob
 from app.models.operational import (
     Assignment,
     Component,
@@ -20,4 +21,5 @@ __all__ = [
     "EmployeeIdentity",
     "RoleHistory",
     "IncidentRecord",
+    "IngestJob",
 ]

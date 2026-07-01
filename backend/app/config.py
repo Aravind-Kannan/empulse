@@ -30,7 +30,14 @@ class Settings(BaseSettings):
     cognee_cache_root: str = str(BACKEND_ROOT / ".cognee_cache")
     cognee_dataset_name: str = "empulse_org_chart"
     cognee_vector_db_provider: str = "lancedb"
-    cognee_graph_db_provider: str = "kuzu"
+    cognee_graph_db_provider: str = "neo4j"
+    cognee_graph_db_url: str = "bolt://localhost:7687"
+    cognee_graph_db_username: str = "neo4j"
+    cognee_graph_db_password: str = "pleaseletmein"
+    cognee_graph_db_name: str = "neo4j"
+    cognee_backend_access_control: bool = False
+
+    internal_debug_key: str = ""
 
     jwt_secret: str = "change-me-in-production-use-openssl-rand-hex-32"
     jwt_algorithm: str = "HS256"
@@ -54,7 +61,10 @@ class Settings(BaseSettings):
 
 
 def _apply_runtime_env(settings: Settings) -> None:
-    os.environ.setdefault("ENABLE_BACKEND_ACCESS_CONTROL", "false")
+    os.environ.setdefault(
+        "ENABLE_BACKEND_ACCESS_CONTROL",
+        "true" if settings.cognee_backend_access_control else "false",
+    )
     os.environ.setdefault("CACHE_ROOT_DIRECTORY", settings.cognee_cache_root)
     os.environ.setdefault("DATABASE_URL", settings.database_url)
     os.environ.setdefault("LLM_PROVIDER", settings.llm_provider)
@@ -67,6 +77,13 @@ def _apply_runtime_env(settings: Settings) -> None:
     os.environ.setdefault("EMBEDDING_ENDPOINT", settings.embedding_endpoint)
     os.environ.setdefault("EMBEDDING_API_KEY", settings.embedding_api_key)
     os.environ.setdefault("HUGGINGFACE_TOKENIZER", settings.huggingface_tokenizer)
+    os.environ.setdefault("GRAPH_DATABASE_PROVIDER", settings.cognee_graph_db_provider)
+    os.environ.setdefault("GRAPH_DATABASE_URL", settings.cognee_graph_db_url)
+    os.environ.setdefault("GRAPH_DATABASE_USERNAME", settings.cognee_graph_db_username)
+    os.environ.setdefault("GRAPH_DATABASE_PASSWORD", settings.cognee_graph_db_password)
+    os.environ.setdefault("GRAPH_DATABASE_NAME", settings.cognee_graph_db_name)
+    os.environ.setdefault("GRAPH_DATASET_DATABASE_HANDLER", "neo4j")
+    os.environ.setdefault("VECTOR_DATASET_DATABASE_HANDLER", "lancedb")
 
 
 _apply_runtime_env(Settings())
@@ -86,7 +103,28 @@ def setup_cognee() -> None:
     cognee.config.data_root_directory(settings.cognee_data_root)
     cognee.config.system_root_directory(settings.cognee_system_root)
     cognee.config.set("vector_db_provider", settings.cognee_vector_db_provider)
-    cognee.config.set("graph_database_provider", settings.cognee_graph_db_provider)
+    cognee.config.set_vector_db_config(
+        {
+            "vector_dataset_database_handler": "lancedb",
+            "vector_db_subprocess_enabled": False,
+        }
+    )
+
+    graph_db_config: dict = {
+        "graph_database_provider": settings.cognee_graph_db_provider,
+    }
+    if settings.cognee_graph_db_provider == "neo4j":
+        graph_db_config.update(
+            {
+                "graph_database_url": settings.cognee_graph_db_url,
+                "graph_database_username": settings.cognee_graph_db_username,
+                "graph_database_password": settings.cognee_graph_db_password,
+                "graph_database_name": settings.cognee_graph_db_name,
+                "graph_database_subprocess_enabled": False,
+                "graph_dataset_database_handler": "neo4j",
+            }
+        )
+    cognee.config.set_graph_db_config(graph_db_config)
 
     cognee.config.set_llm_provider(settings.llm_provider)
     cognee.config.set_llm_model(settings.llm_model)

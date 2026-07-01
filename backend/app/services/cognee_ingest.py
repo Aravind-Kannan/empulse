@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session
 
 from cognee.infrastructure.engine import DataPoint
 from cognee.infrastructure.engine.models.Edge import Edge
-from cognee.tasks.storage import add_data_points
 
 from app.models.operational import Assignment, Component, Employee
 from app.schemas.org import OrgChartIngestRequest
+from app.services.employee_ids import scope_org_chart_to_tenant
 from app.services.role_utils import is_leadership_role
-from app.services.tenant_cognee import tenant_add_and_cognify
+from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
 
@@ -42,7 +42,8 @@ def persist_org_chart(
     db: Session,
     payload: OrgChartIngestRequest,
     tenant_id: uuid.UUID,
-) -> None:
+) -> OrgChartIngestRequest:
+    payload = scope_org_chart_to_tenant(payload, tenant_id)
     db.query(Assignment).filter(Assignment.tenant_id == tenant_id).delete()
     db.flush()
     db.query(Employee).filter(Employee.tenant_id == tenant_id).update(
@@ -89,6 +90,7 @@ def persist_org_chart(
         )
 
     db.commit()
+    return payload
 
 
 def _build_org_narrative(payload: OrgChartIngestRequest) -> str:
@@ -221,7 +223,7 @@ async def ingest_org_chart_to_cognee(
     edge_count = assign_org_graph_edges(payload, employee_nodes, component_nodes)
 
     data_points = list(employee_nodes.values()) + list(component_nodes.values())
-    await add_data_points(data_points)
+    await tenant_add_data_points(tenant_id, data_points)
 
     dataset = tenant_dataset_name(tenant_id)
     narrative = _build_org_narrative(payload)

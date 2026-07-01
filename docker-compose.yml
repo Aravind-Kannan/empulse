@@ -1,4 +1,24 @@
 services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: empulse-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/pleaseletmein
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+      # Per-tenant Neo4j databases require Enterprise + ENABLE_BACKEND_ACCESS_CONTROL=true
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - empulse_neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   postgres:
     image: postgres:16-alpine
     container_name: empulse-postgres
@@ -18,3 +38,4 @@ services:
 
 volumes:
   empulse_pgdata:
+  empulse_neo4jdata:

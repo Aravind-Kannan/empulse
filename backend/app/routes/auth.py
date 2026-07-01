@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from authlib.integrations.starlette_client import OAuth
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -29,9 +29,14 @@ from app.services.auth_service import (
     user_to_response,
 )
 from app.services.jwt_service import AUTH_COOKIE, create_access_token, decode_access_token
+from app.services.tenant_cognee import ensure_tenant_cognee_dataset
 from app.tenancy import TENANT_COOKIE
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+async def _provision_tenant_cognee_dataset(tenant_id: uuid.UUID) -> None:
+    await ensure_tenant_cognee_dataset(tenant_id)
 
 oauth = OAuth()
 
@@ -191,6 +196,7 @@ def _get_user_from_request(request: Request, db: Session) -> tuple[User, Tenant]
 def sign_up(
     payload: SignUpRequest,
     response: Response,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> AuthResponse:
     try:
@@ -204,6 +210,7 @@ def sign_up(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    background_tasks.add_task(_provision_tenant_cognee_dataset, tenant.id)
     return _auth_response(response, user, tenant, is_new_user=True)
 
 
@@ -356,6 +363,7 @@ async def oauth_login(
 async def oauth_callback(
     provider: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     if provider not in ("google", "github"):
@@ -403,6 +411,9 @@ async def oauth_callback(
             url=f"{settings.frontend_url}/?auth_error={str(exc)}",
             status_code=302,
         )
+
+    if is_new_user:
+        background_tasks.add_task(_provision_tenant_cognee_dataset, tenant.id)
 
     jwt_token = create_access_token(
         user_id=user.id,

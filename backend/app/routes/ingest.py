@@ -1,10 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.org import OrgChartIngestRequest, OrgChartIngestResponse
-from app.services.cognee_ingest import ingest_org_chart_to_cognee, persist_org_chart
+from app.schemas.ingest_job import IngestJobAcceptedResponse, IngestJobStatusResponse
+from app.schemas.org import OrgChartIngestRequest
+from app.services.cognee_ingest import persist_org_chart
+from app.services.ingest_jobs import (
+    create_org_chart_ingest_job,
+    get_ingest_job_for_tenant,
+    job_to_status_response,
+    schedule_org_chart_ingest_job,
+    validate_org_chart_payload,
+)
 from app.services.org_chart_read import load_org_chart
 from app.tenancy import CurrentTenant
 
@@ -19,35 +29,17 @@ def get_org_chart(
     return load_org_chart(db, tenant)
 
 
-@router.post("/org-chart", response_model=OrgChartIngestResponse)
+@router.post(
+    "/org-chart",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=IngestJobAcceptedResponse,
+)
 async def ingest_org_chart(
     payload: OrgChartIngestRequest,
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
-) -> OrgChartIngestResponse:
-    employee_ids = {employee.id for employee in payload.employees}
-    if len(employee_ids) != len(payload.employees):
-        raise HTTPException(status_code=422, detail="Duplicate employee ids detected.")
-
-    for employee in payload.employees:
-        if employee.manager_id and employee.manager_id not in employee_ids:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown manager_id '{employee.manager_id}' for employee '{employee.id}'.",
-            )
-
-    component_ids = {component.id for component in payload.components}
-    for assignment in payload.assignments:
-        if assignment.employee_id not in employee_ids:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown employee_id '{assignment.employee_id}' in assignment.",
-            )
-        if assignment.component_id not in component_ids:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown component_id '{assignment.component_id}' in assignment.",
-            )
+) -> IngestJobAcceptedResponse:
+    validate_org_chart_payload(payload)
 
     try:
         persist_org_chart(db, payload, tenant.id)
@@ -58,20 +50,24 @@ async def ingest_org_chart(
             detail=f"Failed to persist org chart to PostgreSQL: {exc}",
         ) from exc
 
-    try:
-        cognee_result = await ingest_org_chart_to_cognee(payload, tenant_id=tenant.id)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"PostgreSQL write succeeded but Cognee ingestion failed: {exc}",
-        ) from exc
+    job = create_org_chart_ingest_job(db, tenant_id=tenant.id, payload=payload)
+    schedule_org_chart_ingest_job(job.id, tenant.id)
 
-    return OrgChartIngestResponse(
-        company=payload.company,
-        employees_persisted=len(payload.employees),
-        components_persisted=len(payload.components),
-        assignments_persisted=len(payload.assignments),
-        cognee_dataset=str(cognee_result["cognee_dataset"]),
-        graph_nodes_created=int(cognee_result["graph_nodes_created"]),
-        graph_edges_created=int(cognee_result["graph_edges_created"]),
+    return IngestJobAcceptedResponse(
+        job_id=job.id,
+        status="queued",
+        poll_url=f"/api/ingest/jobs/{job.id}",
+        message=(
+            "Org chart saved to PostgreSQL. Cognee graph build started in the background."
+        ),
     )
+
+
+@router.get("/jobs/{job_id}", response_model=IngestJobStatusResponse)
+def get_ingest_job_status(
+    job_id: uuid.UUID,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IngestJobStatusResponse:
+    job = get_ingest_job_for_tenant(db, job_id, tenant.id)
+    return job_to_status_response(job)

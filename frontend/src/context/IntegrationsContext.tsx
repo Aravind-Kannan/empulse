@@ -15,6 +15,7 @@ import {
   syncAllIntegrations,
   syncIntegrationSource,
 } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import {
   DEFAULT_INTEGRATION_CONFIG,
@@ -27,7 +28,34 @@ import {
   type IntegrationStatus,
 } from "@/lib/integrations";
 
-const STORAGE_KEY = "empulse-integrations-config";
+
+function integrationsStorageKey(tenantId: string | null | undefined): string | null {
+  if (!tenantId) return null;
+  return `empulse-integrations-config:${tenantId}`;
+}
+
+function loadConfig(tenantId: string | null | undefined): IntegrationConfigMap {
+  if (typeof window === "undefined") return DEFAULT_INTEGRATION_CONFIG;
+
+  const key = integrationsStorageKey(tenantId);
+  if (!key) return DEFAULT_INTEGRATION_CONFIG;
+
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      return { ...DEFAULT_INTEGRATION_CONFIG, ...JSON.parse(raw) };
+    }
+    return DEFAULT_INTEGRATION_CONFIG;
+  } catch {
+    return DEFAULT_INTEGRATION_CONFIG;
+  }
+}
+
+function saveConfig(tenantId: string | null | undefined, config: IntegrationConfigMap) {
+  const key = integrationsStorageKey(tenantId);
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify(config));
+}
 
 interface SyncProgress {
   active: boolean;
@@ -55,17 +83,6 @@ const IntegrationsContext = createContext<IntegrationsContextValue | null>(null)
 
 const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira"]);
 
-function loadConfig(): IntegrationConfigMap {
-  if (typeof window === "undefined") return DEFAULT_INTEGRATION_CONFIG;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_INTEGRATION_CONFIG;
-    return { ...DEFAULT_INTEGRATION_CONFIG, ...JSON.parse(raw) };
-  } catch {
-    return DEFAULT_INTEGRATION_CONFIG;
-  }
-}
-
 function deriveStatuses(
   config: IntegrationConfigMap,
   syncingIds: Set<IntegrationId>,
@@ -88,6 +105,8 @@ function deriveStatuses(
 }
 
 export function IntegrationsProvider({ children }: { children: ReactNode }) {
+  const { activeTenant } = useAuth();
+  const tenantId = activeTenant?.id ?? null;
   const { refreshOperationalState } = useWorkspace();
   const [config, setConfig] = useState<IntegrationConfigMap>(
     DEFAULT_INTEGRATION_CONFIG,
@@ -102,13 +121,24 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    setConfig(loadConfig());
-  }, []);
+    setConfig(loadConfig(tenantId));
+    setSyncingIds(new Set());
+    setSyncProgress({
+      active: false,
+      currentSource: null,
+      completed: [],
+      total: 0,
+      error: null,
+    });
+  }, [tenantId]);
 
-  const persist = useCallback((next: IntegrationConfigMap) => {
-    setConfig(next);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }, []);
+  const persist = useCallback(
+    (next: IntegrationConfigMap) => {
+      setConfig(next);
+      saveConfig(tenantId, next);
+    },
+    [tenantId],
+  );
 
   const updateConfig = useCallback(
     <K extends IntegrationId>(
@@ -141,11 +171,11 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
           ...prev,
           [id]: merged,
         };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        saveConfig(tenantId, next);
         return next;
       });
     },
-    [],
+    [tenantId],
   );
 
   const connect = useCallback(

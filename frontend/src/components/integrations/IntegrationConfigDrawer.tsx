@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ExternalLink, Loader2, Unplug, X } from "lucide-react";
 
 import { useIntegrations } from "@/context/IntegrationsContext";
@@ -87,6 +88,16 @@ export function IntegrationConfigDrawer({
   const [success, setSuccess] = useState<string | null>(null);
   const connected = isIntegrationConnected(app.id, config);
   const draft = isIntegrationDraft(app.id, config);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
 
   async function handleSave() {
     setSaving(true);
@@ -312,17 +323,22 @@ export function IntegrationConfigDrawer({
     }
   }
 
-  return (
+  const drawer = (
     <>
       <button
         type="button"
         aria-label="Close configuration"
-        className="fixed inset-0 z-40 bg-black/50"
+        className="fixed inset-0 z-[100] bg-black/50"
         onClick={onClose}
       />
-      <aside className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-zinc-800 bg-slate-950 shadow-2xl">
-        <div className="flex items-start justify-between border-b border-zinc-800 px-5 py-5">
-          <div className="flex items-center gap-3">
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="integration-drawer-title"
+        className="fixed inset-y-0 right-0 z-[101] flex w-full max-w-md flex-col border-l border-zinc-800 bg-slate-950 shadow-2xl"
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-5">
+          <div className="flex min-w-0 items-center gap-3">
             <div
               className={`flex h-11 w-11 items-center justify-center rounded-xl ${app.accentBg}`}
             >
@@ -331,8 +347,11 @@ export function IntegrationConfigDrawer({
                 className={`h-6 w-6 ${app.iconClassName}`}
               />
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-zinc-100">
+            <div className="min-w-0">
+              <h2
+                id="integration-drawer-title"
+                className="text-lg font-semibold text-zinc-100"
+              >
                 {connected ? "Configure" : "Connect"} {app.name}
               </h2>
               <p className="text-xs text-zinc-500">{app.syncsToCognee}</p>
@@ -346,17 +365,17 @@ export function IntegrationConfigDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-900 hover:text-zinc-200"
+            className="ml-3 shrink-0 rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-900 hover:text-zinc-200"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
           {renderFields()}
         </div>
 
-        <div className="space-y-2 border-t border-zinc-800 px-5 py-4">
+        <div className="shrink-0 space-y-2 border-t border-zinc-800 px-5 py-4">
           {success && (
             <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
               {success}
@@ -393,6 +412,12 @@ export function IntegrationConfigDrawer({
       </aside>
     </>
   );
+
+  if (!mounted) {
+    return null;
+  }
+
+  return createPortal(drawer, document.body);
 }
 
 export function useSelectedIntegration() {

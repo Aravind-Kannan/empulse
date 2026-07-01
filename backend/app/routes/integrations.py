@@ -119,7 +119,10 @@ def fetch_users_get(
 
 
 @router.post("/fetch-users", response_model=EmployeeMasterDataResponse)
-def fetch_users_post(payload: FetchUsersRequest) -> EmployeeMasterDataResponse:
+def fetch_users_post(
+    payload: FetchUsersRequest,
+    tenant: CurrentTenant,
+) -> EmployeeMasterDataResponse:
     if not payload.sources:
         raise HTTPException(
             status_code=400,
@@ -131,6 +134,7 @@ def fetch_users_post(payload: FetchUsersRequest) -> EmployeeMasterDataResponse:
             company=payload.company,
             credentials=payload,
             flat_hierarchy=payload.flat_hierarchy,
+            tenant_id=tenant.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

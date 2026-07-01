@@ -40,7 +40,7 @@ async def bulk_upload_org(
         )
 
     try:
-        persist_org_chart(db, merged_org, tenant.id)
+        scoped_payload = persist_org_chart(db, merged_org, tenant.id)
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
@@ -50,7 +50,7 @@ async def bulk_upload_org(
 
     try:
         cognee_result = await ingest_org_chart_to_cognee(
-            merged_org,
+            scoped_payload,
             tenant_id=tenant.id,
             custom_prompt=(
                 "Bulk re-index enterprise organizational structure. "

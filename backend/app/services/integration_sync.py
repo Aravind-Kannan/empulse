@@ -8,21 +8,20 @@ from sqlalchemy.orm import Session
 
 from cognee.infrastructure.engine import DataPoint
 from cognee.infrastructure.engine.models.Edge import Edge
-from cognee.tasks.storage import add_data_points
 
 from app.models.operational import Component, Employee
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
 from app.schemas.org import ACME_ORG_CHART
+from app.services.cognee_ingest import GraphComponent, GraphEmployee
 from app.services.integration_telemetry import (
     apply_github_telemetry,
     apply_jira_telemetry,
     get_telemetry_snapshot,
 )
-from app.services.cognee_ingest import GraphComponent, GraphEmployee
-from app.services.tenant_cognee import tenant_add_and_cognify
+from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
-_integration_configs: dict[str, GitHubConfigRequest | JiraConfigRequest] = {}
+from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
 
 
 class GraphPullRequest(DataPoint):
@@ -49,7 +48,7 @@ class GraphJiraTicket(DataPoint):
     metadata: dict = {"index_fields": ["ticket_id", "issue_type", "status"]}
 
 
-from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
+_integration_configs: dict[str, GitHubConfigRequest | JiraConfigRequest] = {}
 
 
 def save_github_config(config: GitHubConfigRequest) -> None:
@@ -289,7 +288,7 @@ async def process_external_app_sync(
         raise ValueError(f"Unsupported integration source '{source}'.")
 
     if data_points:
-        await add_data_points(data_points)
+        await tenant_add_data_points(tenant_id, data_points)
 
     dataset = tenant_dataset_name(tenant_id)
     await tenant_add_and_cognify(

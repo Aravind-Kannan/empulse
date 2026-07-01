@@ -106,6 +106,30 @@ export interface OrgChartIngestResponse {
   graph_edges_created: number;
 }
 
+export type IngestJobStatus = "queued" | "running" | "completed" | "failed";
+
+export interface IngestJobAcceptedResponse {
+  job_id: string;
+  status: IngestJobStatus;
+  poll_url: string;
+  message: string;
+}
+
+export interface IngestJobStatusResponse {
+  job_id: string;
+  status: IngestJobStatus;
+  job_type: string;
+  company: string;
+  employees_persisted: number;
+  components_persisted: number;
+  assignments_persisted: number;
+  error: string | null;
+  result: OrgChartIngestResponse | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 export interface EraEmployeeMetrics {
   employee_id: string;
   name: string;

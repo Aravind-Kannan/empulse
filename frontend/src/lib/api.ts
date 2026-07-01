@@ -12,6 +12,8 @@ import type {
   KraBackupAssignmentResponse,
   OrgChartIngestResponse,
   OrgChartPayload,
+  IngestJobAcceptedResponse,
+  IngestJobStatusResponse,
   NotionSimulationRequest,
   SimulationStreamEvent,
   IdentityReconciliationResponse,
@@ -104,8 +106,59 @@ export async function applyBulkOrgUpload(payload: {
   return response.json();
 }
 
+export async function fetchIngestJobStatus(
+  jobId: string,
+): Promise<IngestJobStatusResponse> {
+  const response = await apiFetch(`${API_BASE}/api/ingest/jobs/${jobId}`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load ingest job (${response.status})`);
+  }
+  return response.json();
+}
+
+const INGEST_POLL_INTERVAL_MS = 1000;
+const INGEST_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollIngestJob(
+  jobId: string,
+  onStatus?: (status: IngestJobStatusResponse) => void,
+): Promise<OrgChartIngestResponse> {
+  const started = Date.now();
+
+  while (true) {
+    const status = await fetchIngestJobStatus(jobId);
+    onStatus?.(status);
+
+    if (status.status === "completed") {
+      if (!status.result) {
+        throw new Error("Ingest completed without a result payload.");
+      }
+      return status.result;
+    }
+
+    if (status.status === "failed") {
+      throw new Error(status.error ?? "Cognee ingest job failed.");
+    }
+
+    if (Date.now() - started > INGEST_POLL_TIMEOUT_MS) {
+      throw new Error("Cognee ingest timed out. Try again in a moment.");
+    }
+
+    await sleep(INGEST_POLL_INTERVAL_MS);
+  }
+}
+
 export async function ingestOrgChart(
   payload: OrgChartPayload,
+  options?: {
+    onStatus?: (status: IngestJobStatusResponse) => void;
+  },
 ): Promise<OrgChartIngestResponse> {
   const response = await apiFetch(`${API_BASE}/api/ingest/org-chart`, {
     method: "POST",
@@ -120,6 +173,25 @@ export async function ingestOrgChart(
         ? errorBody.detail
         : `Ingest failed (${response.status})`;
     throw new Error(detail);
+  }
+
+  if (response.status === 202) {
+    const accepted = (await response.json()) as IngestJobAcceptedResponse;
+    options?.onStatus?.({
+      job_id: accepted.job_id,
+      status: accepted.status,
+      job_type: "org_chart",
+      company: payload.company,
+      employees_persisted: payload.employees.length,
+      components_persisted: payload.components.length,
+      assignments_persisted: payload.assignments.length,
+      error: null,
+      result: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      completed_at: null,
+    });
+    return pollIngestJob(accepted.job_id, options?.onStatus);
   }
 
   return response.json();

@@ -32,6 +32,21 @@ def _unique_constraint_names(inspector, table: str) -> set[str]:
     }
 
 
+def _drop_legacy_employees_email_unique(conn, inspector) -> None:
+    """Remove pre-multi-tenant UNIQUE(email) so the same person can exist in multiple orgs."""
+    if not inspector.has_table("employees"):
+        return
+
+    for constraint in inspector.get_unique_constraints("employees"):
+        name = constraint.get("name")
+        columns = constraint.get("column_names") or []
+        if not name:
+            continue
+        if set(columns) == {"email"}:
+            logger.info("Dropping legacy employees email unique constraint %s", name)
+            conn.execute(text(f'ALTER TABLE employees DROP CONSTRAINT "{name}"'))
+
+
 def apply_schema_patches(engine: Engine) -> None:
     """
     Add tenant_id to operational tables that pre-date multi-tenancy.
@@ -86,6 +101,7 @@ def apply_schema_patches(engine: Engine) -> None:
             )
 
         if inspector.has_table("employees"):
+            _drop_legacy_employees_email_unique(conn, inspector)
             if "uq_employees_tenant_email" not in _unique_constraint_names(
                 inspector, "employees"
             ):

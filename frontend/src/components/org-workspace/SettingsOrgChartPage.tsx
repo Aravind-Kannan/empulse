@@ -14,6 +14,7 @@ export function SettingsOrgChartPage() {
   const [orgChart, setOrgChart] = useState<OrgChartPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [savingLabel, setSavingLabel] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -108,9 +109,16 @@ export function SettingsOrgChartPage() {
   async function handleSave() {
     if (!orgChart) return;
     setIsSaving(true);
+    setSavingLabel("Saving org chart…");
     setError(null);
     try {
-      await ingestOrgChart(orgChart);
+      await ingestOrgChart(orgChart, {
+        onStatus: (status) => {
+          if (status.status === "queued" || status.status === "running") {
+            setSavingLabel("Syncing to Cognee…");
+          }
+        },
+      });
       await refreshOperationalState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -141,6 +149,7 @@ export function SettingsOrgChartPage() {
       mode="settings"
       orgChart={orgChart}
       isSaving={isSaving}
+      savingLabel={savingLabel}
       error={error}
       onReparent={reparentEmployee}
       onAssignTeam={assignTeamTag}

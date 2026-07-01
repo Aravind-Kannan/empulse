@@ -30,6 +30,7 @@ export function OnboardingOrgSetupPage() {
   } = useOnboarding();
   const { refreshOperationalState } = useWorkspace();
   const [isSaving, setIsSaving] = useState(false);
+  const [savingLabel, setSavingLabel] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -52,6 +53,7 @@ export function OnboardingOrgSetupPage() {
 
   async function handleSave() {
     setIsSaving(true);
+    setSavingLabel("Saving org chart…");
     setError(null);
 
     const payload = {
@@ -60,7 +62,13 @@ export function OnboardingOrgSetupPage() {
     };
 
     try {
-      await ingestOrgChart(payload);
+      await ingestOrgChart(payload, {
+        onStatus: (status) => {
+          if (status.status === "queued" || status.status === "running") {
+            setSavingLabel("Building knowledge graph…");
+          }
+        },
+      });
       await refreshOperationalState();
       router.push("/onboarding/sync");
     } catch (err) {
@@ -77,6 +85,7 @@ export function OnboardingOrgSetupPage() {
         masterDataSources={masterDataSources}
         hierarchyMode={hierarchyMode}
         isSaving={isSaving}
+        savingLabel={savingLabel}
         error={error}
         onReparent={reparentEmployee}
         onAssignTeam={assignTeamTag}

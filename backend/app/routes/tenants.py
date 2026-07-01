@@ -13,4 +13,7 @@ def get_current_tenant_info(tenant: CurrentTenant) -> TenantSummary:
 
 @router.get("/current/dataset")
 def get_current_tenant_dataset(tenant: CurrentTenant) -> dict[str, str]:
-    return {"dataset_name": tenant_dataset_name(tenant.id)}
+    return {
+        "tenant_id": str(tenant.id),
+        "dataset_name": tenant_dataset_name(tenant.id),
+    }

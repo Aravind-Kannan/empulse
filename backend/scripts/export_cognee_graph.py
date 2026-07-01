@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(BACKEND_ROOT / ".env")
 
 from app.config import setup_cognee
+from app.services.tenant_cognee import tenant_cognee_context_for_dataset
 from app.ssl import configure_ssl
 from app.tenancy import tenant_dataset_name
 
@@ -64,11 +65,12 @@ async def _export_graph(
     import cognee
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    await cognee.visualize_graph(
-        destination_file_path=str(output_path.resolve()),
-        dataset=dataset,
-        include_session_events=include_session_events,
-    )
+    async with tenant_cognee_context_for_dataset(dataset):
+        await cognee.visualize_graph(
+            destination_file_path=str(output_path.resolve()),
+            dataset=dataset,
+            include_session_events=include_session_events,
+        )
 
 
 def main() -> int:
@@ -124,7 +126,7 @@ def main() -> int:
 
     print(f"Dataset: {dataset}")
     print(f"Output:  {output_path.resolve()}")
-    print("Tip: stop uvicorn first if you hit a graph database lock error.")
+    print("Tip: ensure Neo4j is running (docker compose up -d neo4j).")
 
     try:
         asyncio.run(

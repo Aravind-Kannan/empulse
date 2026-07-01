@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from collections import defaultdict
 from urllib.parse import urlparse
 
@@ -13,13 +14,16 @@ from app.schemas.employee_master import (
     MasterDataEmployee,
     MasterDataRecord,
 )
+from app.services.employee_ids import employee_id_from_email
 from app.services.integration_sync import get_github_config, get_jira_config
 
 SOURCE_PRIORITY = ("notion", "slack", "jira", "github")
 MANAGER_FIELD_HINTS = ("manager", "reports to", "reporting", "reports_to", "lead")
 
 
-def _slug_id(email: str) -> str:
+def _slug_id(email: str, tenant_id: uuid.UUID | None = None) -> str:
+    if tenant_id is not None:
+        return employee_id_from_email(email, tenant_id)
     local = email.split("@")[0].lower()
     slug = re.sub(r"[^a-z0-9]+", "-", local).strip("-")
     return f"emp-{slug}"
@@ -388,7 +392,11 @@ def _pick_manager_email(records: list[MasterDataRecord]) -> str | None:
     return None
 
 
-def _merge_records(records: list[MasterDataRecord]) -> MasterDataEmployee:
+def _merge_records(
+    records: list[MasterDataRecord],
+    *,
+    tenant_id: uuid.UUID | None = None,
+) -> MasterDataEmployee:
     email = records[0].email
     name = next((r.name for r in records if r.name.strip()), records[0].name)
     tenure = next(
@@ -398,7 +406,7 @@ def _merge_records(records: list[MasterDataRecord]) -> MasterDataEmployee:
     providers = sorted({r.source for r in records})
 
     return MasterDataEmployee(
-        id=_slug_id(str(email)),
+        id=_slug_id(str(email), tenant_id),
         name=name,
         email=email,
         role=_pick_title(records),
@@ -451,6 +459,7 @@ def fetch_employee_master_data(
     company: str = "Acme Company",
     credentials: FetchUsersRequest | None = None,
     flat_hierarchy: bool = False,
+    tenant_id: uuid.UUID | None = None,
 ) -> EmployeeMasterDataResponse:
     """
     Import workspace members from connected platforms.
@@ -481,7 +490,7 @@ def fetch_employee_master_data(
 
     employees: list[MasterDataEmployee] = []
     for group in grouped.values():
-        employees.append(_merge_records(group))
+        employees.append(_merge_records(group, tenant_id=tenant_id))
 
     hierarchy_mode = _apply_hierarchy(employees, force_flat=flat_hierarchy)
     employees.sort(key=lambda item: item.name.lower())
