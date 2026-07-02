@@ -92,6 +92,26 @@ async def tenant_add_and_cognify(
         )
 
 
+async def tenant_write_memory_record(
+    tenant_id: uuid.UUID,
+    record: dict,
+    *,
+    custom_prompt: str | None = None,
+) -> None:
+    """Append structured memory to the tenant dataset and re-cognify."""
+    import json
+
+    dataset = tenant_dataset_name(tenant_id)
+    content = json.dumps(record, indent=2)
+    prompt = custom_prompt or (
+        "Extract incident lifecycle updates, resolution notes, and status "
+        "transitions for future investigation retrieval."
+    )
+    async with tenant_cognee_context(tenant_id):
+        await cognee.add(content, dataset_name=dataset)
+        await cognee.cognify(datasets=dataset, custom_prompt=prompt)
+
+
 async def tenant_graph_search(
     query_text: str,
     tenant_id: uuid.UUID,

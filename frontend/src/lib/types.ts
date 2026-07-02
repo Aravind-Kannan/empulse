@@ -529,7 +529,7 @@ export interface SmeRecommendation {
 
 export interface InvestigationReference {
   id: string;
-  type: "slack" | "notion" | "postmortem";
+  type: "slack" | "notion" | "postmortem" | "jira";
   title: string;
   url: string;
   snippet: string;
@@ -541,6 +541,9 @@ export interface InvestigationDiagnostics {
   workaround: string;
   smes: SmeRecommendation[];
   references: InvestigationReference[];
+  slack_threads: InvestigationReference[];
+  jira_tickets: InvestigationReference[];
+  notion_pages: InvestigationReference[];
   graph_hops: string[];
 }
 

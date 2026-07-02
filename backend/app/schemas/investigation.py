@@ -26,6 +26,7 @@ class IncidentListResponse(BaseModel):
 
 class IncidentStatusUpdate(BaseModel):
     status: IncidentStatus
+    resolution_note: str | None = None
 
 
 class SmeRecommendation(BaseModel):
@@ -38,7 +39,7 @@ class SmeRecommendation(BaseModel):
 
 class InvestigationReference(BaseModel):
     id: str
-    type: Literal["slack", "notion", "postmortem"]
+    type: Literal["slack", "notion", "postmortem", "jira"]
     title: str
     url: str
     snippet: str
@@ -50,6 +51,9 @@ class InvestigationDiagnostics(BaseModel):
     workaround: str
     smes: list[SmeRecommendation]
     references: list[InvestigationReference]
+    slack_threads: list[InvestigationReference] = Field(default_factory=list)
+    jira_tickets: list[InvestigationReference] = Field(default_factory=list)
+    notion_pages: list[InvestigationReference] = Field(default_factory=list)
     graph_hops: list[str] = Field(default_factory=list)
 
 

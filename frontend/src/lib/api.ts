@@ -503,13 +503,17 @@ export async function fetchIncidents(
 export async function updateIncidentStatus(
   incidentId: string,
   status: IncidentStatus,
+  resolutionNote?: string,
 ): Promise<IncidentSummary> {
   const response = await apiFetch(
     `${API_BASE}/api/investigation/incidents/${incidentId}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({
+        status,
+        resolution_note: resolutionNote?.trim() || undefined,
+      }),
     },
   );
   if (!response.ok) {

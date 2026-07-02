@@ -1,7 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { FileText, MessageSquare, Search } from "lucide-react";
+import {
+  ExternalLink,
+  FileText,
+  MessageSquare,
+  Search,
+  Ticket,
+} from "lucide-react";
 
 import type { InvestigationReference, SmeRecommendation } from "@/lib/types";
 
@@ -11,31 +17,57 @@ const STATUS_DOT: Record<SmeRecommendation["status"], string> = {
   offline: "bg-zinc-500",
 };
 
-const REF_ICON = {
-  slack: MessageSquare,
-  notion: FileText,
-  postmortem: FileText,
+type ReferenceSection = {
+  key: string;
+  label: string;
+  icon: typeof MessageSquare;
+  items: InvestigationReference[];
 };
 
 export function InvestigationContextPanel({
   smes,
-  references,
+  slackThreads,
+  jiraTickets,
+  notionPages,
 }: {
   smes: SmeRecommendation[];
-  references: InvestigationReference[];
+  slackThreads: InvestigationReference[];
+  jiraTickets: InvestigationReference[];
+  notionPages: InvestigationReference[];
 }) {
   const [query, setQuery] = useState("");
 
-  const filteredReferences = useMemo(() => {
+  const sections: ReferenceSection[] = useMemo(
+    () => [
+      { key: "slack", label: "Slack threads", icon: MessageSquare, items: slackThreads },
+      { key: "jira", label: "Jira tickets", icon: Ticket, items: jiraTickets },
+      {
+        key: "notion",
+        label: "Notion & postmortems",
+        icon: FileText,
+        items: notionPages,
+      },
+    ],
+    [slackThreads, jiraTickets, notionPages],
+  );
+
+  const filteredSections = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return references;
-    return references.filter(
-      (ref) =>
-        ref.title.toLowerCase().includes(q) ||
-        ref.snippet.toLowerCase().includes(q) ||
-        ref.type.toLowerCase().includes(q),
-    );
-  }, [references, query]);
+    if (!q) return sections;
+    return sections
+      .map((section) => ({
+        ...section,
+        items: section.items.filter(
+          (ref) =>
+            ref.title.toLowerCase().includes(q) ||
+            ref.snippet.toLowerCase().includes(q) ||
+            ref.type.toLowerCase().includes(q),
+        ),
+      }))
+      .filter((section) => section.items.length > 0);
+  }, [sections, query]);
+
+  const hasReferences = sections.some((section) => section.items.length > 0);
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
@@ -49,7 +81,9 @@ export function InvestigationContextPanel({
         </p>
         <div className="space-y-2">
           {smes.length === 0 && (
-            <p className="text-sm text-zinc-500">No SMEs ranked yet.</p>
+            <p className="text-sm text-zinc-500">
+              No graph-linked owners ranked for this query yet.
+            </p>
           )}
           {smes.map((sme) => (
             <div
@@ -75,39 +109,54 @@ export function InvestigationContextPanel({
 
       <div className="flex min-h-0 flex-1 flex-col">
         <p className="mb-2 text-xs font-medium uppercase text-zinc-500">
-          References
+          Graph references
         </p>
         <div className="relative mb-3">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-500" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search Slack, Notion, postmortems…"
+            placeholder="Search Slack, Jira, Notion…"
             className="w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2 pl-9 pr-3 text-sm text-zinc-100 outline-none focus:border-zinc-500"
           />
         </div>
-        <div className="space-y-2 overflow-y-auto pr-1">
-          {filteredReferences.map((ref) => {
-            const Icon = REF_ICON[ref.type];
-            return (
-              <div
-                key={ref.id}
-                className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3"
-              >
-                <div className="mb-1 flex items-center gap-2">
-                  <Icon className="h-3.5 w-3.5 text-zinc-500" />
-                  <p className="text-sm font-medium text-zinc-200">
-                    {ref.title}
-                  </p>
-                </div>
-                <p className="text-xs text-zinc-500">{ref.snippet}</p>
-                <p className="mt-1 font-mono text-[10px] text-zinc-600">
-                  {ref.url}
-                </p>
+        <div className="space-y-4 overflow-y-auto pr-1">
+          {!hasReferences && (
+            <p className="text-sm text-zinc-500">
+              Run a chat query to pull live references from Cognee.
+            </p>
+          )}
+          {filteredSections.map((section) => (
+            <div key={section.key}>
+              <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-zinc-600">
+                {section.label}
+              </p>
+              <div className="space-y-2">
+                {section.items.map((ref) => {
+                  const Icon = section.icon;
+                  return (
+                    <div
+                      key={ref.id}
+                      className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3"
+                    >
+                      <div className="mb-1 flex items-center gap-2">
+                        <Icon className="h-3.5 w-3.5 text-zinc-500" />
+                        <p className="text-sm font-medium text-zinc-200">
+                          {ref.title}
+                        </p>
+                      </div>
+                      <p className="text-xs text-zinc-500">{ref.snippet}</p>
+                      <p className="mt-1 flex items-center gap-1 font-mono text-[10px] text-zinc-600">
+                        <ExternalLink className="h-3 w-3" />
+                        {ref.url}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-          {filteredReferences.length === 0 && (
+            </div>
+          ))}
+          {hasReferences && filteredSections.length === 0 && (
             <p className="text-sm text-zinc-500">No references match.</p>
           )}
         </div>

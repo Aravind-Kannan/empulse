@@ -29,6 +29,7 @@ export function InvestigationDashboard() {
     useState<InvestigationDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statusUpdating, setStatusUpdating] = useState(false);
 
   const loadIncidents = useCallback(async () => {
     const data = await fetchIncidents();
@@ -69,8 +70,10 @@ export function InvestigationDashboard() {
       : allIncidents.filter((item) => item.status === activeFilter);
 
   async function handleStatusChange(status: string) {
-    if (!activeIncident) return;
+    if (!activeIncident || statusUpdating) return;
     const previousStatus = activeIncident.status;
+    setStatusUpdating(true);
+    setError(null);
     try {
       const updated = await updateIncidentStatus(
         activeIncident.id,
@@ -89,6 +92,8 @@ export function InvestigationDashboard() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Status update failed");
+    } finally {
+      setStatusUpdating(false);
     }
   }
 
@@ -139,11 +144,14 @@ export function InvestigationDashboard() {
           workaround={diagnostics?.workaround ?? null}
           status={activeIncident?.status ?? "Open"}
           graphHops={diagnostics?.graph_hops ?? []}
+          statusUpdating={statusUpdating}
           onStatusChange={handleStatusChange}
         />
         <InvestigationContextPanel
           smes={diagnostics?.smes ?? []}
-          references={diagnostics?.references ?? []}
+          slackThreads={diagnostics?.slack_threads ?? []}
+          jiraTickets={diagnostics?.jira_tickets ?? []}
+          notionPages={diagnostics?.notion_pages ?? []}
         />
       </div>
     </div>
