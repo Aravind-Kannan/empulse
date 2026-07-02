@@ -32,9 +32,11 @@ export function IntegrationsDirectory({
     syncProgress,
     syncActionError,
     globalSyncPending,
+    disconnectingSources,
     getStatus,
     triggerGlobalSync,
     triggerSourceSync,
+    disconnect,
   } = useIntegrations();
   const { selectedApp, open, close } = useSelectedIntegration();
 
@@ -129,11 +131,15 @@ export function IntegrationsDirectory({
                   status={status}
                   connected={connected}
                   syncing={status === "syncing"}
+                  disconnecting={disconnectingSources.has(app.id)}
                   latestJob={latestBySource.get(app.id) ?? null}
                   sourceJobs={allJobsBySource.get(app.id) ?? []}
                   onConfigure={() => open(app.id)}
                   onSync={() => {
                     void triggerSourceSync(app.id);
+                  }}
+                  onDisconnect={() => {
+                    void disconnect(app.id);
                   }}
                 />
               );

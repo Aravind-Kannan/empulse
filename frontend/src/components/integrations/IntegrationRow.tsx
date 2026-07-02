@@ -7,6 +7,7 @@ import {
   Loader2,
   RefreshCw,
   Settings2,
+  Unplug,
 } from "lucide-react";
 
 import type { IntegrationDefinition, IntegrationStatus } from "@/lib/integrations";
@@ -47,10 +48,12 @@ interface IntegrationRowProps {
   status: IntegrationStatus;
   connected: boolean;
   syncing: boolean;
+  disconnecting: boolean;
   latestJob: IntegrationSyncJobStatusResponse | null;
   sourceJobs: IntegrationSyncJobStatusResponse[];
   onConfigure: () => void;
   onSync: () => void;
+  onDisconnect: () => void;
 }
 
 export function IntegrationRow({
@@ -58,10 +61,12 @@ export function IntegrationRow({
   status,
   connected,
   syncing,
+  disconnecting,
   latestJob,
   sourceJobs,
   onConfigure,
   onSync,
+  onDisconnect,
 }: IntegrationRowProps) {
   const badge = STATUS_STYLES[status];
   const isConnected = status === "connected" || status === "syncing";
@@ -157,7 +162,7 @@ export function IntegrationRow({
           {isConnected && (
             <button
               type="button"
-              disabled={!connected || isActive}
+              disabled={!connected || isActive || disconnecting}
               onClick={onSync}
               className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -170,6 +175,27 @@ export function IntegrationRow({
                 <>
                   <RefreshCw className="h-3.5 w-3.5" />
                   Sync
+                </>
+              )}
+            </button>
+          )}
+
+          {isConnected && (
+            <button
+              type="button"
+              disabled={disconnecting || isActive}
+              onClick={onDisconnect}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-300 transition hover:border-red-500/50 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {disconnecting ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Disconnecting…
+                </>
+              ) : (
+                <>
+                  <Unplug className="h-3.5 w-3.5" />
+                  Disconnect
                 </>
               )}
             </button>

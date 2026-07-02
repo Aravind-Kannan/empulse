@@ -32,7 +32,6 @@ from app.schemas.integrations import (
     TenantIntegrationsConfigResponse,
 )
 from app.services.integration_config_store import (
-    delete_source_config,
     get_all_configs,
     get_github_config,
     get_jira_config,
@@ -262,7 +261,7 @@ def configure_notion(
 
 
 @router.delete("/{source}/config", response_model=IntegrationConfigResponse)
-def remove_integration_config(
+async def remove_integration_config(
     source: str,
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
@@ -270,11 +269,30 @@ def remove_integration_config(
     normalized = source.lower().strip()
     if normalized not in {"github", "jira", "slack", "notion"}:
         raise HTTPException(status_code=404, detail=f"Unknown integration '{source}'.")
-    delete_source_config(db, tenant.id, normalized)
+
+    from app.services.integration_disconnect import disconnect_integration
+
+    try:
+        result = await disconnect_integration(db, tenant.id, normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Integration disconnect failed for %s", normalized)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to disconnect {normalized}: {exc}",
+        ) from exc
+
+    nodes_removed = int(result.get("graph_nodes_removed", 0))
+    detail = (
+        f"{normalized.title()} disconnected. Removed {nodes_removed} graph node(s) from Cognee."
+        if nodes_removed
+        else f"{normalized.title()} integration disconnected."
+    )
     return IntegrationConfigResponse(
         source=normalized,  # type: ignore[arg-type]
         configured=False,
-        message=f"{normalized.title()} integration disconnected.",
+        message=detail,
     )
 
 

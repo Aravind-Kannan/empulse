@@ -117,12 +117,13 @@ interface IntegrationsContextValue {
   syncActionError: string | null;
   pendingSyncSources: ReadonlySet<IntegrationId>;
   globalSyncPending: boolean;
+  disconnectingSources: ReadonlySet<IntegrationId>;
   updateConfig: <K extends IntegrationId>(
     id: K,
     patch: Partial<IntegrationConfigMap[K]>,
   ) => void;
   connect: (id: IntegrationId) => Promise<void>;
-  disconnect: (id: IntegrationId) => void;
+  disconnect: (id: IntegrationId) => Promise<void>;
   getStatus: (id: IntegrationId) => IntegrationStatus;
   triggerGlobalSync: () => Promise<void>;
   triggerSourceSync: (id: IntegrationId) => Promise<void>;
@@ -214,6 +215,9 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     () => new Set(),
   );
   const [globalSyncPending, setGlobalSyncPending] = useState(false);
+  const [disconnectingSources, setDisconnectingSources] = useState<Set<IntegrationId>>(
+    () => new Set(),
+  );
   const [syncActionError, setSyncActionError] = useState<string | null>(null);
   const hadActiveSyncJobs = useRef(false);
 
@@ -359,6 +363,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(
     async (id: IntegrationId) => {
+      setDisconnectingSources((prev) => new Set(prev).add(id));
+      setSyncActionError(null);
       const cleared = {
         ...DEFAULT_INTEGRATION_CONFIG[id],
         previouslyConnected: true,
@@ -366,11 +372,20 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       persist({ ...config, [id]: cleared });
       try {
         await deleteIntegrationConfig(id);
-      } catch {
-        // Local disconnect still applies if backend removal fails.
+        await refreshOperationalState();
+      } catch (err) {
+        setSyncActionError(
+          formatSyncJobError(formatFetchError(err, `${id} disconnect failed`)),
+        );
+      } finally {
+        setDisconnectingSources((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
       }
     },
-    [config, persist],
+    [config, persist, refreshOperationalState],
   );
 
   const statuses = useMemo(
@@ -444,6 +459,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       syncActionError,
       pendingSyncSources,
       globalSyncPending,
+      disconnectingSources,
       updateConfig,
       connect,
       disconnect,
@@ -460,6 +476,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       syncActionError,
       pendingSyncSources,
       globalSyncPending,
+      disconnectingSources,
       updateConfig,
       connect,
       disconnect,

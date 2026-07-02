@@ -71,6 +71,42 @@ def mark_sync_completed(source: str) -> None:
     _sync_timestamps[normalized] = datetime.now(UTC).isoformat()
 
 
+def clear_integration_telemetry(source: str) -> None:
+    """Drop in-memory telemetry for a disconnected integration source."""
+    global _jira_synced, _github_synced, _notion_synced, _slack_synced, _doa_available, _review_network
+
+    normalized = source.lower().strip()
+    _sync_timestamps.pop(normalized, None)
+
+    if normalized == "github":
+        _github_synced = False
+        _github_ownership.clear()
+        _github_spof_components.clear()
+        _github_employee_context.clear()
+        _github_open_prs_by_login.clear()
+        _component_bus_factor.clear()
+        _employee_max_doa_pct.clear()
+        _doa_available = False
+        _doa_decay_evidence.clear()
+        _github_activities.clear()
+        _review_network = None
+    elif normalized == "jira":
+        _jira_synced = False
+        _jira_backlog_by_employee.clear()
+        _jira_employee_signals.clear()
+        _jira_issues_cache.clear()
+    elif normalized == "notion":
+        _notion_synced = False
+        _notion_component_sources.clear()
+        _notion_employee_signals.clear()
+        _notion_expertise_warnings.clear()
+    elif normalized == "slack":
+        _slack_synced = False
+        _slack_employee_signals.clear()
+        _slack_escalation_warnings.clear()
+        _slack_threads_cache.clear()
+
+
 def get_sync_freshness() -> dict[str, str | None]:
     return {
         "github": _sync_timestamps.get("github"),

@@ -208,5 +208,47 @@
     "documents_appended": 0,
     "last_error": "too many values to unpack (expected 2)",
     "updated_at": "2026-07-02T12:25:17.551523+00:00"
+  },
+  "e41dab35-65cf-4f09-8e1b-368f48f8b08d": {
+    "tenant_id": "e41dab35-65cf-4f09-8e1b-368f48f8b08d",
+    "status": "failed",
+    "stages": [
+      {
+        "name": "Fetching Issues",
+        "status": "completed",
+        "started_at": "2026-07-02T14:40:54.624171+00:00",
+        "completed_at": "2026-07-02T14:40:54.775676+00:00",
+        "duration_ms": 151,
+        "detail": "Fetched 9 issues from all projects."
+      },
+      {
+        "name": "Sanitizing Metadata",
+        "status": "failed",
+        "started_at": "2026-07-02T14:40:54.776287+00:00",
+        "completed_at": null,
+        "duration_ms": null,
+        "detail": "Jira API POST /rest/api/3/search/jql failed (403): {\"error\": \"Failed to parse Connect Session Auth Token\"}"
+      },
+      {
+        "name": "Vector Append",
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "duration_ms": null,
+        "detail": null
+      },
+      {
+        "name": "Graph Cognify",
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "duration_ms": null,
+        "detail": null
+      }
+    ],
+    "issues_fetched": 9,
+    "documents_appended": 0,
+    "last_error": "Jira API POST /rest/api/3/search/jql failed (403): {\"error\": \"Failed to parse Connect Session Auth Token\"}",
+    "updated_at": "2026-07-02T14:40:55.394082+00:00"
   }
 }
