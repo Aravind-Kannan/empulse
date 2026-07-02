@@ -7,11 +7,11 @@ import { ExternalLink, Loader2, Unplug, X } from "lucide-react";
 import { useIntegrations } from "@/context/IntegrationsContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import {
-  connectJiraIntegration,
   discoverGitHubRepositories,
   discoverJiraProjects,
   listGitHubRepositoryBranches,
   saveGitHubIntegrationConfig,
+  saveJiraIntegrationConfig,
   saveNotionIntegrationConfig,
   saveSlackIntegrationConfig,
   syncIntegrationSource,
@@ -391,7 +391,7 @@ export function IntegrationConfigDrawer({
           message = await validateJiraIntegration(jiraDraft);
         });
         await runStep("save", async () => {
-          await connectJiraIntegration(jiraDraft);
+          await saveJiraIntegrationConfig(jiraDraft);
           updateConfig("jira", {
             siteUrl: normalizedSite,
             projectKeys: normalizedKeys,
@@ -400,9 +400,9 @@ export function IntegrationConfigDrawer({
           });
         });
         await runStep("sync", async () => {
-          // connectJiraIntegration queues Cognee sync on the server.
+          await syncIntegrationSource("jira");
         });
-        setSuccess(`${message} Cognee sync has started in the background.`);
+        setSuccess(`${message} Connected and synced.`);
       }
 
       await runStep("refresh", async () => {

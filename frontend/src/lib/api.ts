@@ -15,6 +15,7 @@ import type {
   EraTeamRiskyChangesResponse,
   GlobalSyncResult,
   HandoverResponse,
+  IncidentListResult,
   IncidentStatus,
   IncidentSummary,
   IntegrationSyncJobAcceptedResponse,
@@ -22,6 +23,7 @@ import type {
   IntegrationSyncJobStatusResponse,
   IntegrationSyncJobsAcceptedResponse,
   IntegrationSyncResult,
+  InvestigationAnalysisStatus,
   InvestigationDiagnostics,
   KraAnalyticsResponse,
   KraBackupAssignmentResponse,
@@ -488,7 +490,7 @@ export async function assignKraBackup(payload: {
 
 export async function fetchIncidents(
   status?: IncidentStatus,
-): Promise<IncidentSummary[]> {
+): Promise<IncidentListResult> {
   const query = status ? `?status=${encodeURIComponent(status)}` : "";
   const response = await apiFetch(`${API_BASE}/api/investigation/incidents${query}`, {
     cache: "no-store",
@@ -496,8 +498,7 @@ export async function fetchIncidents(
   if (!response.ok) {
     throw new Error(`Failed to load incidents (${response.status})`);
   }
-  const data = await response.json();
-  return data.incidents;
+  return response.json();
 }
 
 export async function updateIncidentStatus(
@@ -522,20 +523,24 @@ export async function updateIncidentStatus(
   return response.json();
 }
 
-export async function streamInvestigationChat(
-  message: string,
-  incidentId: string | null,
-  onToken: (token: string) => void,
-  onDiagnostics: (diagnostics: InvestigationDiagnostics) => void,
-): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/api/investigation/chat/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, incident_id: incidentId }),
-  });
+type InvestigationStreamPayload = {
+  type: string;
+  content?: string;
+  phase?: InvestigationAnalysisStatus["phase"];
+  message?: string;
+  diagnostics?: InvestigationDiagnostics;
+};
 
-  if (!response.ok || !response.body) {
-    throw new Error(`Chat stream failed (${response.status})`);
+async function readInvestigationSseStream(
+  response: Response,
+  handlers: {
+    onStatus?: (status: InvestigationAnalysisStatus) => void;
+    onToken?: (token: string) => void;
+    onDiagnostics?: (diagnostics: InvestigationDiagnostics) => void;
+  },
+): Promise<void> {
+  if (!response.body) {
+    throw new Error("Stream body missing");
   }
 
   const reader = response.body.getReader();
@@ -552,18 +557,56 @@ export async function streamInvestigationChat(
 
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
-      const payload = JSON.parse(line.slice(6)) as {
-        type: string;
-        content?: string;
-        diagnostics?: InvestigationDiagnostics;
-      };
-      if (payload.type === "token" && payload.content) {
-        onToken(payload.content);
+      const payload = JSON.parse(line.slice(6)) as InvestigationStreamPayload;
+      if (payload.type === "status" && payload.phase && payload.message) {
+        handlers.onStatus?.({ phase: payload.phase, message: payload.message });
+      } else if (payload.type === "token" && payload.content) {
+        handlers.onToken?.(payload.content);
       } else if (payload.type === "diagnostics" && payload.diagnostics) {
-        onDiagnostics(payload.diagnostics);
+        handlers.onDiagnostics?.(payload.diagnostics);
+      } else if (payload.type === "error" && payload.message) {
+        throw new Error(payload.message);
       }
     }
   }
+}
+
+export async function streamIncidentBriefing(
+  incidentId: string,
+  onStatus: (status: InvestigationAnalysisStatus) => void,
+  onDiagnostics: (diagnostics: InvestigationDiagnostics) => void,
+): Promise<void> {
+  const response = await apiFetch(
+    `${API_BASE}/api/investigation/incidents/${encodeURIComponent(incidentId)}/briefing/stream`,
+    {
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Incident briefing failed (${response.status})`);
+  }
+
+  await readInvestigationSseStream(response, { onStatus, onDiagnostics });
+}
+
+export async function streamInvestigationChat(
+  message: string,
+  incidentId: string | null,
+  onToken: (token: string) => void,
+  onStatus?: (status: InvestigationAnalysisStatus) => void,
+): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/api/investigation/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, incident_id: incidentId }),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Chat stream failed (${response.status})`);
+  }
+
+  await readInvestigationSseStream(response, { onStatus, onToken });
 }
 
 export async function fetchDashboardMetrics(): Promise<DashboardMetrics> {
@@ -933,7 +976,19 @@ export async function connectJiraIntegration(
 export async function saveJiraIntegrationConfig(
   config: IntegrationConfigMap["jira"],
 ): Promise<void> {
-  await connectJiraIntegration(config);
+  const response = await apiFetch(`${API_BASE}/api/integrations/jira/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      site_url: normalizeJiraSiteUrl(config.siteUrl),
+      project_keys: config.projectKeys,
+      api_token: config.apiToken,
+      account_email: config.authEmail,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Jira config save failed"));
+  }
 }
 
 export async function syncIntegrationSource(
@@ -999,7 +1054,7 @@ export async function saveAndSyncIntegration(
     return syncIntegrationSource("github");
   }
   if (id === "jira") {
-    await connectJiraIntegration(config.jira);
+    await saveJiraIntegrationConfig(config.jira);
     return syncIntegrationSource("jira");
   }
   if (id === "notion") {

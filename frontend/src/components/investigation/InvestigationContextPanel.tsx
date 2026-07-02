@@ -29,11 +29,15 @@ export function InvestigationContextPanel({
   slackThreads,
   jiraTickets,
   notionPages,
+  analyzing,
+  analysisMessage,
 }: {
   smes: SmeRecommendation[];
   slackThreads: InvestigationReference[];
   jiraTickets: InvestigationReference[];
   notionPages: InvestigationReference[];
+  analyzing: boolean;
+  analysisMessage: string | null;
 }) {
   const [query, setQuery] = useState("");
 
@@ -80,12 +84,28 @@ export function InvestigationContextPanel({
           Recommended SMEs
         </p>
         <div className="space-y-2">
-          {smes.length === 0 && (
+          {analyzing ? (
+            <>
+              <p className="text-xs text-sky-400">{analysisMessage ?? "Finding experts…"}</p>
+              {[1, 2, 3].map((item) => (
+                <div
+                  key={item}
+                  className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2"
+                >
+                  <div className="space-y-2">
+                    <div className="h-3 w-28 animate-pulse rounded bg-zinc-800" />
+                    <div className="h-2 w-20 animate-pulse rounded bg-zinc-800" />
+                  </div>
+                  <div className="h-3 w-8 animate-pulse rounded bg-zinc-800" />
+                </div>
+              ))}
+            </>
+          ) : smes.length === 0 ? (
             <p className="text-sm text-zinc-500">
-              No graph-linked owners ranked for this query yet.
+              No mapped experts yet. Link Jira/Slack users in Identity Mapping.
             </p>
-          )}
-          {smes.map((sme) => (
+          ) : (
+            smes.map((sme) => (
             <div
               key={sme.employee_id}
               className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2"
@@ -103,7 +123,8 @@ export function InvestigationContextPanel({
                 {sme.compatibility_score}%
               </span>
             </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
 
@@ -121,12 +142,27 @@ export function InvestigationContextPanel({
           />
         </div>
         <div className="space-y-4 overflow-y-auto pr-1">
-          {!hasReferences && (
+          {analyzing ? (
+            <div className="space-y-3">
+              <p className="text-xs text-sky-400">
+                {analysisMessage ?? "Pulling related references…"}
+              </p>
+              {[1, 2].map((item) => (
+                <div
+                  key={item}
+                  className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3"
+                >
+                  <div className="mb-2 h-3 w-2/3 animate-pulse rounded bg-zinc-800" />
+                  <div className="h-2 w-full animate-pulse rounded bg-zinc-800" />
+                </div>
+              ))}
+            </div>
+          ) : !hasReferences ? (
             <p className="text-sm text-zinc-500">
-              Run a chat query to pull live references from Cognee.
+              Ask a question in chat to pull related references.
             </p>
-          )}
-          {filteredSections.map((section) => (
+          ) : null}
+          {!analyzing && filteredSections.map((section) => (
             <div key={section.key}>
               <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-zinc-600">
                 {section.label}
@@ -156,7 +192,7 @@ export function InvestigationContextPanel({
               </div>
             </div>
           ))}
-          {hasReferences && filteredSections.length === 0 && (
+          {!analyzing && hasReferences && filteredSections.length === 0 && (
             <p className="text-sm text-zinc-500">No references match.</p>
           )}
         </div>

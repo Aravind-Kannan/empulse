@@ -1,100 +1,110 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Send } from "lucide-react";
 
 import { streamInvestigationChat } from "@/lib/api";
-import type { InvestigationDiagnostics } from "@/lib/types";
+import type { InvestigationAnalysisStatus } from "@/lib/types";
+import type { InvestigationChatMessage } from "@/hooks/useIncidentInvestigation";
 
-const CHIP_SUGGESTIONS = [
-  "Payment Gateway is timing out. Jira: PROJ-992",
-  "Auth Service returning 503 errors",
-  "Notification Hub retry queue backing up",
-  "Escalate to on-call engineer",
-  "Check recent deployments for Payment Gateway",
-];
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-}
+import { InvestigationAnalysisProgress } from "./InvestigationAnalysisProgress";
 
 interface InvestigationChatPanelProps {
   incidentId: string | null;
-  onDiagnostics: (diagnostics: InvestigationDiagnostics) => void;
+  activeIncidentTitle: string | null;
+  suggestions: string[];
+  messages: InvestigationChatMessage[];
+  onMessagesChange: (messages: InvestigationChatMessage[]) => void;
 }
 
 export function InvestigationChatPanel({
   incidentId,
-  onDiagnostics,
+  activeIncidentTitle,
+  suggestions,
+  messages,
+  onMessagesChange,
 }: InvestigationChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "I'm connected to the Cognee knowledge graph. Describe the incident or pick a suggestion chip to begin traversal.",
-    },
-  ]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [analysisStatus, setAnalysisStatus] =
+    useState<InvestigationAnalysisStatus | null>(null);
   const streamIdRef = useRef<string | null>(null);
+  const assistantContentRef = useRef("");
+
+  useEffect(() => {
+    setInput("");
+    setStreaming(false);
+    setAnalysisStatus(null);
+    streamIdRef.current = null;
+    assistantContentRef.current = "";
+  }, [incidentId]);
+
+  function patchAssistantMessage(
+    baseMessages: InvestigationChatMessage[],
+    assistantId: string,
+    content: string,
+  ) {
+    return baseMessages.map((msg) =>
+      msg.id === assistantId ? { ...msg, content } : msg,
+    );
+  }
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
 
-    const userMsg: ChatMessage = {
+    const userMsg: InvestigationChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: trimmed,
     };
-    setMessages((prev) => [...prev, userMsg]);
+    const assistantId = `assistant-${Date.now()}`;
+    const baseMessages: InvestigationChatMessage[] = [
+      ...messages,
+      userMsg,
+      { id: assistantId, role: "assistant", content: "" },
+    ];
+
+    onMessagesChange(baseMessages);
     setInput("");
     setStreaming(true);
-
-    const assistantId = `assistant-${Date.now()}`;
+    setAnalysisStatus(null);
     streamIdRef.current = assistantId;
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", content: "" },
-    ]);
+    assistantContentRef.current = "";
 
     try {
       await streamInvestigationChat(
         trimmed,
         incidentId,
         (token) => {
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantId
-                ? { ...msg, content: msg.content + token }
-                : msg,
+          assistantContentRef.current += token;
+          onMessagesChange(
+            patchAssistantMessage(
+              baseMessages,
+              assistantId,
+              assistantContentRef.current,
             ),
           );
         },
-        (diagnostics) => {
-          onDiagnostics(diagnostics);
+        (status) => {
+          setAnalysisStatus(status);
         },
       );
     } catch (err) {
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantId
-            ? {
-                ...msg,
-                content:
-                  err instanceof Error
-                    ? `Stream failed: ${err.message}`
-                    : "Stream failed.",
-              }
-            : msg,
+      onMessagesChange(
+        patchAssistantMessage(
+          baseMessages,
+          assistantId,
+          err instanceof Error
+            ? `Could not complete analysis: ${err.message}`
+            : "Could not complete analysis.",
         ),
       );
     } finally {
       setStreaming(false);
+      setAnalysisStatus(null);
       streamIdRef.current = null;
+      assistantContentRef.current = "";
     }
   }
 
@@ -117,27 +127,49 @@ export function InvestigationChatPanel({
             }`}
           >
             {msg.content}
-            {streaming && msg.id === streamIdRef.current && (
-              <Loader2 className="mt-1 inline h-3 w-3 animate-spin text-zinc-400" />
-            )}
+            {streaming &&
+              msg.id === streamIdRef.current &&
+              !msg.content &&
+              analysisStatus && (
+                <InvestigationAnalysisProgress
+                  phase={analysisStatus.phase}
+                  message={analysisStatus.message}
+                />
+              )}
+            {streaming &&
+              msg.id === streamIdRef.current &&
+              !msg.content &&
+              !analysisStatus && (
+                <span className="inline-flex items-center gap-2 text-sm text-zinc-400">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Starting analysis…
+                </span>
+              )}
+            {streaming &&
+              msg.id === streamIdRef.current &&
+              msg.content && (
+                <Loader2 className="mt-1 inline h-3 w-3 animate-spin text-zinc-400" />
+              )}
           </div>
         ))}
       </div>
 
       <div className="border-t border-zinc-800 p-4">
-        <div className="mb-3 flex flex-wrap gap-2">
-          {CHIP_SUGGESTIONS.map((chip) => (
-            <button
-              key={chip}
-              type="button"
-              disabled={streaming}
-              onClick={() => sendMessage(chip)}
-              className="rounded-full border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100 disabled:opacity-50"
-            >
-              {chip}
-            </button>
-          ))}
-        </div>
+        {suggestions.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {suggestions.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                disabled={streaming || !incidentId}
+                onClick={() => sendMessage(chip)}
+                className="rounded-full border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100 disabled:opacity-50"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -148,13 +180,17 @@ export function InvestigationChatPanel({
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Payment Gateway is timing out. Jira: PROJ-992"
-            disabled={streaming}
+            placeholder={
+              activeIncidentTitle
+                ? `Ask about ${activeIncidentTitle}…`
+                : "Select an incident to ask follow-up questions…"
+            }
+            disabled={streaming || !incidentId}
             className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500 disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={streaming || !input.trim()}
+            disabled={streaming || !input.trim() || !incidentId}
             className="flex items-center justify-center rounded-lg bg-zinc-100 px-3 py-2 text-slate-950 transition hover:bg-white disabled:opacity-50"
           >
             {streaming ? (

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import time
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import cognee
 import requests
 from sqlalchemy.orm import Session
 
@@ -25,17 +23,12 @@ from app.schemas.jira import (
     parse_project_keys,
 )
 from app.services.credential_crypto import encrypt_secret
-from app.services.integration_feeds import MOCK_JIRA_ISSUES
-from app.services.integration_telemetry import apply_jira_telemetry
-from app.services.tenant_cognee import (
-    tenant_add_and_cognify,
-    tenant_add_data_points,
-    tenant_cognee_context,
-)
-from app.tenancy import tenant_dataset_name
+from app.services.integration_sync import process_external_app_sync
+from app.services.tenant_cognee import tenant_dataset_name
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 DEBUG_STATE_PATH = BACKEND_ROOT / "data" / "jira_debug_state.json"
+logger = logging.getLogger(__name__)
 
 JIRA_STAGES = (
     "Fetching Issues",
@@ -82,6 +75,45 @@ def get_jira_integration(db: Session, tenant_id: uuid.UUID) -> JiraIntegration |
         .filter(JiraIntegration.tenant_id == tenant_id)
         .one_or_none()
     )
+
+
+def upsert_jira_integration_from_config(
+    db: Session,
+    tenant_id: uuid.UUID,
+    config: JiraConfigRequest,
+    *,
+    status: str = "connected",
+) -> JiraIntegration:
+    """Persist encrypted Jira credentials on the legacy integration row."""
+    token = config.api_token.strip()
+    site_url = config.site_url.strip()
+    account_email = config.account_email.strip()
+    if not token or not site_url or not account_email:
+        raise ValueError("Jira site URL, account email, and API token are required.")
+
+    encrypted = encrypt_secret(token)
+    integration = get_jira_integration(db, tenant_id)
+    if integration:
+        integration.jira_domain = site_url
+        integration.auth_email = account_email
+        integration.encrypted_api_token = encrypted
+        integration.project_keys = config.project_keys
+        integration.status = status
+        integration.updated_at = _utc_now()
+    else:
+        integration = JiraIntegration(
+            tenant_id=tenant_id,
+            jira_domain=site_url,
+            auth_email=account_email,
+            encrypted_api_token=encrypted,
+            project_keys=config.project_keys,
+            status=status,
+        )
+        db.add(integration)
+
+    db.commit()
+    db.refresh(integration)
+    return integration
 
 
 def get_jira_config_for_tenant(
@@ -197,41 +229,25 @@ def connect_jira_integration(
             payload.api_token,
         )
 
-    encrypted = encrypt_secret(payload.api_token)
-    integration = get_jira_integration(db, tenant_id)
-
-    if integration:
-        integration.jira_domain = payload.jira_domain
-        integration.auth_email = str(payload.auth_email)
-        integration.encrypted_api_token = encrypted
-        integration.project_keys = payload.project_keys
-        integration.status = "syncing"
-        integration.updated_at = _utc_now()
-    else:
-        integration = JiraIntegration(
-            tenant_id=tenant_id,
-            jira_domain=payload.jira_domain,
-            auth_email=str(payload.auth_email),
-            encrypted_api_token=encrypted,
-            project_keys=payload.project_keys,
-            status="syncing",
-        )
-        db.add(integration)
-
-    db.commit()
-    db.refresh(integration)
+    config = JiraConfigRequest(
+        site_url=payload.jira_domain,
+        project_keys=payload.project_keys,
+        api_token=payload.api_token,
+        account_email=str(payload.auth_email),
+    )
+    integration = upsert_jira_integration_from_config(
+        db,
+        tenant_id,
+        config,
+        status="syncing",
+    )
 
     from app.services.integration_config_store import save_jira_config
 
     save_jira_config(
         db,
         tenant_id,
-        JiraConfigRequest(
-            site_url=payload.jira_domain,
-            project_keys=payload.project_keys,
-            api_token=payload.api_token,
-            account_email=str(payload.auth_email),
-        ),
+        config,
         validated=True,
     )
 
@@ -306,153 +322,73 @@ def _update_stage(
     _write_debug_state(state)
 
 
-def _filter_issues(project_keys: str) -> list[dict[str, Any]]:
-    keys = parse_project_keys(project_keys)
-    if not keys:
-        return list(MOCK_JIRA_ISSUES)
-    key_set = set(keys)
-    return [issue for issue in MOCK_JIRA_ISSUES if issue["project_key"] in key_set]
-
-
-def _sanitize_issues(issues: list[dict[str, Any]]) -> list[str]:
-    documents: list[str] = []
-    for issue in issues:
-        assignee = issue.get("assignee_employee_id") or "Unassigned"
-        documents.append(
-            f"{issue['ticket_id']} [{issue['issue_type']}] "
-            f"Priority: {issue['priority']} | Status: {issue['status']} | "
-            f"Project: {issue['project_key']} | Assignee: {assignee}\n"
-            f"{issue.get('description', '')}"
-        )
-    return documents
-
-
 async def sync_jira_to_cognee(tenant_id: uuid.UUID, db: Session) -> dict[str, Any]:
-    """
-    Fetch (mock) Jira issues, append to Cognee, cognify, and update debug diagnostics.
-    """
+    """Fetch live Jira issues and sync them into the tenant Cognee dataset."""
+    from app.services.integration_config_store import get_jira_config
+
+    config = get_jira_config(db, tenant_id)
+    if not config:
+        raise ValueError("Jira integration is not configured for this tenant.")
+
     integration = get_jira_integration(db, tenant_id)
     if not integration:
-        raise ValueError("Jira integration is not configured for this tenant.")
+        integration = upsert_jira_integration_from_config(
+            db,
+            tenant_id,
+            config,
+            status="syncing",
+        )
+    else:
+        integration.status = "syncing"
+        integration.updated_at = _utc_now()
+        db.commit()
 
     state = _init_debug_state(tenant_id)
     _write_debug_state(state)
+    started = _iso_now()
 
     try:
-        # Stage 1: Fetching Issues
-        t0 = time.perf_counter()
-        started = _iso_now()
         _update_stage(state, "Fetching Issues", status="running", started_at=started)
-        await asyncio.sleep(0.15)
 
-        issues = _filter_issues(integration.project_keys)
-        scope = (
-            f"projects {integration.project_keys}"
-            if integration.project_keys.strip()
-            else "all projects"
-        )
-        fetch_ms = int((time.perf_counter() - t0) * 1000)
-        state.issues_fetched = len(issues)
+        result = await process_external_app_sync("jira", db, tenant_id)
+
+        issues_count = int(result.get("graph_nodes_created", 0))
+        state.issues_fetched = issues_count
+        state.documents_appended = int(result.get("documents_ingested", 0))
+        now = _iso_now()
+
         _update_stage(
             state,
             "Fetching Issues",
             status="completed",
-            completed_at=_iso_now(),
-            duration_ms=fetch_ms,
-            detail=f"Fetched {len(issues)} issues from {scope}.",
+            completed_at=now,
+            detail=f"Fetched {issues_count} Jira issues.",
         )
-
-        # Stage 2: Sanitizing Metadata
-        t1 = time.perf_counter()
-        _update_stage(
-            state,
-            "Sanitizing Metadata",
-            status="running",
-            started_at=_iso_now(),
-        )
-        await asyncio.sleep(0.1)
-        documents = _sanitize_issues(issues)
-        config = _integration_to_config(integration)
-        from app.services.integration_sync import (
-            _load_org_context,
-            analyze_jira_payload,
-            fetch_and_map_jira_issues,
-        )
-
-        employee_nodes, component_nodes, components_by_id = _load_org_context(
-            db, tenant_id
-        )
-        jira_issues = await asyncio.to_thread(
-            fetch_and_map_jira_issues,
-            config,
-            components_by_id,
-        )
-        narrative, data_points, edge_count = analyze_jira_payload(
-            config,
-            employee_nodes,
-            component_nodes,
-            db,
-            tenant_id,
-            jira_issues,
-        )
-        sanitize_ms = int((time.perf_counter() - t1) * 1000)
         _update_stage(
             state,
             "Sanitizing Metadata",
             status="completed",
-            completed_at=_iso_now(),
-            duration_ms=sanitize_ms,
-            detail=f"Sanitized {len(documents)} issue documents.",
+            completed_at=now,
+            detail="Mapped assignees and components.",
         )
-
-        # Stage 3: Vector Append
-        t2 = time.perf_counter()
-        _update_stage(state, "Vector Append", status="running", started_at=_iso_now())
-        payload = "\n\n---\n\n".join(documents)
-        dataset = tenant_dataset_name(tenant_id)
-        async with tenant_cognee_context(tenant_id):
-            await cognee.add(payload, dataset_name=dataset)
-        if data_points:
-            await tenant_add_data_points(tenant_id, data_points)
-        append_ms = int((time.perf_counter() - t2) * 1000)
-        state.documents_appended = len(documents)
         _update_stage(
             state,
             "Vector Append",
             status="completed",
-            completed_at=_iso_now(),
-            duration_ms=append_ms,
-            detail=f"Appended {len(documents)} documents to dataset {dataset}.",
+            completed_at=now,
+            detail=f"Appended documents to {result.get('cognee_dataset', '')}.",
         )
-
-        # Stage 4: Graph Cognify
-        t3 = time.perf_counter()
-        _update_stage(state, "Graph Cognify", status="running", started_at=_iso_now())
-        custom_prompt = (
-            "Extract Jira issue metadata including ticket IDs, issue types, priorities, "
-            "status indicators, infrastructure references, and link assignees and blocked "
-            "components via assignedTo and blocksComponent relationships."
-        )
-        await tenant_add_and_cognify(
-            narrative,
-            tenant_id,
-            custom_prompt=custom_prompt,
-        )
-        cognify_ms = int((time.perf_counter() - t3) * 1000)
         _update_stage(
             state,
             "Graph Cognify",
             status="completed",
-            completed_at=_iso_now(),
-            duration_ms=cognify_ms,
-            detail="Cognee graph cognify completed.",
+            completed_at=now,
+            detail="Structured Jira graph nodes written to Cognee.",
         )
-
-        apply_jira_telemetry(db, tenant_id)
 
         integration.status = "connected"
         integration.last_synced_at = _utc_now()
-        integration.issues_synced_count = len(issues)
+        integration.issues_synced_count = issues_count
         integration.updated_at = _utc_now()
         db.commit()
 
@@ -462,19 +398,20 @@ async def sync_jira_to_cognee(tenant_id: uuid.UUID, db: Session) -> dict[str, An
 
         return {
             "source": "jira",
-            "cognee_dataset": dataset,
-            "documents_ingested": len(documents),
-            "graph_nodes_created": len(data_points),
-            "graph_edges_created": edge_count,
-            "narrative_preview": narrative[:280],
-            "issues_synced": len(issues),
+            "cognee_dataset": result.get("cognee_dataset", tenant_dataset_name(tenant_id)),
+            "documents_ingested": state.documents_appended,
+            "graph_nodes_created": issues_count,
+            "graph_edges_created": int(result.get("graph_edges_created", 0)),
+            "narrative_preview": str(result.get("narrative_preview", "")),
+            "issues_synced": issues_count,
         }
     except Exception as exc:
+        logger.exception("Jira Cognee sync failed for tenant %s", tenant_id)
         state.status = "failed"
         state.last_error = str(exc)
         state.updated_at = _iso_now()
         for stage in state.stages:
-            if stage.status == "running":
+            if stage.status in {"running", "pending"}:
                 stage.status = "failed"
                 stage.detail = str(exc)
         _write_debug_state(state)

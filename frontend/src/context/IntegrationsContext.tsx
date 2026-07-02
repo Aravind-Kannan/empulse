@@ -424,6 +424,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     [statuses],
   );
 
+  const globalSyncInFlight = useRef(false);
+
   const triggerSourceSync = useCallback(
     async (id: IntegrationId) => {
       if (!BACKEND_SYNC_SOURCES.has(id)) return;
@@ -449,15 +451,22 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   );
 
   const triggerGlobalSync = useCallback(async () => {
+    if (globalSyncInFlight.current) return;
+
     const connected = INTEGRATION_CATALOG.filter((app) =>
       isIntegrationConnected(app.id, config),
     );
     if (connected.length === 0) return;
 
+    globalSyncInFlight.current = true;
+
     const backendSources = connected.filter((app) =>
       BACKEND_SYNC_SOURCES.has(app.id),
     );
-    if (backendSources.length === 0) return;
+    if (backendSources.length === 0) {
+      globalSyncInFlight.current = false;
+      return;
+    }
 
     setSyncActionError(null);
     setGlobalSyncPending(true);
@@ -471,6 +480,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       setSyncActionError(formatSyncJobError(formatFetchError(err, "Global sync failed")));
     } finally {
+      globalSyncInFlight.current = false;
       setGlobalSyncPending(false);
       setPendingSyncSources(new Set());
     }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -28,6 +29,7 @@ from app.services.jira_service import (
 from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/integrations/jira", tags=["jira"])
+logger = logging.getLogger(__name__)
 
 
 async def _run_jira_sync_background(tenant_id: uuid.UUID) -> None:
@@ -39,7 +41,7 @@ async def _execute_jira_sync(tenant_id: uuid.UUID) -> None:
     try:
         await sync_jira_to_cognee(tenant_id, db)
     except Exception:
-        pass
+        logger.exception("Background Jira sync failed for tenant %s", tenant_id)
     finally:
         db.close()
 

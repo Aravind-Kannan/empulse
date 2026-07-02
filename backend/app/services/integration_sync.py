@@ -894,6 +894,14 @@ async def process_external_app_sync(
             jira_issues,
             high_priorities=high_priorities,
         )
+        from app.services.jira_service import get_jira_integration
+
+        integration = get_jira_integration(db, tenant_id)
+        if integration:
+            integration.status = "connected"
+            integration.last_synced_at = datetime.now(UTC).replace(tzinfo=None)
+            integration.issues_synced_count = len(jira_issues)
+            integration.updated_at = datetime.now(UTC).replace(tzinfo=None)
     elif normalized == "notion" and notion_snapshot is not None:
         telemetry["notion_docs"] = apply_notion_telemetry(
             db,
@@ -911,6 +919,11 @@ async def process_external_app_sync(
 
     mark_sync_completed(normalized)
     record_integration_sync(db, tenant_id, normalized)
+
+    if normalized == "jira":
+        from app.services.incident_feed import invalidate_incident_feed_cache
+
+        invalidate_incident_feed_cache(tenant_id)
 
     ledger_note = ingest_plan.result_note()
     narrative_preview = narrative[:280]

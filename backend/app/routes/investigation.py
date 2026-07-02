@@ -10,9 +10,11 @@ from app.schemas.investigation import (
     IncidentSummary,
     InvestigationChatRequest,
 )
+from app.services.incident_feed import get_incident_by_id
 from app.services.investigation import (
     INCIDENT_STATUSES,
     list_incidents,
+    stream_incident_briefing,
     stream_investigation_chat,
     update_incident_status,
     write_incident_memory_to_cognee,
@@ -44,17 +46,8 @@ async def patch_incident_status(
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> IncidentSummary:
-    from app.models.operational import IncidentRecord
-
-    record = (
-        db.query(IncidentRecord)
-        .filter(
-            IncidentRecord.id == incident_id,
-            IncidentRecord.tenant_id == tenant.id,
-        )
-        .one_or_none()
-    )
-    if not record:
+    live = get_incident_by_id(db, tenant.id, incident_id)
+    if not live:
         raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found.")
 
     try:
@@ -68,11 +61,35 @@ async def patch_incident_status(
         incident_id,
         payload.status,
         resolution_note=payload.resolution_note,
-        title=record.title,
-        system_scope=record.system_scope,
-        jira_id=record.jira_id,
+        title=live.title,
+        system_scope=live.system_scope,
+        jira_id=live.jira_id or None,
     )
+    from app.services.investigation import invalidate_briefing_cache
+
+    invalidate_briefing_cache(tenant.id, incident_id)
     return summary
+
+
+@router.post("/incidents/{incident_id}/briefing/stream")
+async def incident_briefing_stream(
+    incident_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+):
+    live = get_incident_by_id(db, tenant.id, incident_id)
+    if not live:
+        raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found.")
+
+    return StreamingResponse(
+        stream_incident_briefing(live, tenant, db),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/chat/stream")

@@ -10,18 +10,26 @@ IncidentStatus = Literal[
     "Closed",
 ]
 
+IncidentSource = Literal["jira", "slack"]
+
 
 class IncidentSummary(BaseModel):
     id: str
     title: str
     status: IncidentStatus
     system_scope: str
-    jira_id: str
+    jira_id: str = ""
     updated_at: str
+    source: IncidentSource
+    priority: str | None = None
+    channel_name: str | None = None
 
 
 class IncidentListResponse(BaseModel):
     incidents: list[IncidentSummary]
+    suggestions: list[str] = Field(default_factory=list)
+    sources_connected: dict[str, bool] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class IncidentStatusUpdate(BaseModel):
@@ -63,6 +71,8 @@ class InvestigationChatRequest(BaseModel):
 
 
 class InvestigationChatChunk(BaseModel):
-    type: Literal["token", "diagnostics", "done"]
+    type: Literal["token", "diagnostics", "status", "done"]
     content: str | None = None
+    phase: Literal["searching", "matching", "summarizing"] | None = None
+    message: str | None = None
     diagnostics: InvestigationDiagnostics | None = None
