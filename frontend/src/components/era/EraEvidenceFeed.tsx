@@ -78,7 +78,7 @@ export function EraEvidenceFeed({
             const highlighted = item.employee_id === selectedId;
             return (
               <button
-                key={item.id}
+                key={`${item.id}:${item.employee_id}`}
                 type="button"
                 onClick={() => onSelectEmployee(item.employee_id)}
                 className={`flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-zinc-800/40 ${

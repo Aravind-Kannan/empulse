@@ -549,12 +549,12 @@ export interface InvestigationDiagnostics {
   probable_root_cause: string;
   confidence_score: number;
   workaround: string;
+  workaround_available?: boolean;
   smes: SmeRecommendation[];
   references: InvestigationReference[];
   slack_threads: InvestigationReference[];
   jira_tickets: InvestigationReference[];
   notion_pages: InvestigationReference[];
-  graph_hops: string[];
 }
 
 export type InvestigationAnalysisPhase =

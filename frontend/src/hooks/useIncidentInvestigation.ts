@@ -24,16 +24,30 @@ export interface IncidentInvestigationCacheEntry {
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
-export function defaultChatWelcome(
-  title: string | null,
-): InvestigationChatMessage[] {
+export const INVESTIGATION_CHAT_WELCOME_MESSAGE =
+  "Ask follow-up questions about the incident selected above. " +
+  "Diagnostics, SMEs, and references load in the center and right panels when you open a card.";
+
+export const INVESTIGATION_CHAT_NO_INCIDENT_MESSAGE =
+  "Select an incident card above to load its briefing. " +
+  "Questions you ask here stay scoped to that incident.";
+
+export function defaultChatWelcome(): InvestigationChatMessage[] {
   return [
     {
       id: "welcome",
       role: "assistant",
-      content: title
-        ? `Incident briefing is in the center and right panels. Ask follow-up questions about "${title}" below.`
-        : "Select an incident above to load its briefing.",
+      content: INVESTIGATION_CHAT_WELCOME_MESSAGE,
+    },
+  ];
+}
+
+export function defaultChatWelcomeNoIncident(): InvestigationChatMessage[] {
+  return [
+    {
+      id: "welcome",
+      role: "assistant",
+      content: INVESTIGATION_CHAT_NO_INCIDENT_MESSAGE,
     },
   ];
 }
@@ -54,7 +68,7 @@ export function useIncidentInvestigation(activeIncident: IncidentSummary | null)
   const [briefingStatus, setBriefingStatus] =
     useState<InvestigationAnalysisStatus | null>(null);
   const [chatMessages, setChatMessages] = useState<InvestigationChatMessage[]>(
-    defaultChatWelcome(null),
+    defaultChatWelcomeNoIncident(),
   );
   const [briefingError, setBriefingError] = useState<string | null>(null);
 
@@ -80,7 +94,7 @@ export function useIncidentInvestigation(activeIncident: IncidentSummary | null)
         chatMessages:
           messages ??
           existing?.chatMessages ??
-          defaultChatWelcome(incident.title),
+          defaultChatWelcome(),
         incidentUpdatedAt: incident.updated_at,
         cachedAt: Date.now(),
       });
@@ -136,7 +150,7 @@ export function useIncidentInvestigation(activeIncident: IncidentSummary | null)
           setDiagnostics(nextDiagnostics);
           const entry = cacheRef.current.get(incident.id);
           setChatMessages(
-            entry?.chatMessages ?? defaultChatWelcome(incident.title),
+            entry?.chatMessages ?? defaultChatWelcome(),
           );
         }
       } catch (err) {
@@ -192,7 +206,7 @@ export function useIncidentInvestigation(activeIncident: IncidentSummary | null)
 
     if (!activeIncident) {
       setDiagnostics(null);
-      setChatMessages(defaultChatWelcome(null));
+      setChatMessages(defaultChatWelcomeNoIncident());
       setBriefingStatus(null);
       setBriefingError(null);
       return;

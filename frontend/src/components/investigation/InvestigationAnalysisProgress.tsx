@@ -5,7 +5,7 @@ import { Check, Loader2 } from "lucide-react";
 import type { InvestigationAnalysisPhase } from "@/lib/types";
 
 const STEPS: { phase: InvestigationAnalysisPhase; label: string }[] = [
-  { phase: "searching", label: "Search knowledge graph" },
+  { phase: "searching", label: "Analyze historical incidents" },
   { phase: "matching", label: "Match components and owners" },
   { phase: "summarizing", label: "Summarize findings" },
 ];

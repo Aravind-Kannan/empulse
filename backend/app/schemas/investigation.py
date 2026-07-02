@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 IncidentStatus = Literal[
     "Open",
@@ -57,12 +57,12 @@ class InvestigationDiagnostics(BaseModel):
     probable_root_cause: str
     confidence_score: float = Field(ge=0, le=100)
     workaround: str
+    workaround_available: bool = True
     smes: list[SmeRecommendation]
     references: list[InvestigationReference]
     slack_threads: list[InvestigationReference] = Field(default_factory=list)
     jira_tickets: list[InvestigationReference] = Field(default_factory=list)
     notion_pages: list[InvestigationReference] = Field(default_factory=list)
-    graph_hops: list[str] = Field(default_factory=list)
 
 
 class InvestigationChatRequest(BaseModel):
