@@ -112,7 +112,7 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
     personalAccessToken: "",
     oauthConnected: false,
   },
-  jira: { siteUrl: "", projectKeys: "", apiToken: "", accountEmail: "" },
+  jira: { siteUrl: "", authEmail: "", projectKeys: "", apiToken: "", accountEmail: "" },
 };
 
 const JIRA_SITE_RE =

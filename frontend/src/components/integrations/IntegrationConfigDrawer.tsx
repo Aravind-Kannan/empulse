@@ -9,7 +9,6 @@ import { useWorkspace } from "@/context/WorkspaceContext";
 import {
   connectJiraIntegration,
   saveGitHubIntegrationConfig,
-  saveJiraIntegrationConfig,
   saveNotionIntegrationConfig,
   saveSlackIntegrationConfig,
   syncIntegrationSource,
@@ -84,6 +83,140 @@ function SetupGuide({ integrationId }: { integrationId: IntegrationId }) {
 const inputClass =
   "w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500";
 
+type ConnectStepId = "validate" | "save" | "sync" | "refresh";
+
+interface ConnectStep {
+  id: ConnectStepId;
+  label: string;
+  status: "pending" | "active" | "done";
+}
+
+function buildConnectSteps(
+  integrationId: IntegrationId,
+  integrationName: string,
+): ConnectStep[] {
+  const steps: ConnectStep[] = [];
+
+  if (
+    integrationId === "notion" ||
+    integrationId === "slack" ||
+    integrationId === "jira"
+  ) {
+    steps.push({
+      id: "validate",
+      label: `Calling ${integrationName} API to verify credentials`,
+      status: "pending",
+    });
+  }
+
+  const saveLabel =
+    integrationId === "github"
+      ? `Verifying credentials with ${integrationName} API and saving configuration`
+      : integrationId === "jira"
+        ? "Saving Jira configuration"
+        : "Saving integration configuration";
+
+  steps.push(
+    { id: "save", label: saveLabel, status: "pending" },
+    {
+      id: "sync",
+      label:
+        integrationId === "jira"
+          ? "Queuing background sync into knowledge graph"
+          : `Fetching ${integrationName} data and syncing into knowledge graph`,
+      status: "pending",
+    },
+    {
+      id: "refresh",
+      label: "Refreshing workspace telemetry and dashboards",
+      status: "pending",
+    },
+  );
+
+  return steps;
+}
+
+function advanceStep(
+  steps: ConnectStep[],
+  activeId: ConnectStepId,
+): ConnectStep[] {
+  let passedActive = false;
+  return steps.map((step) => {
+    if (step.id === activeId) {
+      passedActive = true;
+      return { ...step, status: "active" };
+    }
+    if (!passedActive) {
+      return { ...step, status: "done" };
+    }
+    return step;
+  });
+}
+
+function completeStep(steps: ConnectStep[], doneId: ConnectStepId): ConnectStep[] {
+  let passedDone = false;
+  return steps.map((step) => {
+    if (step.id === doneId) {
+      passedDone = true;
+      return { ...step, status: "done" };
+    }
+    if (passedDone) {
+      return step;
+    }
+    return { ...step, status: "done" };
+  });
+}
+
+function ConnectProgressPanel({ steps }: { steps: ConnectStep[] }) {
+  return (
+    <div
+      className="rounded-lg border border-sky-500/25 bg-sky-500/5 px-3 py-3"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-sky-300">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Connecting {steps.some((s) => s.status === "active") ? "in progress" : "…"}
+      </div>
+      <ol className="space-y-2">
+        {steps.map((step) => (
+          <li key={step.id} className="flex items-start gap-2 text-xs">
+            <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
+              {step.status === "done" ? (
+                <span className="text-emerald-400" aria-hidden>
+                  ✓
+                </span>
+              ) : step.status === "active" ? (
+                <Loader2
+                  className="h-3.5 w-3.5 animate-spin text-sky-400"
+                  aria-hidden
+                />
+              ) : (
+                <span className="h-1.5 w-1.5 rounded-full bg-zinc-600" aria-hidden />
+              )}
+            </span>
+            <span
+              className={
+                step.status === "active"
+                  ? "text-zinc-100"
+                  : step.status === "done"
+                    ? "text-zinc-500 line-through"
+                    : "text-zinc-500"
+              }
+            >
+              {step.label}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+        This can take up to a minute while we call external APIs and build the
+        graph. Please keep this panel open.
+      </p>
+    </div>
+  );
+}
+
 export function IntegrationConfigDrawer({
   app,
   onClose,
@@ -91,59 +224,104 @@ export function IntegrationConfigDrawer({
   const { config, updateConfig, disconnect } = useIntegrations();
   const { refreshOperationalState } = useWorkspace();
   const [saving, setSaving] = useState(false);
+  const [connectSteps, setConnectSteps] = useState<ConnectStep[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const connected = isIntegrationConnected(app.id, config);
   const draft = isIntegrationDraft(app.id, config);
   const [mounted, setMounted] = useState(false);
+  const isBusy = saving;
 
-  useEffect(() => {
-    setMounted(true);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, []);
+  function beginStep(stepId: ConnectStepId) {
+    setConnectSteps((prev) => advanceStep(prev, stepId));
+  }
+
+  function finishStep(stepId: ConnectStepId) {
+    setConnectSteps((prev) => completeStep(prev, stepId));
+  }
 
   async function handleSave() {
+    const steps = buildConnectSteps(app.id, app.name);
+    setConnectSteps(steps);
     setSaving(true);
     setError(null);
     setSuccess(null);
+
+    const runStep = async (stepId: ConnectStepId, action: () => Promise<void>) => {
+      beginStep(stepId);
+      await action();
+      finishStep(stepId);
+    };
+
     try {
       if (app.id === "notion") {
         if (!config.notion.integrationToken.trim()) {
           throw new Error("Notion integration token is required.");
         }
-        const message = await validateNotionIntegration(
-          config.notion.integrationToken,
-        );
-        await saveNotionIntegrationConfig({
-          ...config.notion,
-          validated: true,
-          previouslyConnected: true,
+        let message = "";
+        await runStep("validate", async () => {
+          message = await validateNotionIntegration(config.notion.integrationToken);
         });
-        updateConfig("notion", { validated: true, previouslyConnected: true });
-        await syncIntegrationSource("notion");
-        setSuccess(`${message} Sync started.`);
+        await runStep("save", async () => {
+          await saveNotionIntegrationConfig({
+            ...config.notion,
+            validated: true,
+            previouslyConnected: true,
+          });
+          updateConfig("notion", { validated: true, previouslyConnected: true });
+        });
+        await runStep("sync", async () => {
+          await syncIntegrationSource("notion");
+        });
+        setSuccess(`${message} Connected and synced.`);
       } else if (app.id === "slack") {
         if (!config.slack.botToken.trim()) {
           throw new Error("Slack bot token is required.");
         }
-        const message = await validateSlackIntegration(config.slack.botToken);
-        await saveSlackIntegrationConfig({
-          ...config.slack,
-          validated: true,
-          previouslyConnected: true,
+        let message = "";
+        await runStep("validate", async () => {
+          message = await validateSlackIntegration(config.slack.botToken);
         });
-        updateConfig("slack", { validated: true, previouslyConnected: true });
-        await syncIntegrationSource("slack");
-        setSuccess(`${message} Sync started.`);
+        await runStep("save", async () => {
+          await saveSlackIntegrationConfig({
+            ...config.slack,
+            validated: true,
+            previouslyConnected: true,
+          });
+          updateConfig("slack", { validated: true, previouslyConnected: true });
+        });
+        await runStep("sync", async () => {
+          await syncIntegrationSource("slack");
+        });
+        setSuccess(`${message} Connected and synced.`);
       } else if (app.id === "github") {
-        await saveGitHubIntegrationConfig(config.github);
-        await syncIntegrationSource("github");
-        updateConfig("github", { validated: true, previouslyConnected: true });
-        setSuccess("GitHub configuration saved and sync started.");
+        if (!config.github.repositoryUrl.trim()) {
+          throw new Error("GitHub repository URL is required.");
+        }
+        if (
+          !config.github.personalAccessToken.trim() &&
+          !config.github.previouslyConnected
+        ) {
+          throw new Error("GitHub personal access token is required.");
+        }
+        let message = "";
+        await runStep("save", async () => {
+          message = await saveGitHubIntegrationConfig({
+            ...config.github,
+            oauthConnected: false,
+            validated: true,
+            previouslyConnected: true,
+          });
+          updateConfig("github", {
+            oauthConnected: false,
+            validated: true,
+            previouslyConnected: true,
+          });
+        });
+        await runStep("sync", async () => {
+          await syncIntegrationSource("github");
+        });
+        setSuccess(`${message} Connected and synced.`);
       } else if (app.id === "jira") {
         const validationError = validateJiraConfigDraft(config.jira);
         if (validationError) {
@@ -158,25 +336,50 @@ export function IntegrationConfigDrawer({
           siteUrl: normalizedSite,
           projectKeys: normalizedKeys,
         };
-        const message = await validateJiraIntegration(jiraDraft);
-        await connectJiraIntegration(jiraDraft);
-        updateConfig("jira", {
-          siteUrl: normalizedSite,
-          projectKeys: normalizedKeys,
-          validated: true,
-          previouslyConnected: true,
+        let message = "";
+        await runStep("validate", async () => {
+          message = await validateJiraIntegration(jiraDraft);
         });
-        setSuccess(
-          `${message} Cognee sync has started in the background.`,
-        );
+        await runStep("save", async () => {
+          await connectJiraIntegration(jiraDraft);
+          updateConfig("jira", {
+            siteUrl: normalizedSite,
+            projectKeys: normalizedKeys,
+            validated: true,
+            previouslyConnected: true,
+          });
+        });
+        await runStep("sync", async () => {
+          // connectJiraIntegration queues Cognee sync on the server.
+        });
+        setSuccess(`${message} Cognee sync has started in the background.`);
       }
-      await refreshOperationalState();
-      setTimeout(() => onClose(), 900);
+
+      await runStep("refresh", async () => {
+        await refreshOperationalState();
+      });
+
+      setConnectSteps([]);
+      setSaving(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save integration");
-    } finally {
+      setConnectSteps([]);
       setSaving(false);
     }
+  }
+
+  useEffect(() => {
+    setMounted(true);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  function handleRequestClose() {
+    if (isBusy) return;
+    onClose();
   }
 
   function renderFields() {
@@ -281,37 +484,19 @@ export function IntegrationConfigDrawer({
             </Field>
             <Field
               label="Personal access token (PAT)"
-              hint="Fine-grained or classic token with repo read scope"
+              hint="Fine-grained or classic token with repo read scope. Verified via GitHub API on save."
             >
               <SecretInput
                 value={config.github.personalAccessToken}
                 onChange={(value) =>
-                  updateConfig("github", { personalAccessToken: value })
+                  updateConfig("github", {
+                    personalAccessToken: value,
+                    oauthConnected: false,
+                  })
                 }
                 placeholder="ghp_..."
               />
             </Field>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
-              <p className="text-sm font-medium text-zinc-200">OAuth</p>
-              <p className="mt-1 text-xs text-zinc-500">
-                Or authorize via GitHub OAuth for managed token rotation.
-              </p>
-              <button
-                type="button"
-                onClick={() =>
-                  updateConfig("github", { oauthConnected: true })
-                }
-                className={`mt-3 w-full rounded-lg border px-3 py-2 text-sm transition ${
-                  config.github.oauthConnected
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                    : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-                }`}
-              >
-                {config.github.oauthConnected
-                  ? "OAuth authorized"
-                  : "Connect with GitHub OAuth"}
-              </button>
-            </div>
           </>
         );
 
@@ -410,7 +595,7 @@ export function IntegrationConfigDrawer({
         type="button"
         aria-label="Close configuration"
         className="fixed inset-0 z-[100] bg-black/50"
-        onClick={onClose}
+        onClick={handleRequestClose}
       />
       <aside
         role="dialog"
@@ -436,17 +621,23 @@ export function IntegrationConfigDrawer({
                 {connected ? "Configure" : "Connect"} {app.name}
               </h2>
               <p className="text-xs text-zinc-500">{app.syncsToCognee}</p>
-              {draft && !connected && (
+              {draft && !connected && !isBusy && (
                 <p className="mt-1 text-xs text-amber-400/90">
                   Token entered — click Save to verify with {app.name}.
+                </p>
+              )}
+              {saving && (
+                <p className="mt-1 text-xs text-sky-400/90">
+                  Connection in progress — do not close this panel.
                 </p>
               )}
             </div>
           </div>
           <button
             type="button"
-            onClick={onClose}
-            className="ml-3 shrink-0 rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-900 hover:text-zinc-200"
+            onClick={handleRequestClose}
+            disabled={isBusy}
+            className="ml-3 shrink-0 rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-900 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <X className="h-5 w-5" />
           </button>
@@ -457,6 +648,9 @@ export function IntegrationConfigDrawer({
         </div>
 
         <div className="shrink-0 space-y-2 border-t border-zinc-800 px-5 py-4">
+          {saving && connectSteps.length > 0 && (
+            <ConnectProgressPanel steps={connectSteps} />
+          )}
           {success && (
             <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
               {success}
@@ -467,7 +661,7 @@ export function IntegrationConfigDrawer({
               {error}
             </p>
           )}
-          {connected && (
+          {connected && !isBusy && (
             <button
               type="button"
               onClick={() => {
@@ -482,12 +676,16 @@ export function IntegrationConfigDrawer({
           )}
           <button
             type="button"
-            disabled={saving}
+            disabled={isBusy}
             onClick={() => void handleSave()}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-white disabled:opacity-50"
           >
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {connected ? "Save & re-verify" : "Save & verify connection"}
+            {isBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {saving
+              ? "Connecting…"
+              : connected
+                ? "Save & re-verify"
+                : "Save & verify connection"}
           </button>
         </div>
       </aside>

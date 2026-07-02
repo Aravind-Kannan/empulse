@@ -43,8 +43,9 @@ export const INTEGRATION_SETUP_GUIDES: Record<
     title: "How to get a GitHub personal access token",
     steps: [
       "Open GitHub → Settings → Developer settings → Personal access tokens.",
-      "Generate a fine-grained or classic token with Repository read access.",
-      "Paste the repository URL and token below, or use OAuth if configured.",
+      "Generate a fine-grained token scoped to your repository, or a classic token with repo read access.",
+      "Fine-grained tokens must explicitly include the repository URL you enter below.",
+      "Paste the repository URL, target branch, and token here — Empulse verifies access before syncing.",
     ],
     docUrl: "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
     docLabel: "GitHub PAT docs",

@@ -41,29 +41,44 @@ async def _provision_tenant_cognee_dataset(tenant_id: uuid.UUID) -> None:
 oauth = OAuth()
 
 
-def _register_oauth_clients() -> None:
+def _ensure_oauth_clients() -> None:
+    """Register OAuth clients lazily so env vars are loaded before registration."""
     settings = get_settings()
+
     if settings.google_client_id and settings.google_client_secret:
-        oauth.register(
-            name="google",
-            client_id=settings.google_client_id,
-            client_secret=settings.google_client_secret,
-            server_metadata_url="https://accounts.google.com/.oauth/openid-configuration",
-            client_kwargs={"scope": "openid email profile"},
-        )
+        if oauth.create_client("google") is None:
+            oauth.register(
+                name="google",
+                client_id=settings.google_client_id,
+                client_secret=settings.google_client_secret,
+                server_metadata_url=(
+                    "https://accounts.google.com/.well-known/openid-configuration"
+                ),
+                client_kwargs={"scope": "openid email profile"},
+            )
+
     if settings.github_client_id and settings.github_client_secret:
-        oauth.register(
-            name="github",
-            client_id=settings.github_client_id,
-            client_secret=settings.github_client_secret,
-            access_token_url="https://github.com/login/oauth/access_token",
-            authorize_url="https://github.com/login/oauth/authorize",
-            api_base_url="https://api.github.com/",
-            client_kwargs={"scope": "read:user user:email"},
+        if oauth.create_client("github") is None:
+            oauth.register(
+                name="github",
+                client_id=settings.github_client_id,
+                client_secret=settings.github_client_secret,
+                access_token_url="https://github.com/login/oauth/access_token",
+                authorize_url="https://github.com/login/oauth/authorize",
+                api_base_url="https://api.github.com/",
+                client_kwargs={"scope": "read:user user:email"},
+            )
+
+
+def _get_oauth_client(provider: str):
+    _ensure_oauth_clients()
+    client = oauth.create_client(provider)
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{provider.title()} OAuth is not configured on the server.",
         )
-
-
-_register_oauth_clients()
+    return client
 
 
 def _oauth_configured(provider: str) -> bool:
@@ -356,7 +371,8 @@ async def oauth_login(
 
     redirect_uri = str(request.url_for("oauth_callback", provider=provider))
     request.session["oauth_next"] = next_path
-    return await oauth.create_client(provider).authorize_redirect(request, redirect_uri)
+    client = _get_oauth_client(provider)
+    return await client.authorize_redirect(request, redirect_uri)
 
 
 @router.get("/oauth/{provider}/callback", name="oauth_callback")
@@ -368,16 +384,30 @@ async def oauth_callback(
 ):
     if provider not in ("google", "github"):
         raise HTTPException(status_code=404, detail="Unknown OAuth provider.")
+    if not _oauth_configured(provider):
+        raise HTTPException(
+            status_code=503,
+            detail=f"{provider.title()} OAuth is not configured on the server.",
+        )
 
-    client = oauth.create_client(provider)
+    client = _get_oauth_client(provider)
     token = await client.authorize_access_token(request)
 
     if provider == "google":
         userinfo = token.get("userinfo")
         if not userinfo:
-            userinfo = await client.parse_id_token(request, token)
+            try:
+                userinfo = await client.parse_id_token(request, token)
+            except Exception:
+                userinfo = None
+        if not userinfo:
+            resp = await client.get(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                token=token,
+            )
+            userinfo = resp.json()
         email = userinfo.get("email")
-        name = userinfo.get("name") or email.split("@")[0]
+        name = userinfo.get("name") or (email.split("@")[0] if email else "Google User")
         subject = userinfo.get("sub")
     else:
         resp = await client.get("user", token=token)

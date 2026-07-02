@@ -1,10 +1,11 @@
-"""Live credential checks against Slack and Notion APIs."""
+"""Live credential checks against Slack, Notion, Jira, and GitHub APIs."""
 
 from __future__ import annotations
 
 import requests
 
 from app.services.employee_master_fetch import _format_slack_api_error
+from app.services.github_client import parse_repository_url
 from app.services.notion_client import NOTION_VERSION, count_accessible_resources
 
 
@@ -103,6 +104,81 @@ def validate_jira_credentials(
         resolved_email,
         f"Jira token valid — authenticated as {display_name} ({resolved_email}).",
     )
+
+
+def validate_github_credentials(
+    repository_url: str,
+    personal_access_token: str,
+    branch_target: str = "main",
+) -> str:
+    """Verify repository URL and PAT can read the target repo."""
+    token = personal_access_token.strip()
+    if not token:
+        raise ValueError("GitHub personal access token is required.")
+
+    try:
+        owner, repo = parse_repository_url(repository_url)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    repo_url = f"https://api.github.com/repos/{owner}/{repo}"
+
+    try:
+        response = requests.get(repo_url, headers=headers, timeout=20)
+    except requests.RequestException as exc:
+        raise ValueError(f"Could not reach GitHub API: {exc}") from exc
+
+    if response.status_code == 401:
+        raise ValueError(
+            "GitHub rejected this token (401). Generate a new personal access token "
+            "with repository read access."
+        )
+    if response.status_code == 404:
+        raise ValueError(
+            f"Repository '{owner}/{repo}' was not found or this token cannot access it. "
+            "Confirm the repository URL and that your PAT is authorized for this repo "
+            "(fine-grained tokens must explicitly include the repository)."
+        )
+    if response.status_code == 403:
+        detail = response.text[:160] if response.text else response.reason
+        raise ValueError(
+            f"GitHub denied access to '{owner}/{repo}' (403). "
+            f"Check token scopes and repository permissions. {detail}"
+        )
+    if response.status_code >= 400:
+        detail = response.text[:200] if response.text else response.reason
+        raise ValueError(f"GitHub API error ({response.status_code}): {detail}")
+
+    payload = response.json()
+    full_name = payload.get("full_name") or f"{owner}/{repo}"
+    default_branch = (payload.get("default_branch") or "main").strip()
+    branch = (branch_target or default_branch).strip()
+
+    branch_note = ""
+    if branch and branch != default_branch:
+        branch_resp = requests.get(
+            f"{repo_url}/branches/{branch}",
+            headers=headers,
+            timeout=15,
+        )
+        if branch_resp.status_code == 404:
+            raise ValueError(
+                f"Branch '{branch}' was not found on {full_name}. "
+                f"The default branch is '{default_branch}'."
+            )
+        if branch_resp.status_code >= 400:
+            detail = branch_resp.text[:160] if branch_resp.text else branch_resp.reason
+            raise ValueError(
+                f"Could not verify branch '{branch}' on {full_name}: {detail}"
+            )
+        branch_note = f" Target branch '{branch}' verified."
+
+    return f"GitHub token valid — verified access to {full_name}.{branch_note}"
 
 
 def validate_slack_bot_token(token: str) -> str:

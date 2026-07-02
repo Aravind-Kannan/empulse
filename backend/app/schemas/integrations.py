@@ -30,6 +30,12 @@ class NotionValidateRequest(BaseModel):
     integration_token: str = Field(min_length=1)
 
 
+class GitHubValidateRequest(BaseModel):
+    repository_url: str = Field(min_length=1)
+    personal_access_token: str = Field(min_length=1)
+    branch_target: str = "main"
+
+
 class SlackValidateRequest(BaseModel):
     bot_token: str = Field(min_length=1)
 
@@ -94,7 +100,7 @@ class TenantIntegrationsConfigResponse(BaseModel):
 
 
 class IntegrationValidateResponse(BaseModel):
-    source: Literal["notion", "slack"]
+    source: Literal["notion", "slack", "github"]
     valid: bool
     message: str
 

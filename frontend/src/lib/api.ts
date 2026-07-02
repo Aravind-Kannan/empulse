@@ -462,6 +462,27 @@ export async function validateNotionIntegration(
   return data.message;
 }
 
+export async function validateGitHubIntegration(
+  repositoryUrl: string,
+  personalAccessToken: string,
+  branchTarget: string,
+): Promise<string> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/github/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      repository_url: repositoryUrl,
+      personal_access_token: personalAccessToken,
+      branch_target: branchTarget,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "GitHub validation failed"));
+  }
+  const data = (await response.json()) as { message: string };
+  return data.message;
+}
+
 export async function validateSlackIntegration(
   botToken: string,
 ): Promise<string> {
@@ -604,7 +625,7 @@ export async function deleteIntegrationConfig(source: IntegrationId): Promise<vo
 
 export async function saveGitHubIntegrationConfig(
   config: IntegrationConfigMap["github"],
-): Promise<void> {
+): Promise<string> {
   const response = await apiFetch(`${API_BASE}/api/integrations/github/config`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -613,11 +634,15 @@ export async function saveGitHubIntegrationConfig(
       branch_target: config.branchTarget,
       personal_access_token: config.personalAccessToken,
       oauth_connected: config.oauthConnected,
+      validated: config.validated ?? false,
+      previously_connected: config.previouslyConnected ?? false,
     }),
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, "GitHub config save failed"));
   }
+  const data = (await response.json()) as { message?: string };
+  return data.message ?? "GitHub configuration saved.";
 }
 
 export async function validateJiraIntegration(

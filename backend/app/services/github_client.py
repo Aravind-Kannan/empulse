@@ -152,6 +152,18 @@ class GitHubClient:
         )
         if response.status_code == 403 and "rate limit" in response.text.lower():
             raise GitHubClientError("GitHub API rate limit exceeded; retry later.")
+        if response.status_code == 401:
+            raise GitHubClientError(
+                "GitHub rejected this token (401). Re-save a valid personal access token "
+                "with repository read access under Settings → Integrations."
+            )
+        if response.status_code == 404 and path.startswith(
+            f"/repos/{self.owner}/{self.repo}"
+        ):
+            raise GitHubClientError(
+                f"Repository '{self.owner}/{self.repo}' was not found or this token cannot access it. "
+                "Confirm the repository URL and that your PAT is authorized for this repo."
+            )
         if response.status_code >= 400:
             raise GitHubClientError(
                 f"GitHub API {method} {path} failed ({response.status_code}): {response.text[:200]}"

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.integrations import (
     GitHubConfigRequest,
+    GitHubValidateRequest,
     GlobalSyncResponse,
     IntegrationConfigResponse,
     IntegrationSyncResponse,
@@ -35,7 +36,12 @@ from app.services.integration_config_store import (
     save_notion_config,
     save_slack_config,
 )
-from app.services.integration_validate import validate_jira_credentials
+from app.services.integration_validate import (
+    validate_github_credentials,
+    validate_jira_credentials,
+    validate_notion_token,
+    validate_slack_bot_token,
+)
 from app.services.integration_sync import (
     process_external_app_sync,
     process_global_sync,
@@ -82,21 +88,53 @@ def configure_github(
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> IntegrationConfigResponse:
-    existing = get_github_config(db, tenant.id)
-    if (
-        not payload.personal_access_token.strip()
-        and not payload.oauth_connected
-        and not existing
-    ):
+    stored = get_source_config(db, tenant.id, "github")
+    token = payload.personal_access_token.strip() or (
+        stored.get("personal_access_token") or ""
+    ).strip()
+    repository_url = payload.repository_url.strip() or (
+        stored.get("repository_url") or ""
+    ).strip()
+    branch_target = payload.branch_target.strip() or (
+        stored.get("branch_target") or "main"
+    )
+
+    if not repository_url:
+        raise HTTPException(status_code=422, detail="GitHub repository URL is required.")
+    if not token:
         raise HTTPException(
             status_code=422,
-            detail="GitHub requires a personal access token or OAuth authorization.",
+            detail="GitHub personal access token is required.",
         )
-    save_github_config(db, tenant.id, payload)
+
+    try:
+        validation_message = validate_github_credentials(
+            repository_url,
+            token,
+            branch_target,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    save_github_config(
+        db,
+        tenant.id,
+        GitHubConfigRequest(
+            repository_url=repository_url,
+            branch_target=branch_target,
+            personal_access_token=token,
+            oauth_connected=False,
+            path_component_map=payload.path_component_map
+            or stored.get("path_component_map")
+            or {},
+            default_component_id=payload.default_component_id
+            or stored.get("default_component_id"),
+        ),
+    )
     return IntegrationConfigResponse(
         source="github",
         configured=True,
-        message="GitHub integration configuration saved.",
+        message=validation_message,
     )
 
 
@@ -202,6 +240,23 @@ def remove_integration_config(
         source=normalized,  # type: ignore[arg-type]
         configured=False,
         message=f"{normalized.title()} integration disconnected.",
+    )
+
+
+@router.post("/github/validate", response_model=IntegrationValidateResponse)
+def validate_github(payload: GitHubValidateRequest) -> IntegrationValidateResponse:
+    try:
+        message = validate_github_credentials(
+            payload.repository_url,
+            payload.personal_access_token,
+            payload.branch_target,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return IntegrationValidateResponse(
+        source="github",
+        valid=True,
+        message=message,
     )
 
 
