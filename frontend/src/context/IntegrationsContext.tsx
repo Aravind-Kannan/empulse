@@ -72,11 +72,36 @@ function mergeIntegrationConfig(
   local: IntegrationConfigMap,
   remote: IntegrationConfigMap,
 ): IntegrationConfigMap {
+  const mergeJira = (): IntegrationConfigMap["jira"] => {
+    const merged = {
+      ...DEFAULT_INTEGRATION_CONFIG.jira,
+      ...local.jira,
+      ...remote.jira,
+    };
+    if (remote.jira.validated) {
+      merged.validated = true;
+      merged.previouslyConnected = true;
+    }
+    if (remote.jira.apiToken.trim()) {
+      merged.apiToken = remote.jira.apiToken;
+    }
+    if (remote.jira.siteUrl.trim()) {
+      merged.siteUrl = remote.jira.siteUrl;
+    }
+    if (remote.jira.authEmail.trim()) {
+      merged.authEmail = remote.jira.authEmail;
+    }
+    if (remote.jira.projectKeys.trim()) {
+      merged.projectKeys = remote.jira.projectKeys;
+    }
+    return merged;
+  };
+
   return {
     slack: { ...DEFAULT_INTEGRATION_CONFIG.slack, ...local.slack, ...remote.slack },
     notion: { ...DEFAULT_INTEGRATION_CONFIG.notion, ...local.notion, ...remote.notion },
     github: { ...DEFAULT_INTEGRATION_CONFIG.github, ...local.github, ...remote.github },
-    jira: { ...DEFAULT_INTEGRATION_CONFIG.jira, ...local.jira, ...remote.jira },
+    jira: mergeJira(),
   };
 }
 
@@ -191,11 +216,14 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
           notion: ["integrationToken"],
           github: [
             "repositoryUrl",
+            "repositoryUrls",
             "personalAccessToken",
             "oauthConnected",
             "branchTarget",
+            "branchTargets",
+            "syncAllBranches",
           ],
-          jira: ["siteUrl", "apiToken", "projectKeys", "accountEmail"],
+          jira: ["siteUrl", "apiToken", "projectKeys", "authEmail"],
         };
         const touchesCredentials = credentialFields[id].some(
           (field) => field in patch,

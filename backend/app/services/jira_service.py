@@ -21,6 +21,7 @@ from app.schemas.jira import (
     JiraDebugStage,
     JiraDebugState,
     JiraIntegrationResponse,
+    JiraProjectInfo,
     parse_project_keys,
 )
 from app.services.credential_crypto import encrypt_secret
@@ -98,7 +99,6 @@ def validate_jira_credentials(
     auth_email: str,
     api_token: str,
 ) -> tuple[str, str | None]:
-    """Live Atlassian API check via /rest/api/3/myself."""
     try:
         response = requests.get(
             f"{jira_domain}/rest/api/3/myself",
@@ -125,6 +125,62 @@ def validate_jira_credentials(
     payload = response.json()
     display = payload.get("displayName") or payload.get("emailAddress") or auth_email
     return f"Jira credentials valid — authenticated as {display}.", display
+
+
+def list_accessible_jira_projects(
+    jira_domain: str,
+    auth_email: str,
+    api_token: str,
+) -> list[JiraProjectInfo]:
+    projects: list[JiraProjectInfo] = []
+    start_at = 0
+
+    while start_at < 500:
+        try:
+            response = requests.get(
+                f"{jira_domain}/rest/api/3/project/search",
+                auth=(auth_email, api_token),
+                headers={"Accept": "application/json"},
+                params={
+                    "startAt": start_at,
+                    "maxResults": 50,
+                    "orderBy": "name",
+                },
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            raise ValueError(f"Could not reach Jira at {jira_domain}: {exc}") from exc
+
+        if response.status_code == 401:
+            raise ValueError(
+                "Jira rejected these credentials (401). "
+                "Confirm your account email and API token at id.atlassian.com."
+            )
+        if response.status_code >= 400:
+            detail = response.text[:200] if response.text else response.reason
+            raise ValueError(f"Jira API error ({response.status_code}): {detail}")
+
+        payload = response.json()
+        values = payload.get("values") or []
+        for row in values:
+            key = (row.get("key") or "").strip()
+            if not key:
+                continue
+            projects.append(
+                JiraProjectInfo(
+                    key=key,
+                    name=(row.get("name") or key).strip(),
+                    project_type=(row.get("projectTypeKey") or None),
+                )
+            )
+
+        if start_at + len(values) >= int(payload.get("total") or 0):
+            break
+        if not values:
+            break
+        start_at += len(values)
+
+    return projects
 
 
 def connect_jira_integration(
@@ -164,7 +220,29 @@ def connect_jira_integration(
 
     db.commit()
     db.refresh(integration)
+
+    from app.services.integration_config_store import save_jira_config
+
+    save_jira_config(
+        db,
+        tenant_id,
+        JiraConfigRequest(
+            site_url=payload.jira_domain,
+            project_keys=payload.project_keys,
+            api_token=payload.api_token,
+            account_email=str(payload.auth_email),
+        ),
+        validated=True,
+    )
+
     return integration
+
+
+def delete_jira_integration(db: Session, tenant_id: uuid.UUID) -> None:
+    integration = get_jira_integration(db, tenant_id)
+    if integration:
+        db.delete(integration)
+        db.commit()
 
 
 def _read_debug_state() -> dict[str, Any]:

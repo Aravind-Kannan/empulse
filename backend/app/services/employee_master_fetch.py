@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from collections import defaultdict
@@ -17,8 +18,13 @@ from app.schemas.employee_master import (
 )
 from app.services.employee_ids import employee_id_from_email
 from app.services.integration_config_store import get_github_config, get_jira_config
-from app.services.jira_client import JiraClientError, fetch_jira_provider_members
-from app.schemas.integrations import JiraConfigRequest
+from app.services.jira_user_email import (
+    enrich_jira_users_with_emails,
+    is_synthetic_jira_email,
+    normalize_person_name,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def enrich_jira_credentials_from_db(
@@ -341,33 +347,59 @@ def _is_jira_person(user: dict) -> bool:
     return bool(name.strip())
 
 
-def _synthetic_jira_email(account_id: str, display_name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-") or "user"
-    short_id = re.sub(r"[^a-zA-Z0-9]", "", account_id)[:12] or "id"
-    return f"{slug}+{short_id}@jira.import"
-
-
-def _resolve_jira_user_email(
+def _jira_auth_user_identity(
     base: str,
     auth: tuple[str, str],
     headers: dict[str, str],
-    account_id: str,
-) -> str | None:
+) -> tuple[str | None, str | None]:
+    """Return (accountId, email) for the connecting Jira user."""
     try:
         response = requests.get(
-            f"{base}/rest/api/3/user/email",
-            params={"accountId": account_id},
+            f"{base.rstrip('/')}/rest/api/3/myself",
             auth=auth,
             headers=headers,
             timeout=15,
         )
-        if response.status_code == 200:
-            email = (response.json().get("email") or "").strip()
-            if email and "@" in email:
-                return email
+        if response.status_code != 200:
+            return None, auth[0].strip() or None
+        payload = response.json()
+        account_id = (payload.get("accountId") or "").strip() or None
+        email = (payload.get("emailAddress") or auth[0] or "").strip() or None
+        return account_id, email
     except requests.RequestException:
-        pass
-    return None
+        return None, auth[0].strip() or None
+
+
+def _remap_jira_emails_from_other_sources(
+    records: list[MasterDataRecord],
+) -> tuple[list[MasterDataRecord], list[str]]:
+    """
+    Replace unresolved Jira emails by matching display names to other providers.
+    """
+    name_to_email: dict[str, str] = {}
+    for record in records:
+        if record.source == "jira":
+            continue
+        if is_synthetic_jira_email(str(record.email)):
+            continue
+        key = normalize_person_name(record.name)
+        if key:
+            name_to_email[key] = str(record.email).lower()
+
+    remapped: list[str] = []
+    updated: list[MasterDataRecord] = []
+    for record in records:
+        if record.source != "jira" or not is_synthetic_jira_email(str(record.email)):
+            updated.append(record)
+            continue
+        key = normalize_person_name(record.name)
+        real_email = name_to_email.get(key)
+        if real_email:
+            updated.append(record.model_copy(update={"email": real_email}))
+            remapped.append(f"{record.name} → {real_email}")
+        else:
+            updated.append(record)
+    return updated, remapped
 
 
 def _fetch_jira_project_keys(
@@ -547,6 +579,8 @@ def _fetch_jira_users_live(
     auth_email: str,
     api_token: str,
     project_keys: str | None = None,
+    *,
+    known_emails_by_name: dict[str, str] | None = None,
 ) -> list[MasterDataRecord]:
     """
     Import people assigned to Jira issues in configured projects.
@@ -558,7 +592,7 @@ def _fetch_jira_users_live(
     auth = (auth_email.strip(), api_token.strip())
     headers = {"Accept": "application/json"}
     records: list[MasterDataRecord] = []
-    seen: set[str] = set()
+    unresolved: list[str] = []
 
     keys = [
         key.strip().upper()
@@ -568,59 +602,98 @@ def _fetch_jira_users_live(
     if not keys:
         keys = _fetch_jira_project_keys(base, auth, headers)
 
-    def _append_user(user: dict, *, default_title: str = "Jira Assignee") -> None:
+    auth_account_id, auth_user_email = _jira_auth_user_identity(base, auth, headers)
+
+    collected_users: list[dict] = []
+    user_titles: dict[str, str] = {}
+    search_error: str | None = None
+
+    def _stage_user(user: dict, *, default_title: str = "Jira Assignee") -> None:
         if not _is_jira_person(user):
             return
         account_id = user.get("accountId") or user.get("account_id")
-        if not account_id or account_id in seen:
+        if not account_id:
             return
+        account_key = str(account_id)
+        if account_key not in user_titles:
+            user_titles[account_key] = default_title
+        collected_users.append(user)
+
+    try:
+        for person in _fetch_jira_issue_people(base, auth, headers, keys):
+            _stage_user(person)
+    except (ValueError, requests.RequestException) as exc:
+        search_error = str(exc)
+
+    if not collected_users and keys:
+        try:
+            for person in _fetch_jira_assignable_humans(base, auth, headers, keys):
+                _stage_user(person, default_title="Jira Team Member")
+        except (ValueError, requests.RequestException) as exc:
+            if not search_error:
+                search_error = str(exc)
+
+    if not collected_users:
+        scope = f"project(s) {', '.join(keys)}" if keys else "your site"
+        hint = f" {search_error}" if search_error else ""
+        raise ValueError(
+            f"Jira returned no human assignees for {scope}. "
+            "Ensure issues have real people assigned (not automation apps)."
+            f"{hint}"
+        )
+
+    email_by_account = enrich_jira_users_with_emails(
+        base,
+        collected_users,
+        auth=auth,
+        headers=headers,
+        auth_user_account_id=auth_account_id,
+        auth_user_email=auth_user_email,
+    )
+
+    seen: set[str] = set()
+    for user in collected_users:
+        account_id = user.get("accountId") or user.get("account_id")
+        if not account_id or str(account_id) in seen:
+            continue
+        seen.add(str(account_id))
 
         display = (user.get("displayName") or user.get("name") or "").strip()
-        email = (user.get("emailAddress") or user.get("email") or "").strip()
-        if not email or "@" not in email:
-            email = _resolve_jira_user_email(base, auth, headers, str(account_id))
+        email = email_by_account.get(str(account_id))
+        if not email and known_emails_by_name and display:
+            email = known_emails_by_name.get(normalize_person_name(display))
         if not email:
-            email = _synthetic_jira_email(str(account_id), display or str(account_id))
+            unresolved.append(display or str(account_id))
+            continue
 
-        seen.add(str(account_id))
         records.append(
             MasterDataRecord(
                 source="jira",
                 external_id=str(account_id),
                 name=display or email.split("@")[0],
                 email=email,
-                title=default_title,
+                title=user_titles.get(str(account_id), "Jira Assignee"),
             )
         )
 
-    search_error: str | None = None
-
-    # Issue assignees/reporters — people on real tickets in your projects
-    try:
-        for person in _fetch_jira_issue_people(base, auth, headers, keys):
-            _append_user(person)
-    except (ValueError, requests.RequestException) as exc:
-        search_error = str(exc)
-
-    # Fallback: assignable humans in project(s), still filtered (no apps)
-    if not records and keys:
-        try:
-            for person in _fetch_jira_assignable_humans(base, auth, headers, keys):
-                _append_user(person, default_title="Jira Team Member")
-        except (ValueError, requests.RequestException) as exc:
-            if not search_error:
-                search_error = str(exc)
-
     if not records:
         scope = f"project(s) {', '.join(keys)}" if keys else "your site"
-        hint = (
-            f" {search_error}" if search_error else ""
-        )
+        names = ", ".join(unresolved[:5])
+        extra = f" Unresolved: {names}." if names else ""
         raise ValueError(
-            f"Jira returned no human assignees for {scope}. "
-            "Ensure issues have real people assigned (not automation apps)."
-            f"{hint}"
+            f"Jira returned users for {scope} but no email addresses could be resolved. "
+            "Grant Browse users and groups permission to the API token owner, or set "
+            "Jira email visibility to Public / Logged in users."
+            f"{extra}"
         )
+
+    if unresolved:
+        logger.warning(
+            "Skipped %d Jira users without resolvable email: %s",
+            len(unresolved),
+            ", ".join(unresolved[:10]),
+        )
+
     return records
 
 
@@ -707,6 +780,7 @@ def _fetch_source_records(
     *,
     db: Session | None = None,
     tenant_id: uuid.UUID | None = None,
+    known_emails_by_name: dict[str, str] | None = None,
 ) -> list[MasterDataRecord]:
     creds = credentials or FetchUsersRequest(sources=[source])
     live_requested = _source_credentials_provided(source, creds)
@@ -761,34 +835,25 @@ def _fetch_source_records(
         api_token = (creds.jira_api_token or "").strip() or (
             stored_config.api_token if stored_config else ""
         )
-        account_email = (creds.jira_account_email or "").strip() or (
-            stored_config.account_email if stored_config else ""
+        account_email = (
+            (creds.jira_account_email or "").strip()
+            or (creds.jira_auth_email or "").strip()
+            or (stored_config.account_email if stored_config else "")
         )
         project_keys = (creds.jira_project_keys or "").strip() or (
             stored_config.project_keys if stored_config else ""
         )
         if site_url and api_token:
-            config = JiraConfigRequest(
-                site_url=site_url,
-                api_token=api_token,
-                account_email=account_email,
-                project_keys=project_keys,
-            )
             try:
-                members = fetch_jira_provider_members(config)
-            except (JiraClientError, requests.RequestException) as exc:
-                raise ValueError(f"Jira member import failed: {exc}") from exc
-            return [
-                MasterDataRecord(
-                    source="jira",
-                    external_id=member.id,
-                    name=member.label.split(" (")[0],
-                    email=member.email or f"{member.id}@users.noreply.jira",
-                    title="Jira User",
-                    manager_email=None,
+                return _fetch_jira_users_live(
+                    site_url,
+                    account_email,
+                    api_token,
+                    project_keys or None,
+                    known_emails_by_name=known_emails_by_name,
                 )
-                for member in members
-            ]
+            except (ValueError, requests.RequestException) as exc:
+                raise ValueError(f"Jira member import failed: {exc}") from exc
         if live_requested:
             raise ValueError(
                 "Jira site URL and API token are required."
@@ -924,10 +989,41 @@ def fetch_employee_master_data(
     raw_records: list[MasterDataRecord] = []
     sources_queried: list[str] = []
     source_errors: list[str] = []
-    for source in active_sources:
-        raw_records.extend(
-            _fetch_source_records(source, credentials, db=db, tenant_id=tenant_id)
-        )
+
+    non_jira_sources = [s for s in active_sources if s != "jira"]
+    jira_sources = [s for s in active_sources if s == "jira"]
+
+    for source in non_jira_sources:
+        sources_queried.append(source)
+        try:
+            raw_records.extend(
+                _fetch_source_records(source, credentials, db=db, tenant_id=tenant_id)
+            )
+        except ValueError as exc:
+            source_errors.append(f"{source}: {exc}")
+
+    known_emails_by_name: dict[str, str] = {}
+    for record in raw_records:
+        if is_synthetic_jira_email(str(record.email)):
+            continue
+        key = normalize_person_name(record.name)
+        if key:
+            known_emails_by_name[key] = str(record.email).lower()
+
+    for source in jira_sources:
+        sources_queried.append(source)
+        try:
+            raw_records.extend(
+                _fetch_source_records(
+                    source,
+                    credentials,
+                    db=db,
+                    tenant_id=tenant_id,
+                    known_emails_by_name=known_emails_by_name or None,
+                )
+            )
+        except ValueError as exc:
+            source_errors.append(f"{source}: {exc}")
 
     if not raw_records:
         if source_errors:
@@ -935,6 +1031,13 @@ def fetch_employee_master_data(
         raise ValueError(
             "No members imported from the selected sources. "
             "Verify integration permissions and try again."
+        )
+
+    raw_records, jira_remaps = _remap_jira_emails_from_other_sources(raw_records)
+    if jira_remaps:
+        source_errors.append(
+            "Matched Jira users to emails from other sources: "
+            + "; ".join(jira_remaps)
         )
 
     grouped: dict[str, list[MasterDataRecord]] = defaultdict(list)

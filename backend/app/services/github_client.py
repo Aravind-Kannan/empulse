@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from app.schemas.integrations import GitHubConfigRequest
+from app.schemas.integrations import GitHubConfigRequest, GitHubRepoInfo
 from app.services.github_types import GitHubFileChange, GitHubPullRequestActivity
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,119 @@ def _headers(token: str) -> dict[str, str]:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+
+
+def _github_request(
+    session: requests.Session,
+    token: str,
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+) -> requests.Response:
+    url = f"{GITHUB_API}{path}"
+    response = session.request(
+        method,
+        url,
+        headers=_headers(token),
+        timeout=30,
+        params=params,
+    )
+    if response.status_code == 403 and "rate limit" in response.text.lower():
+        raise GitHubClientError("GitHub API rate limit exceeded; retry later.")
+    if response.status_code == 401:
+        raise GitHubClientError(
+            "GitHub rejected this token (401). Re-save a valid personal access token "
+            "with repository read access under Settings → Integrations."
+        )
+    if response.status_code >= 400:
+        raise GitHubClientError(
+            f"GitHub API {method} {path} failed ({response.status_code}): {response.text[:200]}"
+        )
+    return response
+
+
+def list_accessible_repositories(token: str) -> list[GitHubRepoInfo]:
+    """List repositories accessible to the PAT (user repos + org memberships)."""
+    session = requests.Session()
+    repositories: list[GitHubRepoInfo] = []
+    seen: set[str] = set()
+    page = 1
+
+    while page <= 20:
+        response = _github_request(
+            session,
+            token,
+            "GET",
+            "/user/repos",
+            params={
+                "per_page": 100,
+                "page": page,
+                "affiliation": "owner,collaborator,organization_member",
+                "sort": "updated",
+                "direction": "desc",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            break
+
+        for row in rows:
+            full_name = row.get("full_name") or ""
+            if not full_name or full_name in seen:
+                continue
+            seen.add(full_name)
+            repositories.append(
+                GitHubRepoInfo(
+                    full_name=full_name,
+                    html_url=row.get("html_url") or f"https://github.com/{full_name}",
+                    default_branch=(row.get("default_branch") or "main").strip(),
+                    private=bool(row.get("private")),
+                    description=row.get("description"),
+                )
+            )
+
+        if len(rows) < 100:
+            break
+        page += 1
+
+    return repositories
+
+
+def list_repository_branches(token: str, repository_url: str) -> tuple[str, list[str]]:
+    owner, repo = parse_repository_url(repository_url)
+    session = requests.Session()
+    repo_response = _github_request(
+        session,
+        token,
+        "GET",
+        f"/repos/{owner}/{repo}",
+    )
+    repo_payload = repo_response.json()
+    default_branch = (repo_payload.get("default_branch") or "main").strip()
+
+    branches: list[str] = []
+    page = 1
+    while page <= 10:
+        response = _github_request(
+            session,
+            token,
+            "GET",
+            f"/repos/{owner}/{repo}/branches",
+            params={"per_page": 100, "page": page},
+        )
+        rows = response.json()
+        if not rows:
+            break
+        for row in rows:
+            name = (row.get("name") or "").strip()
+            if name:
+                branches.append(name)
+        if len(rows) < 100:
+            break
+        page += 1
+
+    return default_branch, branches
 
 
 def load_fixture_activities() -> list[GitHubPullRequestActivity]:
@@ -112,7 +225,11 @@ class GitHubClient:
     def __init__(self, config: GitHubConfigRequest, *, use_fixture: bool = False) -> None:
         self.config = config
         self.use_fixture = use_fixture
-        self.owner, self.repo = parse_repository_url(config.repository_url)
+        repository_urls = config.resolved_repository_urls()
+        if not repository_urls:
+            raise GitHubClientError("At least one GitHub repository URL is required.")
+        self.repository_url = repository_urls[0]
+        self.owner, self.repo = parse_repository_url(self.repository_url)
         self._session = requests.Session()
 
     def fetch_pull_request_activity(
@@ -127,8 +244,9 @@ class GitHubClient:
             return activities_from_mock_feed(), {}
 
         since_dt = since or (datetime.now(UTC) - timedelta(days=30 * SYNC_WINDOW_MONTHS))
-        merged = self._fetch_merged_pull_requests(since_dt)
-        open_by_author = self._fetch_open_pr_counts()
+        branch_targets = self.config.resolved_branch_targets()
+        merged = self._fetch_merged_pull_requests(since_dt, branch_targets)
+        open_by_author = self._fetch_open_pr_counts(branch_targets)
 
         seen_keys: set[str] = set()
         activities: list[GitHubPullRequestActivity] = []
@@ -142,10 +260,9 @@ class GitHubClient:
         return activities, open_by_author
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
-        url = f"{GITHUB_API}{path}"
         response = self._session.request(
             method,
-            url,
+            f"{GITHUB_API}{path}",
             headers=_headers(self.config.personal_access_token),
             timeout=30,
             **kwargs,
@@ -171,22 +288,46 @@ class GitHubClient:
         return response
 
     def _fetch_merged_pull_requests(
-        self, since: datetime
+        self,
+        since: datetime,
+        branch_targets: list[str] | None,
+    ) -> list[GitHubPullRequestActivity]:
+        if branch_targets is None:
+            return self._fetch_merged_pull_requests_for_base(since, base=None)
+
+        activities: list[GitHubPullRequestActivity] = []
+        seen_keys: set[str] = set()
+        for branch in branch_targets:
+            for activity in self._fetch_merged_pull_requests_for_base(since, base=branch):
+                if activity.dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(activity.dedupe_key)
+                activities.append(activity)
+        return activities
+
+    def _fetch_merged_pull_requests_for_base(
+        self,
+        since: datetime,
+        *,
+        base: str | None,
     ) -> list[GitHubPullRequestActivity]:
         activities: list[GitHubPullRequestActivity] = []
         page = 1
         while page <= 10:
+            params: dict[str, str | int] = {
+                "state": "closed",
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": 100,
+                "page": page,
+            }
+            if base:
+                params["base"] = base
+
             response = self._request(
                 "GET",
                 f"/repos/{self.owner}/{self.repo}/pulls",
-                params={
-                    "state": "closed",
-                    "base": self.config.branch_target,
-                    "sort": "updated",
-                    "direction": "desc",
-                    "per_page": 100,
-                    "page": page,
-                },
+                params=params,
             )
             pulls = response.json()
             if not pulls:
@@ -220,7 +361,7 @@ class GitHubClient:
                         pr_number=pr_number,
                         commit_sha=(pull.get("merge_commit_sha") or pull["head"]["sha"])[:40],
                         merge_commit_sha=pull.get("merge_commit_sha"),
-                        branch=pull.get("base", {}).get("ref", self.config.branch_target),
+                        branch=pull.get("base", {}).get("ref", base or self.config.branch_target),
                         author_provider_user_id=f"gh-{login}",
                         author_login=login,
                         author_type=user.get("type", "User"),
@@ -283,19 +424,33 @@ class GitHubClient:
                 reviewers.add(login)
         return sorted(reviewers)
 
-    def _fetch_open_pr_counts(self) -> dict[str, int]:
+    def _fetch_open_pr_counts(self, branch_targets: list[str] | None) -> dict[str, int]:
+        if branch_targets is None:
+            return self._fetch_open_pr_counts_for_base(base=None)
+
+        counts: dict[str, int] = {}
+        for branch in branch_targets:
+            branch_counts = self._fetch_open_pr_counts_for_base(base=branch)
+            for login, count in branch_counts.items():
+                counts[login] = counts.get(login, 0) + count
+        return counts
+
+    def _fetch_open_pr_counts_for_base(self, *, base: str | None) -> dict[str, int]:
         counts: dict[str, int] = {}
         page = 1
         while page <= 5:
+            params: dict[str, str | int] = {
+                "state": "open",
+                "per_page": 100,
+                "page": page,
+            }
+            if base:
+                params["base"] = base
+
             response = self._request(
                 "GET",
                 f"/repos/{self.owner}/{self.repo}/pulls",
-                params={
-                    "state": "open",
-                    "base": self.config.branch_target,
-                    "per_page": 100,
-                    "page": page,
-                },
+                params=params,
             )
             pulls = response.json()
             if not pulls:
@@ -318,4 +473,26 @@ def fetch_github_pull_request_activity(
     *,
     use_fixture: bool = False,
 ) -> tuple[list[GitHubPullRequestActivity], dict[str, int]]:
-    return GitHubClient(config, use_fixture=use_fixture).fetch_pull_request_activity()
+    if use_fixture:
+        return GitHubClient(config, use_fixture=True).fetch_pull_request_activity()
+
+    repository_urls = config.resolved_repository_urls()
+    if not repository_urls:
+        raise GitHubClientError("At least one GitHub repository URL is required.")
+
+    all_activities: list[GitHubPullRequestActivity] = []
+    combined_open_prs: dict[str, int] = {}
+    seen_keys: set[str] = set()
+
+    for repository_url in repository_urls:
+        repo_config = config.with_repository(repository_url)
+        activities, open_prs = GitHubClient(repo_config, use_fixture=False).fetch_pull_request_activity()
+        for activity in activities:
+            if activity.dedupe_key in seen_keys:
+                continue
+            seen_keys.add(activity.dedupe_key)
+            all_activities.append(activity)
+        for login, count in open_prs.items():
+            combined_open_prs[login] = combined_open_prs.get(login, 0) + count
+
+    return all_activities, combined_open_prs

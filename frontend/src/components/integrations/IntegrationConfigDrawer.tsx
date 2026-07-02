@@ -8,6 +8,9 @@ import { useIntegrations } from "@/context/IntegrationsContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import {
   connectJiraIntegration,
+  discoverGitHubRepositories,
+  discoverJiraProjects,
+  listGitHubRepositoryBranches,
   saveGitHubIntegrationConfig,
   saveNotionIntegrationConfig,
   saveSlackIntegrationConfig,
@@ -15,6 +18,8 @@ import {
   validateJiraIntegration,
   validateNotionIntegration,
   validateSlackIntegration,
+  type GitHubDiscoveredRepo,
+  type JiraDiscoveredProject,
 } from "@/lib/api";
 import { INTEGRATION_SETUP_GUIDES } from "@/lib/integration-setup-guides";
 import {
@@ -23,12 +28,14 @@ import {
   isIntegrationDraft,
   normalizeJiraSiteUrl,
   parseJiraProjectKeys,
+  parseGitHubBranchTargets,
   validateJiraConfigDraft,
   type IntegrationDefinition,
   type IntegrationId,
 } from "@/lib/integrations";
 
 import { IntegrationLogo } from "./IntegrationLogos";
+import { IntegrationSearchMultiSelect } from "./IntegrationSearchMultiSelect";
 import { SecretInput } from "./SecretInput";
 
 interface IntegrationConfigDrawerProps {
@@ -230,6 +237,16 @@ export function IntegrationConfigDrawer({
   const connected = isIntegrationConnected(app.id, config);
   const draft = isIntegrationDraft(app.id, config);
   const [mounted, setMounted] = useState(false);
+  const [discoveredRepos, setDiscoveredRepos] = useState<GitHubDiscoveredRepo[]>([]);
+  const [repoSearch, setRepoSearch] = useState("");
+  const [discoveringRepos, setDiscoveringRepos] = useState(false);
+  const [discoveredJiraProjects, setDiscoveredJiraProjects] = useState<
+    JiraDiscoveredProject[]
+  >([]);
+  const [jiraProjectSearch, setJiraProjectSearch] = useState("");
+  const [discoveringJiraProjects, setDiscoveringJiraProjects] = useState(false);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [branchInput, setBranchInput] = useState("");
   const isBusy = saving;
 
   function beginStep(stepId: ConnectStepId) {
@@ -295,8 +312,14 @@ export function IntegrationConfigDrawer({
         });
         setSuccess(`${message} Connected and synced.`);
       } else if (app.id === "github") {
-        if (!config.github.repositoryUrl.trim()) {
-          throw new Error("GitHub repository URL is required.");
+        const selectedRepos =
+          config.github.repositoryUrls.length > 0
+            ? config.github.repositoryUrls
+            : config.github.repositoryUrl.trim()
+              ? [config.github.repositoryUrl.trim()]
+              : [];
+        if (selectedRepos.length === 0) {
+          throw new Error("Select at least one GitHub repository to sync.");
         }
         if (
           !config.github.personalAccessToken.trim() &&
@@ -304,15 +327,39 @@ export function IntegrationConfigDrawer({
         ) {
           throw new Error("GitHub personal access token is required.");
         }
+        if (
+          !config.github.syncAllBranches &&
+          config.github.branchTargets.length === 0 &&
+          !config.github.branchTarget.trim()
+        ) {
+          throw new Error(
+            "Choose specific branches or enable sync for all branches.",
+          );
+        }
+
+        const githubDraft = {
+          ...config.github,
+          repositoryUrls: selectedRepos,
+          repositoryUrl: selectedRepos[0],
+          branchTargets: config.github.syncAllBranches
+            ? []
+            : config.github.branchTargets.length > 0
+              ? config.github.branchTargets
+              : parseGitHubBranchTargets(config.github.branchTarget),
+          branchTarget:
+            config.github.branchTargets[0] ?? config.github.branchTarget ?? "main",
+        };
+
         let message = "";
         await runStep("save", async () => {
           message = await saveGitHubIntegrationConfig({
-            ...config.github,
+            ...githubDraft,
             oauthConnected: false,
             validated: true,
             previouslyConnected: true,
           });
           updateConfig("github", {
+            ...githubDraft,
             oauthConnected: false,
             validated: true,
             previouslyConnected: true,
@@ -376,6 +423,118 @@ export function IntegrationConfigDrawer({
       document.body.style.overflow = previousOverflow;
     };
   }, []);
+
+  useEffect(() => {
+    if (app.id !== "github") return;
+    const targets =
+      config.github.branchTargets.length > 0
+        ? config.github.branchTargets
+        : parseGitHubBranchTargets(config.github.branchTarget);
+    setBranchInput(targets.join(", "));
+  }, [
+    app.id,
+    config.github.branchTargets,
+    config.github.branchTarget,
+  ]);
+
+  async function handleDiscoverGitHubRepos() {
+    if (!config.github.personalAccessToken.trim()) {
+      setError("Enter a GitHub personal access token first.");
+      return;
+    }
+
+    setDiscoveringRepos(true);
+    setError(null);
+    try {
+      const result = await discoverGitHubRepositories(
+        config.github.personalAccessToken,
+      );
+      setDiscoveredRepos(result.repositories);
+      if (result.repositories.length === 0) {
+        setError(result.message);
+      } else {
+        setSuccess(result.message);
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to discover repositories",
+      );
+    } finally {
+      setDiscoveringRepos(false);
+    }
+  }
+
+  async function handleLoadGitHubBranches() {
+    const token = config.github.personalAccessToken.trim();
+    const repositoryUrl =
+      config.github.repositoryUrls[0] ?? config.github.repositoryUrl.trim();
+    if (!token) {
+      setError("Enter a GitHub personal access token first.");
+      return;
+    }
+    if (!repositoryUrl) {
+      setError("Select at least one repository before loading branches.");
+      return;
+    }
+
+    setLoadingBranches(true);
+    setError(null);
+    try {
+      const result = await listGitHubRepositoryBranches(token, repositoryUrl);
+      const branches = result.branches.length > 0 ? result.branches : [result.default_branch];
+      setBranchInput(branches.join(", "));
+      updateConfig("github", {
+        branchTargets: branches,
+        branchTarget: result.default_branch,
+        syncAllBranches: false,
+      });
+      setSuccess(`Loaded ${branches.length} branch(es) from ${repositoryUrl}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load branches");
+    } finally {
+      setLoadingBranches(false);
+    }
+  }
+
+  async function handleDiscoverJiraProjects() {
+    if (!config.jira.siteUrl.trim()) {
+      setError("Jira site URL is required.");
+      return;
+    }
+    if (!config.jira.authEmail.trim()) {
+      setError("Atlassian account email is required.");
+      return;
+    }
+    if (!config.jira.apiToken.trim()) {
+      setError("Jira API token is required.");
+      return;
+    }
+
+    setDiscoveringJiraProjects(true);
+    setError(null);
+    try {
+      const result = await discoverJiraProjects({
+        ...config.jira,
+        siteUrl: normalizeJiraSiteUrl(config.jira.siteUrl),
+      });
+      setDiscoveredJiraProjects(result.projects);
+      if (result.projects.length === 0) {
+        setError(result.message);
+      } else {
+        setSuccess(result.message);
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to discover Jira projects",
+      );
+    } finally {
+      setDiscoveringJiraProjects(false);
+    }
+  }
+
+  function updateJiraProjectKeys(keys: string[]) {
+    updateConfig("jira", { projectKeys: keys.join(", ") });
+  }
 
   function handleRequestClose() {
     if (isBusy) return;
@@ -456,35 +615,20 @@ export function IntegrationConfigDrawer({
           </>
         );
 
-      case "github":
+      case "github": {
+        const repoItems = discoveredRepos.map((repo) => ({
+          id: repo.html_url,
+          label: repo.full_name,
+          description: repo.description ?? undefined,
+          badge: repo.private ? "private" : undefined,
+        }));
+
         return (
           <>
             <SetupGuide integrationId="github" />
-            <Field label="Repository URL" hint="HTTPS clone URL or github.com/org/repo">
-              <input
-                type="url"
-                value={config.github.repositoryUrl}
-                onChange={(e) =>
-                  updateConfig("github", { repositoryUrl: e.target.value })
-                }
-                placeholder="https://github.com/acme/platform"
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Branch targeting" hint="Default branch for graph extraction">
-              <input
-                type="text"
-                value={config.github.branchTarget}
-                onChange={(e) =>
-                  updateConfig("github", { branchTarget: e.target.value })
-                }
-                placeholder="main"
-                className={inputClass}
-              />
-            </Field>
             <Field
               label="Personal access token (PAT)"
-              hint="Fine-grained or classic token with repo read scope. Verified via GitHub API on save."
+              hint="Fine-grained or classic token with repository read scope. Used to discover repositories accessible to your account."
             >
               <SecretInput
                 value={config.github.personalAccessToken}
@@ -497,10 +641,109 @@ export function IntegrationConfigDrawer({
                 placeholder="ghp_..."
               />
             </Field>
+            <div>
+              <button
+                type="button"
+                disabled={discoveringRepos || isBusy}
+                onClick={() => void handleDiscoverGitHubRepos()}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 transition hover:border-zinc-500 disabled:opacity-50"
+              >
+                {discoveringRepos && <Loader2 className="h-4 w-4 animate-spin" />}
+                {discoveringRepos ? "Loading repositories…" : "Load accessible repositories"}
+              </button>
+            </div>
+            <Field
+              label="Repositories to sync"
+              hint="Search and select repositories Empulse should pull PR activity from."
+            >
+              <IntegrationSearchMultiSelect
+                items={repoItems}
+                selectedIds={config.github.repositoryUrls}
+                onChange={(repositoryUrls) =>
+                  updateConfig("github", {
+                    repositoryUrls,
+                    repositoryUrl: repositoryUrls[0] ?? "",
+                  })
+                }
+                searchQuery={repoSearch}
+                onSearchChange={setRepoSearch}
+                emptyMessage="Load repositories after entering your PAT. Previously saved selections are kept even if you do not reload the list."
+                searchPlaceholder="Search repositories…"
+                inputClassName={inputClass}
+              />
+            </Field>
+            <Field
+              label="Branch sync mode"
+              hint="Sync merged PRs targeting all branches, or restrict to a specific list."
+            >
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm text-zinc-200">
+                  <input
+                    type="radio"
+                    name="github-branch-mode"
+                    checked={config.github.syncAllBranches}
+                    onChange={() =>
+                      updateConfig("github", { syncAllBranches: true })
+                    }
+                  />
+                  All branches
+                </label>
+                <label className="flex items-center gap-2 text-sm text-zinc-200">
+                  <input
+                    type="radio"
+                    name="github-branch-mode"
+                    checked={!config.github.syncAllBranches}
+                    onChange={() =>
+                      updateConfig("github", { syncAllBranches: false })
+                    }
+                  />
+                  Specific branches
+                </label>
+              </div>
+            </Field>
+            {!config.github.syncAllBranches && (
+              <Field
+                label="Target branches"
+                hint="Comma-separated branch names applied across selected repositories (e.g. main, develop)."
+              >
+                <input
+                  type="text"
+                  value={branchInput}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setBranchInput(value);
+                    const branchTargets = parseGitHubBranchTargets(value);
+                    updateConfig("github", {
+                      branchTargets,
+                      branchTarget: branchTargets[0] ?? "main",
+                    });
+                  }}
+                  placeholder="main, develop"
+                  className={inputClass}
+                />
+                <button
+                  type="button"
+                  disabled={loadingBranches || isBusy}
+                  onClick={() => void handleLoadGitHubBranches()}
+                  className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50"
+                >
+                  {loadingBranches && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Load branches from first selected repository
+                </button>
+              </Field>
+            )}
           </>
         );
+      }
 
-      case "jira":
+      case "jira": {
+        const selectedProjectKeys = parseJiraProjectKeys(config.jira.projectKeys);
+        const projectItems = discoveredJiraProjects.map((project) => ({
+          id: project.key,
+          label: `${project.key} — ${project.name}`,
+          description: project.project_type ?? undefined,
+        }));
+
         return (
           <>
             <SetupGuide integrationId="jira" />
@@ -525,7 +768,7 @@ export function IntegrationConfigDrawer({
             </Field>
             <Field
               label="Atlassian account email"
-              hint="Email for your Atlassian account — paired with the API token for authentication"
+              hint="Email for your Atlassian account — paired with the API token (not your Empulse login)"
             >
               <input
                 type="email"
@@ -539,42 +782,6 @@ export function IntegrationConfigDrawer({
               />
             </Field>
             <Field
-              label="Target project keys (optional)"
-              hint="Comma-separated keys (ENG, PLAT). Leave empty to import all accessible projects."
-            >
-              <input
-                type="text"
-                value={config.jira.projectKeys}
-                onChange={(e) =>
-                  updateConfig("jira", { projectKeys: e.target.value })
-                }
-                onBlur={() => {
-                  try {
-                    const keys = parseJiraProjectKeys(config.jira.projectKeys);
-                    updateConfig("jira", { projectKeys: keys.join(", ") });
-                  } catch {
-                    // keep raw value so save surfaces the validation error
-                  }
-                }}
-                placeholder="Leave empty for all projects"
-                className={inputClass}
-              />
-            </Field>
-            <Field
-              label="Account email"
-              hint="Atlassian account email for this API token (not your Empulse login)"
-            >
-              <input
-                type="email"
-                value={config.jira.accountEmail}
-                onChange={(e) =>
-                  updateConfig("jira", { accountEmail: e.target.value })
-                }
-                placeholder="you@company.com"
-                className={inputClass}
-              />
-            </Field>
-            <Field
               label="API access token"
               hint="Atlassian API token from id.atlassian.com — verified via Jira API on save"
             >
@@ -584,8 +791,39 @@ export function IntegrationConfigDrawer({
                 placeholder="ATATT..."
               />
             </Field>
+            <div>
+              <button
+                type="button"
+                disabled={discoveringJiraProjects || isBusy}
+                onClick={() => void handleDiscoverJiraProjects()}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 transition hover:border-zinc-500 disabled:opacity-50"
+              >
+                {discoveringJiraProjects && (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                )}
+                {discoveringJiraProjects
+                  ? "Loading projects…"
+                  : "Load accessible projects"}
+              </button>
+            </div>
+            <Field
+              label="Projects to sync"
+              hint="Search and select projects. Leave none selected to import all accessible projects."
+            >
+              <IntegrationSearchMultiSelect
+                items={projectItems}
+                selectedIds={selectedProjectKeys}
+                onChange={updateJiraProjectKeys}
+                searchQuery={jiraProjectSearch}
+                onSearchChange={setJiraProjectSearch}
+                emptyMessage="Load projects after entering site URL, email, and API token. Previously saved selections are kept even if you do not reload the list."
+                searchPlaceholder="Search projects…"
+                inputClassName={inputClass}
+              />
+            </Field>
           </>
         );
+      }
     }
   }
 

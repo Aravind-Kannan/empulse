@@ -177,18 +177,35 @@ def fetch_and_map_github_activity(
     *,
     use_fixture: bool = False,
 ) -> tuple[list[GitHubPullRequestActivity], list[str], dict[str, int]]:
-    _, repo_name = parse_repository_url(config.repository_url)
-    activities, open_prs_by_login = fetch_github_pull_request_activity(
-        config, use_fixture=use_fixture
-    )
-    mapped, unmapped = apply_path_mapping(
-        activities,
-        path_component_map=config.path_component_map,
-        repo_name=repo_name,
-        components_by_id=components_by_id,
-        default_component_id=config.default_component_id,
-    )
-    return mapped, unmapped, open_prs_by_login
+    repository_urls = config.resolved_repository_urls()
+    all_activities: list[GitHubPullRequestActivity] = []
+    all_unmapped: list[str] = []
+    combined_open_prs: dict[str, int] = {}
+    seen_activity_keys: set[str] = set()
+
+    for repository_url in repository_urls:
+        repo_config = config.with_repository(repository_url)
+        _, repo_name = parse_repository_url(repository_url)
+        activities, open_prs_by_login = fetch_github_pull_request_activity(
+            repo_config, use_fixture=use_fixture
+        )
+        mapped, unmapped = apply_path_mapping(
+            activities,
+            path_component_map=config.path_component_map,
+            repo_name=repo_name,
+            components_by_id=components_by_id,
+            default_component_id=config.default_component_id,
+        )
+        for activity in mapped:
+            if activity.dedupe_key in seen_activity_keys:
+                continue
+            seen_activity_keys.add(activity.dedupe_key)
+            all_activities.append(activity)
+        all_unmapped.extend(unmapped)
+        for login, count in open_prs_by_login.items():
+            combined_open_prs[login] = combined_open_prs.get(login, 0) + count
+
+    return all_activities, all_unmapped, combined_open_prs
 
 
 def analyze_github_payload(
@@ -201,8 +218,12 @@ def analyze_github_payload(
 ) -> tuple[str, list[GraphPullRequest], int]:
     """Build Cognee graph nodes from live GitHub pull request activity."""
     narrative_lines = [
-        f"GitHub repository sync: {config.repository_url}",
-        f"Target branch: {config.branch_target}",
+        f"GitHub repository sync: {', '.join(config.resolved_repository_urls())}",
+        (
+            "Target branches: all"
+            if config.sync_all_branches
+            else f"Target branches: {', '.join(config.resolved_branch_targets() or [])}"
+        ),
         "Engineering activity feed with pull requests, commits, and file diffs.",
     ]
     data_points: list[GraphPullRequest] = []

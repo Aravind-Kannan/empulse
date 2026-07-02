@@ -22,9 +22,9 @@ def test_validate_github_credentials_success():
         return_value=repo_response,
     ):
         message = validate_github_credentials(
-            "https://github.com/acme/platform",
             "ghp_test_token",
-            "main",
+            repository_urls=["https://github.com/acme/platform"],
+            branch_targets=["main"],
         )
 
     assert "acme/platform" in message
@@ -41,8 +41,8 @@ def test_validate_github_credentials_repo_not_found():
     ):
         with pytest.raises(ValueError, match="not found or this token cannot access"):
             validate_github_credentials(
-                "https://github.com/acme/private-repo",
                 "ghp_test_token",
+                repository_urls=["https://github.com/acme/private-repo"],
             )
 
 
@@ -63,7 +63,7 @@ def test_validate_github_credentials_missing_branch():
     ):
         with pytest.raises(ValueError, match="Branch 'develop' was not found"):
             validate_github_credentials(
-                "https://github.com/acme/platform",
                 "ghp_test_token",
-                "develop",
+                repository_urls=["https://github.com/acme/platform"],
+                branch_targets=["develop"],
             )

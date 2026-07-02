@@ -4,7 +4,11 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.integrations import (
+    GitHubBranchesRequest,
+    GitHubBranchesResponse,
     GitHubConfigRequest,
+    GitHubDiscoverRequest,
+    GitHubDiscoverResponse,
     GitHubValidateRequest,
     GlobalSyncResponse,
     IntegrationConfigResponse,
@@ -35,6 +39,11 @@ from app.services.integration_config_store import (
     save_jira_config,
     save_notion_config,
     save_slack_config,
+)
+from app.services.github_client import (
+    GitHubClientError,
+    list_accessible_repositories,
+    list_repository_branches,
 )
 from app.services.integration_validate import (
     validate_github_credentials,
@@ -89,15 +98,31 @@ def configure_github(
     token = payload.personal_access_token.strip() or (
         stored.get("personal_access_token") or ""
     ).strip()
-    repository_url = payload.repository_url.strip() or (
-        stored.get("repository_url") or ""
-    ).strip()
+
+    repository_urls = [
+        url.strip() for url in payload.repository_urls if url.strip()
+    ]
+    if not repository_urls:
+        legacy_url = payload.repository_url.strip() or (
+            stored.get("repository_url") or ""
+        ).strip()
+        if legacy_url:
+            repository_urls = [legacy_url]
+
+    branch_targets = [
+        branch.strip() for branch in payload.branch_targets if branch.strip()
+    ]
     branch_target = payload.branch_target.strip() or (
         stored.get("branch_target") or "main"
     )
+    if not branch_targets and branch_target:
+        branch_targets = [branch_target]
 
-    if not repository_url:
-        raise HTTPException(status_code=422, detail="GitHub repository URL is required.")
+    if not repository_urls:
+        raise HTTPException(
+            status_code=422,
+            detail="Select at least one GitHub repository to sync.",
+        )
     if not token:
         raise HTTPException(
             status_code=422,
@@ -106,9 +131,10 @@ def configure_github(
 
     try:
         validation_message = validate_github_credentials(
-            repository_url,
             token,
-            branch_target,
+            repository_urls=repository_urls,
+            branch_targets=branch_targets,
+            sync_all_branches=payload.sync_all_branches,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -117,8 +143,11 @@ def configure_github(
         db,
         tenant.id,
         GitHubConfigRequest(
-            repository_url=repository_url,
-            branch_target=branch_target,
+            repository_url=repository_urls[0],
+            repository_urls=repository_urls,
+            branch_target=branch_targets[0] if branch_targets else branch_target,
+            branch_targets=branch_targets,
+            sync_all_branches=payload.sync_all_branches,
             personal_access_token=token,
             oauth_connected=False,
             path_component_map=payload.path_component_map
@@ -242,11 +271,19 @@ def remove_integration_config(
 
 @router.post("/github/validate", response_model=IntegrationValidateResponse)
 def validate_github(payload: GitHubValidateRequest) -> IntegrationValidateResponse:
+    repository_urls = [url.strip() for url in payload.repository_urls if url.strip()]
+    if not repository_urls and payload.repository_url.strip():
+        repository_urls = [payload.repository_url.strip()]
+    branch_targets = [branch.strip() for branch in payload.branch_targets if branch.strip()]
+    if not branch_targets and payload.branch_target.strip():
+        branch_targets = [payload.branch_target.strip()]
+
     try:
         message = validate_github_credentials(
-            payload.repository_url,
             payload.personal_access_token,
-            payload.branch_target,
+            repository_urls=repository_urls,
+            branch_targets=branch_targets,
+            sync_all_branches=payload.sync_all_branches,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -254,6 +291,47 @@ def validate_github(payload: GitHubValidateRequest) -> IntegrationValidateRespon
         source="github",
         valid=True,
         message=message,
+    )
+
+
+@router.post("/github/discover", response_model=GitHubDiscoverResponse)
+def discover_github_repositories(
+    payload: GitHubDiscoverRequest,
+) -> GitHubDiscoverResponse:
+    try:
+        repositories = list_accessible_repositories(payload.personal_access_token)
+    except GitHubClientError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not repositories:
+        return GitHubDiscoverResponse(
+            repositories=[],
+            message=(
+                "No repositories were returned for this token. "
+                "Confirm the PAT has repository read access."
+            ),
+        )
+
+    return GitHubDiscoverResponse(
+        repositories=repositories,
+        message=f"Found {len(repositories)} accessible repositor{'y' if len(repositories) == 1 else 'ies'}.",
+    )
+
+
+@router.post("/github/branches", response_model=GitHubBranchesResponse)
+def list_github_branches(payload: GitHubBranchesRequest) -> GitHubBranchesResponse:
+    try:
+        default_branch, branches = list_repository_branches(
+            payload.personal_access_token,
+            payload.repository_url,
+        )
+    except GitHubClientError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return GitHubBranchesResponse(
+        repository_url=payload.repository_url.strip(),
+        default_branch=default_branch,
+        branches=branches,
     )
 
 

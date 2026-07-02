@@ -50,7 +50,14 @@ def _has_integration_credentials(
     if provider == "jira":
         return bool(stored.get("site_url", "").strip() and stored.get("api_token", "").strip())
     if provider == "github":
-        return bool(stored.get("repository_url", "").strip()) and bool(
+        repository_urls = [
+            url.strip()
+            for url in (stored.get("repository_urls") or [])
+            if str(url).strip()
+        ]
+        repository_url = (stored.get("repository_url") or "").strip()
+        has_repo = bool(repository_urls or repository_url)
+        return has_repo and bool(
             stored.get("personal_access_token", "").strip() or stored.get("oauth_connected")
         )
     if provider == "slack":
@@ -85,7 +92,7 @@ def fetch_live_provider_members(
             if not config:
                 return []
             records = _fetch_github_org_members_live(
-                config.repository_url,
+                config.resolved_repository_urls()[0],
                 config.personal_access_token,
             )
             return _records_to_members(records)

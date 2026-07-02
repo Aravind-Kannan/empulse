@@ -10,6 +10,8 @@ from app.schemas.jira import (
     JiraConnectRequest,
     JiraDebugState,
     JiraIntegrationResponse,
+    JiraProjectsRequest,
+    JiraProjectsResponse,
     JiraValidateRequest,
     JiraValidateResponse,
 )
@@ -18,6 +20,7 @@ from app.services.jira_service import (
     get_jira_debug_state,
     get_jira_integration,
     integration_to_response,
+    list_accessible_jira_projects,
     sync_jira_to_cognee,
     validate_jira_credentials,
 )
@@ -68,6 +71,29 @@ def validate_jira(payload: JiraValidateRequest) -> JiraValidateResponse:
         valid=True,
         message=message,
         account_display_name=display_name,
+    )
+
+
+@router.post("/projects", response_model=JiraProjectsResponse)
+def discover_jira_projects(payload: JiraProjectsRequest) -> JiraProjectsResponse:
+    try:
+        projects = list_accessible_jira_projects(
+            payload.jira_domain,
+            str(payload.auth_email),
+            payload.api_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not projects:
+        return JiraProjectsResponse(
+            projects=[],
+            message="No Jira projects found for this account.",
+        )
+
+    return JiraProjectsResponse(
+        projects=projects,
+        message=f"Found {len(projects)} accessible project{'s' if len(projects) != 1 else ''}.",
     )
 
 

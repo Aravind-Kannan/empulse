@@ -26,7 +26,10 @@ export interface NotionConfig {
 
 export interface GitHubConfig {
   repositoryUrl: string;
+  repositoryUrls: string[];
   branchTarget: string;
+  branchTargets: string[];
+  syncAllBranches: boolean;
   personalAccessToken: string;
   oauthConnected: boolean;
   validated?: boolean;
@@ -38,7 +41,6 @@ export interface JiraConfig {
   authEmail: string;
   projectKeys: string;
   apiToken: string;
-  accountEmail: string;
   validated?: boolean;
   previouslyConnected?: boolean;
 }
@@ -108,11 +110,14 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
   notion: { integrationToken: "", databaseIds: "" },
   github: {
     repositoryUrl: "",
+    repositoryUrls: [],
     branchTarget: "main",
+    branchTargets: [],
+    syncAllBranches: false,
     personalAccessToken: "",
     oauthConnected: false,
   },
-  jira: { siteUrl: "", authEmail: "", projectKeys: "", apiToken: "", accountEmail: "" },
+  jira: { siteUrl: "", authEmail: "", projectKeys: "", apiToken: "" },
 };
 
 const JIRA_SITE_RE =
@@ -143,6 +148,16 @@ export function parseJiraProjectKeys(raw: string): string[] {
     if (!keys.includes(key)) keys.push(key);
   }
   return keys;
+}
+
+export function parseGitHubBranchTargets(raw: string): string[] {
+  const branches: string[] = [];
+  for (const part of raw.split(",")) {
+    const branch = part.trim();
+    if (!branch) continue;
+    if (!branches.includes(branch)) branches.push(branch);
+  }
+  return branches;
 }
 
 /** Returns an error message when the draft config is invalid, otherwise null. */
@@ -192,7 +207,8 @@ export function isIntegrationConnected(
       );
     case "github":
       return Boolean(
-        config.github.repositoryUrl.trim() &&
+        (config.github.repositoryUrls.length > 0 ||
+          config.github.repositoryUrl.trim()) &&
           (config.github.personalAccessToken.trim() ||
             config.github.oauthConnected) &&
           config.github.validated,
@@ -220,7 +236,8 @@ export function isIntegrationDraft(
       return Boolean(config.notion.integrationToken.trim());
     case "github":
       return Boolean(
-        config.github.repositoryUrl.trim() &&
+        (config.github.repositoryUrls.length > 0 ||
+          config.github.repositoryUrl.trim()) &&
           (config.github.personalAccessToken.trim() ||
             config.github.oauthConnected),
       );

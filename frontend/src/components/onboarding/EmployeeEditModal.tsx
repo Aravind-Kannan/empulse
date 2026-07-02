@@ -18,7 +18,10 @@ interface EmployeeEditModalProps {
     employee: Employee,
     assignments: Assignment[],
   ) => void | Promise<void>;
+  onDelete?: (employeeId: string) => void | Promise<void>;
   isSaving?: boolean;
+  isDeleting?: boolean;
+  allowDelete?: boolean;
 }
 
 export function EmployeeEditModal({
@@ -27,7 +30,10 @@ export function EmployeeEditModal({
   orgChart: orgChartProp,
   availableRoles: availableRolesProp,
   onSave: onSaveProp,
+  onDelete: onDeleteProp,
   isSaving = false,
+  isDeleting = false,
+  allowDelete = false,
 }: EmployeeEditModalProps) {
   const onboarding = useContext(OnboardingContext);
   const orgChart = orgChartProp ?? onboarding?.orgChart;
@@ -41,6 +47,11 @@ export function EmployeeEditModal({
     .filter((assignment) => assignment.employee_id === employee.id)
     .map((assignment) => assignment.component_id);
   const [componentIds, setComponentIds] = useState<string[]>(existingComponentIds);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const directReportCount = orgChart.employees.filter(
+    (item) => item.manager_id === employee.id,
+  ).length;
 
   useEffect(() => {
     setDraft(employee);
@@ -49,6 +60,7 @@ export function EmployeeEditModal({
         .filter((assignment) => assignment.employee_id === employee.id)
         .map((assignment) => assignment.component_id),
     );
+    setConfirmDelete(false);
   }, [employee, orgChart.assignments]);
 
   const managerOptions = orgChart.employees.filter(
@@ -70,6 +82,14 @@ export function EmployeeEditModal({
     }
     onClose();
   }
+
+  async function handleDelete() {
+    if (!onDeleteProp) return;
+    await onDeleteProp(employee.id);
+    onClose();
+  }
+
+  const isBusy = isSaving || isDeleting;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -186,23 +206,69 @@ export function EmployeeEditModal({
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-zinc-800 px-5 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSaving}
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSave()}
-            disabled={isSaving}
-            className="rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-white disabled:opacity-50"
-          >
-            {isSaving ? "Saving…" : "Save changes"}
-          </button>
+        <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-5 py-4">
+          <div className="min-w-0 flex-1">
+            {allowDelete && onDeleteProp && (
+              <div>
+                {!confirmDelete ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={isBusy}
+                    className="rounded-lg border border-red-500/40 px-4 py-2 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                  >
+                    Delete member
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs leading-relaxed text-red-300">
+                      Permanently remove {employee.name} from the org chart
+                      {directReportCount > 0
+                        ? ` and re-parent ${directReportCount} direct report${directReportCount === 1 ? "" : "s"}`
+                        : ""}
+                      ?
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleDelete()}
+                        disabled={isBusy}
+                        className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
+                      >
+                        {isDeleting ? "Deleting…" : "Confirm delete"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        disabled={isBusy}
+                        className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex shrink-0 justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isBusy}
+              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-900 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={isBusy}
+              className="rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-white disabled:opacity-50"
+            >
+              {isSaving ? "Saving…" : "Save changes"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

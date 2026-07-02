@@ -44,7 +44,10 @@ _DEFAULT_CONFIG: dict[str, dict[str, Any]] = {
     },
     "github": {
         "repository_url": "",
+        "repository_urls": [],
         "branch_target": "main",
+        "branch_targets": [],
+        "sync_all_branches": False,
         "personal_access_token": "",
         "oauth_connected": False,
         "path_component_map": {},
@@ -103,7 +106,44 @@ def get_source_config(
 
 
 def get_all_configs(db: Session, tenant_id: uuid.UUID) -> dict[str, dict[str, Any]]:
-    return {source: get_source_config(db, tenant_id, source) for source in INTEGRATION_SOURCES}
+    configs = {
+        source: get_source_config(db, tenant_id, source) for source in INTEGRATION_SOURCES
+    }
+    configs["jira"] = _merge_jira_integration_config(db, tenant_id, configs["jira"])
+    return configs
+
+
+def _merge_jira_integration_config(
+    db: Session,
+    tenant_id: uuid.UUID,
+    stored: dict[str, Any],
+) -> dict[str, Any]:
+    from app.services.credential_crypto import decrypt_secret
+    from app.services.jira_service import get_jira_integration
+
+    integration = get_jira_integration(db, tenant_id)
+    if not integration:
+        return stored
+
+    token = (stored.get("api_token") or "").strip()
+    if not token:
+        try:
+            token = decrypt_secret(integration.encrypted_api_token)
+        except Exception:
+            token = ""
+
+    merged = {
+        **stored,
+        "site_url": integration.jira_domain or stored.get("site_url", ""),
+        "account_email": integration.auth_email or stored.get("account_email", ""),
+        "project_keys": integration.project_keys or stored.get("project_keys", ""),
+        "api_token": token,
+        "validated": bool(token) or bool(stored.get("validated")),
+        "previously_connected": True,
+    }
+    if token:
+        merged["validated"] = True
+    return merged
 
 
 def upsert_source_config(
@@ -146,6 +186,11 @@ def upsert_source_config(
 def delete_source_config(db: Session, tenant_id: uuid.UUID, source: str) -> None:
     if source not in INTEGRATION_SOURCES:
         raise ValueError(f"Unsupported integration source '{source}'.")
+
+    if source == "jira":
+        from app.services.jira_service import delete_jira_integration
+
+        delete_jira_integration(db, tenant_id)
 
     row = _get_row(db, tenant_id, source)
     if row:
@@ -206,15 +251,31 @@ def get_github_config(
     tenant_id: uuid.UUID,
 ) -> GitHubConfigRequest | None:
     stored = get_source_config(db, tenant_id, "github")
-    if not stored.get("repository_url", "").strip():
+    repository_urls = [
+        url.strip()
+        for url in (stored.get("repository_urls") or [])
+        if str(url).strip()
+    ]
+    repository_url = (stored.get("repository_url") or "").strip()
+    if not repository_urls and repository_url:
+        repository_urls = [repository_url]
+    if not repository_urls:
         return None
     if not stored.get("personal_access_token", "").strip() and not stored.get(
         "oauth_connected"
     ):
         return None
+    branch_targets = [
+        branch.strip()
+        for branch in (stored.get("branch_targets") or [])
+        if str(branch).strip()
+    ]
     return GitHubConfigRequest(
-        repository_url=stored["repository_url"],
+        repository_url=repository_urls[0],
+        repository_urls=repository_urls,
         branch_target=stored.get("branch_target", "main"),
+        branch_targets=branch_targets,
+        sync_all_branches=bool(stored.get("sync_all_branches")),
         personal_access_token=stored.get("personal_access_token", ""),
         oauth_connected=bool(stored.get("oauth_connected")),
         path_component_map=stored.get("path_component_map") or {},
@@ -226,7 +287,11 @@ def get_jira_config(
     db: Session,
     tenant_id: uuid.UUID,
 ) -> JiraConfigRequest | None:
-    stored = get_source_config(db, tenant_id, "jira")
+    stored = _merge_jira_integration_config(
+        db,
+        tenant_id,
+        get_source_config(db, tenant_id, "jira"),
+    )
     if not stored.get("site_url", "").strip():
         return None
     if not stored.get("api_token", "").strip():

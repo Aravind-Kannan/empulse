@@ -4,12 +4,37 @@ from pydantic import BaseModel, Field
 
 
 class GitHubConfigRequest(BaseModel):
-    repository_url: str = Field(min_length=1)
+    repository_url: str = ""
+    repository_urls: list[str] = Field(default_factory=list)
     branch_target: str = "main"
+    branch_targets: list[str] = Field(default_factory=list)
+    sync_all_branches: bool = False
     personal_access_token: str = ""
     oauth_connected: bool = False
     path_component_map: dict[str, str] = Field(default_factory=dict)
     default_component_id: str | None = None
+
+    def resolved_repository_urls(self) -> list[str]:
+        urls = [url.strip() for url in self.repository_urls if url.strip()]
+        if not urls and self.repository_url.strip():
+            urls = [self.repository_url.strip()]
+        return urls
+
+    def resolved_branch_targets(self) -> list[str] | None:
+        if self.sync_all_branches:
+            return None
+        branches = [branch.strip() for branch in self.branch_targets if branch.strip()]
+        if not branches and self.branch_target.strip():
+            branches = [self.branch_target.strip()]
+        return branches or ["main"]
+
+    def with_repository(self, repository_url: str) -> "GitHubConfigRequest":
+        return self.model_copy(
+            update={
+                "repository_url": repository_url,
+                "repository_urls": [repository_url],
+            }
+        )
 
 
 class JiraConfigRequest(BaseModel):
@@ -31,9 +56,40 @@ class NotionValidateRequest(BaseModel):
 
 
 class GitHubValidateRequest(BaseModel):
-    repository_url: str = Field(min_length=1)
     personal_access_token: str = Field(min_length=1)
+    repository_url: str = ""
+    repository_urls: list[str] = Field(default_factory=list)
     branch_target: str = "main"
+    branch_targets: list[str] = Field(default_factory=list)
+    sync_all_branches: bool = False
+
+
+class GitHubDiscoverRequest(BaseModel):
+    personal_access_token: str = Field(min_length=1)
+
+
+class GitHubRepoInfo(BaseModel):
+    full_name: str
+    html_url: str
+    default_branch: str
+    private: bool
+    description: str | None = None
+
+
+class GitHubDiscoverResponse(BaseModel):
+    repositories: list[GitHubRepoInfo]
+    message: str
+
+
+class GitHubBranchesRequest(BaseModel):
+    personal_access_token: str = Field(min_length=1)
+    repository_url: str = Field(min_length=1)
+
+
+class GitHubBranchesResponse(BaseModel):
+    repository_url: str
+    default_branch: str
+    branches: list[str]
 
 
 class SlackValidateRequest(BaseModel):
@@ -76,7 +132,10 @@ class StoredNotionConfig(BaseModel):
 
 class StoredGitHubConfig(BaseModel):
     repository_url: str = ""
+    repository_urls: list[str] = Field(default_factory=list)
     branch_target: str = "main"
+    branch_targets: list[str] = Field(default_factory=list)
+    sync_all_branches: bool = False
     personal_access_token: str = ""
     oauth_connected: bool = False
     validated: bool = False

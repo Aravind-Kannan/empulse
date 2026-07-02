@@ -32,3 +32,11 @@ class EmployeeUpdateResponse(BaseModel):
     cognee_dataset: str
     graph_nodes_created: int
     graph_edges_created: int
+
+
+class EmployeeDeleteResponse(BaseModel):
+    employee_id: str
+    direct_reports_reparented: int
+    cognee_dataset: str
+    graph_nodes_created: int
+    graph_edges_created: int

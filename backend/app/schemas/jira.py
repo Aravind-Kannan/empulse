@@ -102,6 +102,36 @@ class JiraValidateResponse(BaseModel):
     account_display_name: str | None = None
 
 
+class JiraProjectsRequest(BaseModel):
+    jira_domain: str = Field(min_length=1)
+    auth_email: EmailStr
+    api_token: str = Field(min_length=1)
+
+    @field_validator("jira_domain")
+    @classmethod
+    def validate_domain(cls, value: str) -> str:
+        return normalize_jira_domain(value)
+
+    @field_validator("api_token")
+    @classmethod
+    def validate_token(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Jira API token is required.")
+        return cleaned
+
+
+class JiraProjectInfo(BaseModel):
+    key: str
+    name: str
+    project_type: str | None = None
+
+
+class JiraProjectsResponse(BaseModel):
+    projects: list[JiraProjectInfo]
+    message: str
+
+
 class JiraDebugStage(BaseModel):
     name: str
     status: Literal["pending", "running", "completed", "failed"]

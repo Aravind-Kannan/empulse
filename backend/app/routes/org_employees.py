@@ -3,12 +3,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.role_evolution import (
+    EmployeeDeleteResponse,
     EmployeeUpdateRequest,
     EmployeeUpdateResponse,
     RoleHistoryRecord,
 )
 from app.services.org_chart_read import load_org_chart
 from app.services.role_evolution import (
+    delete_employee_with_cognee_sync,
     list_active_roles,
     list_role_history,
     update_employee_with_role_evolution,
@@ -79,4 +81,28 @@ async def patch_employee(
         raise HTTPException(
             status_code=502,
             detail=f"Employee update failed during Cognee sync: {exc}",
+        ) from exc
+
+
+@router.delete(
+    "/employees/{employee_id}",
+    response_model=EmployeeDeleteResponse,
+)
+async def delete_employee(
+    employee_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EmployeeDeleteResponse:
+    org = load_org_chart(db, tenant)
+    if not any(employee.id == employee_id for employee in org.employees):
+        raise HTTPException(status_code=404, detail="Employee not found.")
+
+    try:
+        return await delete_employee_with_cognee_sync(db, employee_id, tenant)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Employee delete failed during Cognee sync: {exc}",
         ) from exc

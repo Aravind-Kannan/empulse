@@ -32,6 +32,7 @@ export interface OrgWorkspaceProps {
     employee: Employee,
     assignments: Assignment[],
   ) => void | Promise<void>;
+  onDeleteEmployee?: (employeeId: string) => void | Promise<void>;
   onAddEmployee?: (employee: Employee) => void | Promise<void>;
   onSave: () => Promise<void>;
   backHref?: string;
@@ -50,6 +51,7 @@ export function OrgWorkspace({
   onAssignTeam,
   onReplaceOrgChart,
   onUpdateEmployee,
+  onDeleteEmployee,
   onAddEmployee,
   onSave,
   backHref,
@@ -60,6 +62,7 @@ export function OrgWorkspace({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isDeletingEmployee, setIsDeletingEmployee] = useState(false);
   const [bulkCsvOpen, setBulkCsvOpen] = useState(false);
   const [addEmployeeOpen, setAddEmployeeOpen] = useState(false);
   const [isAddingEmployee, setIsAddingEmployee] = useState(false);
@@ -95,6 +98,22 @@ export function OrgWorkspace({
       setEditingEmployee(null);
     } finally {
       setIsEditing(false);
+    }
+  }
+
+  async function handleEmployeeDelete(employeeId: string) {
+    if (!onDeleteEmployee) return;
+    setIsDeletingEmployee(true);
+    try {
+      await onDeleteEmployee(employeeId);
+      setEditingEmployee(null);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(employeeId);
+        return next;
+      });
+    } finally {
+      setIsDeletingEmployee(false);
     }
   }
 
@@ -243,8 +262,11 @@ export function OrgWorkspace({
           orgChart={orgChart}
           availableRoles={availableRoles}
           isSaving={isEditing}
+          isDeleting={isDeletingEmployee}
+          allowDelete={Boolean(onDeleteEmployee)}
           onClose={() => setEditingEmployee(null)}
           onSave={handleEmployeeSave}
+          onDelete={onDeleteEmployee ? handleEmployeeDelete : undefined}
         />
       )}
 

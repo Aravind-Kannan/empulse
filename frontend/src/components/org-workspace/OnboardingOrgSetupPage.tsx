@@ -26,6 +26,7 @@ export function OnboardingOrgSetupPage() {
     setOrgChart,
     updateEmployee,
     addEmployee,
+    removeEmployee,
     updateAssignments,
   } = useOnboarding();
   const { refreshOperationalState } = useWorkspace();
@@ -49,6 +50,10 @@ export function OnboardingOrgSetupPage() {
 
   async function handleAddEmployee(employee: Employee) {
     addEmployee(employee);
+  }
+
+  async function handleDeleteEmployee(employeeId: string) {
+    removeEmployee(employeeId);
   }
 
   async function handleSave() {
@@ -91,6 +96,7 @@ export function OnboardingOrgSetupPage() {
         onAssignTeam={assignTeamTag}
         onReplaceOrgChart={setOrgChart}
         onUpdateEmployee={handleUpdateEmployee}
+        onDeleteEmployee={handleDeleteEmployee}
         onAddEmployee={handleAddEmployee}
         onSave={handleSave}
       />

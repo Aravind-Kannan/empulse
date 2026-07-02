@@ -107,78 +107,112 @@ def validate_jira_credentials(
 
 
 def validate_github_credentials(
-    repository_url: str,
     personal_access_token: str,
+    *,
+    repository_url: str = "",
+    repository_urls: list[str] | None = None,
     branch_target: str = "main",
+    branch_targets: list[str] | None = None,
+    sync_all_branches: bool = False,
 ) -> str:
-    """Verify repository URL and PAT can read the target repo."""
+    """Verify PAT access and selected repositories/branches."""
     token = personal_access_token.strip()
     if not token:
         raise ValueError("GitHub personal access token is required.")
 
-    try:
-        owner, repo = parse_repository_url(repository_url)
-    except ValueError as exc:
-        raise ValueError(str(exc)) from exc
+    urls = [url.strip() for url in (repository_urls or []) if url.strip()]
+    if not urls and repository_url.strip():
+        urls = [repository_url.strip()]
+    if not urls:
+        raise ValueError("Select at least one GitHub repository to sync.")
 
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    repo_url = f"https://api.github.com/repos/{owner}/{repo}"
 
-    try:
-        response = requests.get(repo_url, headers=headers, timeout=20)
-    except requests.RequestException as exc:
-        raise ValueError(f"Could not reach GitHub API: {exc}") from exc
+    verified: list[str] = []
+    for repo_url in urls:
+        try:
+            owner, repo = parse_repository_url(repo_url)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
-    if response.status_code == 401:
-        raise ValueError(
-            "GitHub rejected this token (401). Generate a new personal access token "
-            "with repository read access."
-        )
-    if response.status_code == 404:
-        raise ValueError(
-            f"Repository '{owner}/{repo}' was not found or this token cannot access it. "
-            "Confirm the repository URL and that your PAT is authorized for this repo "
-            "(fine-grained tokens must explicitly include the repository)."
-        )
-    if response.status_code == 403:
-        detail = response.text[:160] if response.text else response.reason
-        raise ValueError(
-            f"GitHub denied access to '{owner}/{repo}' (403). "
-            f"Check token scopes and repository permissions. {detail}"
-        )
-    if response.status_code >= 400:
-        detail = response.text[:200] if response.text else response.reason
-        raise ValueError(f"GitHub API error ({response.status_code}): {detail}")
+        api_repo_url = f"https://api.github.com/repos/{owner}/{repo}"
+        try:
+            response = requests.get(api_repo_url, headers=headers, timeout=20)
+        except requests.RequestException as exc:
+            raise ValueError(f"Could not reach GitHub API: {exc}") from exc
 
-    payload = response.json()
-    full_name = payload.get("full_name") or f"{owner}/{repo}"
-    default_branch = (payload.get("default_branch") or "main").strip()
-    branch = (branch_target or default_branch).strip()
-
-    branch_note = ""
-    if branch and branch != default_branch:
-        branch_resp = requests.get(
-            f"{repo_url}/branches/{branch}",
-            headers=headers,
-            timeout=15,
-        )
-        if branch_resp.status_code == 404:
+        if response.status_code == 401:
             raise ValueError(
-                f"Branch '{branch}' was not found on {full_name}. "
-                f"The default branch is '{default_branch}'."
+                "GitHub rejected this token (401). Generate a new personal access token "
+                "with repository read access."
             )
-        if branch_resp.status_code >= 400:
-            detail = branch_resp.text[:160] if branch_resp.text else branch_resp.reason
+        if response.status_code == 404:
             raise ValueError(
-                f"Could not verify branch '{branch}' on {full_name}: {detail}"
+                f"Repository '{owner}/{repo}' was not found or this token cannot access it. "
+                "Confirm the repository is selected and that your PAT is authorized for it."
             )
-        branch_note = f" Target branch '{branch}' verified."
+        if response.status_code == 403:
+            detail = response.text[:160] if response.text else response.reason
+            raise ValueError(
+                f"GitHub denied access to '{owner}/{repo}' (403). "
+                f"Check token scopes and repository permissions. {detail}"
+            )
+        if response.status_code >= 400:
+            detail = response.text[:200] if response.text else response.reason
+            raise ValueError(f"GitHub API error ({response.status_code}): {detail}")
 
-    return f"GitHub token valid — verified access to {full_name}.{branch_note}"
+        payload = response.json()
+        full_name = payload.get("full_name") or f"{owner}/{repo}"
+        default_branch = (payload.get("default_branch") or "main").strip()
+        verified.append(full_name)
+
+        if sync_all_branches:
+            continue
+
+        branches = [branch.strip() for branch in (branch_targets or []) if branch.strip()]
+        if not branches and branch_target.strip():
+            branches = [branch_target.strip()]
+        if not branches:
+            branches = [default_branch]
+
+        for branch in branches:
+            branch_resp = requests.get(
+                f"{api_repo_url}/branches/{branch}",
+                headers=headers,
+                timeout=15,
+            )
+            if branch_resp.status_code == 404:
+                raise ValueError(
+                    f"Branch '{branch}' was not found on {full_name}. "
+                    f"The default branch is '{default_branch}'."
+                )
+            if branch_resp.status_code >= 400:
+                detail = branch_resp.text[:160] if branch_resp.text else branch_resp.reason
+                raise ValueError(
+                    f"Could not verify branch '{branch}' on {full_name}: {detail}"
+                )
+
+    repo_summary = ", ".join(verified)
+    if sync_all_branches:
+        branch_note = " All branches will be synced."
+    else:
+        branch_list = [branch.strip() for branch in (branch_targets or []) if branch.strip()]
+        if not branch_list and branch_target.strip():
+            branch_list = [branch_target.strip()]
+        branch_note = (
+            f" Target branches: {', '.join(branch_list)}."
+            if branch_list
+            else ""
+        )
+
+    return (
+        f"GitHub token valid — verified access to {len(verified)} "
+        f"repositor{'y' if len(verified) == 1 else 'ies'} ({repo_summary}).{branch_note}"
+    )
 
 
 def validate_slack_bot_token(token: str) -> str:

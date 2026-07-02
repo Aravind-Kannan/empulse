@@ -29,9 +29,11 @@ import type {
   BulkCsvRow,
   BulkUploadResponse,
   EmployeeUpdateResponse,
+  EmployeeDeleteResponse,
 } from "./types";
 import {
   DEFAULT_INTEGRATION_CONFIG,
+  normalizeJiraSiteUrl,
   type IntegrationConfigMap,
   type IntegrationId,
 } from "./integrations";
@@ -80,6 +82,18 @@ export async function updateOrgEmployee(
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Employee update failed"));
+  }
+  return response.json();
+}
+
+export async function deleteOrgEmployee(
+  employeeId: string,
+): Promise<EmployeeDeleteResponse> {
+  const response = await apiFetch(`${API_BASE}/api/org/employees/${employeeId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Employee delete failed"));
   }
   return response.json();
 }
@@ -463,17 +477,18 @@ export async function validateNotionIntegration(
 }
 
 export async function validateGitHubIntegration(
-  repositoryUrl: string,
-  personalAccessToken: string,
-  branchTarget: string,
+  config: IntegrationConfigMap["github"],
 ): Promise<string> {
   const response = await apiFetch(`${API_BASE}/api/integrations/github/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      repository_url: repositoryUrl,
-      personal_access_token: personalAccessToken,
-      branch_target: branchTarget,
+      personal_access_token: config.personalAccessToken,
+      repository_url: config.repositoryUrl,
+      repository_urls: config.repositoryUrls,
+      branch_target: config.branchTarget,
+      branch_targets: config.branchTargets,
+      sync_all_branches: config.syncAllBranches,
     }),
   });
   if (!response.ok) {
@@ -481,6 +496,46 @@ export async function validateGitHubIntegration(
   }
   const data = (await response.json()) as { message: string };
   return data.message;
+}
+
+export interface GitHubDiscoveredRepo {
+  full_name: string;
+  html_url: string;
+  default_branch: string;
+  private: boolean;
+  description: string | null;
+}
+
+export async function discoverGitHubRepositories(
+  personalAccessToken: string,
+): Promise<{ repositories: GitHubDiscoveredRepo[]; message: string }> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/github/discover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ personal_access_token: personalAccessToken }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "GitHub repository discovery failed"));
+  }
+  return response.json();
+}
+
+export async function listGitHubRepositoryBranches(
+  personalAccessToken: string,
+  repositoryUrl: string,
+): Promise<{ default_branch: string; branches: string[] }> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/github/branches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      personal_access_token: personalAccessToken,
+      repository_url: repositoryUrl,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "GitHub branch listing failed"));
+  }
+  return response.json();
 }
 
 export async function validateSlackIntegration(
@@ -514,7 +569,10 @@ type StoredIntegrationsConfig = {
   };
   github: {
     repository_url: string;
+    repository_urls: string[];
     branch_target: string;
+    branch_targets: string[];
+    sync_all_branches: boolean;
     personal_access_token: string;
     oauth_connected: boolean;
     validated?: boolean;
@@ -549,7 +607,20 @@ function mapStoredIntegrationConfig(
     },
     github: {
       repositoryUrl: stored.github.repository_url ?? "",
+      repositoryUrls:
+        (stored.github.repository_urls?.length ?? 0) > 0
+          ? stored.github.repository_urls
+          : stored.github.repository_url
+            ? [stored.github.repository_url]
+            : [],
       branchTarget: stored.github.branch_target ?? "main",
+      branchTargets:
+        (stored.github.branch_targets?.length ?? 0) > 0
+          ? stored.github.branch_targets
+          : stored.github.branch_target
+            ? [stored.github.branch_target]
+            : [],
+      syncAllBranches: Boolean(stored.github.sync_all_branches),
       personalAccessToken: stored.github.personal_access_token ?? "",
       oauthConnected: Boolean(stored.github.oauth_connected),
       validated: Boolean(stored.github.validated),
@@ -557,9 +628,9 @@ function mapStoredIntegrationConfig(
     },
     jira: {
       siteUrl: stored.jira.site_url ?? "",
+      authEmail: stored.jira.account_email ?? "",
       projectKeys: stored.jira.project_keys ?? "",
       apiToken: stored.jira.api_token ?? "",
-      accountEmail: stored.jira.account_email ?? "",
       validated: Boolean(stored.jira.validated),
       previouslyConnected: Boolean(stored.jira.previously_connected),
     },
@@ -630,8 +701,11 @@ export async function saveGitHubIntegrationConfig(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      repository_url: config.repositoryUrl,
-      branch_target: config.branchTarget,
+      repository_url: config.repositoryUrls[0] ?? config.repositoryUrl,
+      repository_urls: config.repositoryUrls,
+      branch_target: config.branchTargets[0] ?? config.branchTarget,
+      branch_targets: config.branchTargets,
+      sync_all_branches: config.syncAllBranches,
       personal_access_token: config.personalAccessToken,
       oauth_connected: config.oauthConnected,
       validated: config.validated ?? false,
@@ -645,6 +719,30 @@ export async function saveGitHubIntegrationConfig(
   return data.message ?? "GitHub configuration saved.";
 }
 
+export interface JiraDiscoveredProject {
+  key: string;
+  name: string;
+  project_type: string | null;
+}
+
+export async function discoverJiraProjects(
+  config: IntegrationConfigMap["jira"],
+): Promise<{ projects: JiraDiscoveredProject[]; message: string }> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/jira/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jira_domain: normalizeJiraSiteUrl(config.siteUrl),
+      auth_email: config.authEmail,
+      api_token: config.apiToken,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Jira project discovery failed"));
+  }
+  return response.json();
+}
+
 export async function validateJiraIntegration(
   config: IntegrationConfigMap["jira"],
 ): Promise<string> {
@@ -655,7 +753,6 @@ export async function validateJiraIntegration(
       jira_domain: config.siteUrl,
       auth_email: config.authEmail,
       api_token: config.apiToken,
-      account_email: config.accountEmail,
     }),
   });
   if (!response.ok) {
@@ -787,13 +884,15 @@ export async function fetchEmployeeMasterData(
       slack_bot_token: integrationConfig?.slack.botToken ?? null,
       notion_integration_token: integrationConfig?.notion.integrationToken ?? null,
       notion_database_ids: integrationConfig?.notion.databaseIds ?? null,
-      github_repository_url: integrationConfig?.github.repositoryUrl ?? null,
+      github_repository_url:
+        integrationConfig?.github.repositoryUrls[0] ??
+        integrationConfig?.github.repositoryUrl ??
+        null,
       github_personal_access_token:
         integrationConfig?.github.personalAccessToken ?? null,
       jira_site_url: integrationConfig?.jira.siteUrl ?? null,
       jira_auth_email: integrationConfig?.jira.authEmail ?? null,
       jira_api_token: integrationConfig?.jira.apiToken ?? null,
-      jira_account_email: integrationConfig?.jira.accountEmail ?? null,
       jira_project_keys: integrationConfig?.jira.projectKeys ?? null,
     }),
     cache: "no-store",
@@ -816,7 +915,10 @@ function memberSyncRequestBody(
     slack_bot_token: integrationConfig.slack.botToken.trim() || null,
     notion_integration_token: integrationConfig.notion.integrationToken.trim() || null,
     notion_database_ids: integrationConfig.notion.databaseIds.trim() || null,
-    github_repository_url: integrationConfig.github.repositoryUrl.trim() || null,
+    github_repository_url:
+      integrationConfig.github.repositoryUrls[0]?.trim() ||
+      integrationConfig.github.repositoryUrl.trim() ||
+      null,
     github_personal_access_token:
       integrationConfig.github.personalAccessToken.trim() || null,
     jira_site_url: integrationConfig.jira.siteUrl.trim() || null,

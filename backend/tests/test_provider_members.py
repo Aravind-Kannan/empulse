@@ -29,10 +29,23 @@ def test_fetch_jira_provider_members_maps_account_ids():
         }
     ]
 
-    with patch("app.services.jira_client.requests.get") as mock_get:
-        mock_get.return_value = MagicMock(status_code=200, json=lambda: assignable)
-        with patch("app.services.jira_client.JiraClient.fetch_open_issues", return_value=[]):
-            members = fetch_jira_provider_members(config)
+    with patch(
+        "app.services.jira_client._fetch_jira_issue_people",
+        return_value=assignable,
+    ):
+        with patch(
+            "app.services.jira_client.enrich_jira_users_with_emails",
+            return_value={"acc-001": "alice@acme.com"},
+        ):
+            with patch("app.services.jira_client.requests.get") as mock_get:
+                mock_get.return_value = MagicMock(
+                    status_code=200,
+                    json=lambda: {
+                        "accountId": "ops-001",
+                        "emailAddress": "ops@acme.com",
+                    },
+                )
+                members = fetch_jira_provider_members(config)
 
     assert len(members) == 1
     assert members[0].id == "acc-001"

@@ -109,6 +109,14 @@ export interface EmployeeUpdateResponse {
   graph_edges_created: number;
 }
 
+export interface EmployeeDeleteResponse {
+  employee_id: string;
+  direct_reports_reparented: number;
+  cognee_dataset: string;
+  graph_nodes_created: number;
+  graph_edges_created: number;
+}
+
 export interface OrgChartIngestResponse {
   company: string;
   employees_persisted: number;

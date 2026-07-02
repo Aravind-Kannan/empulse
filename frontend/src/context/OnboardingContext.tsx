@@ -11,7 +11,7 @@ import {
 
 import { EMPTY_ORG_CHART } from "@/lib/acme-org";
 import { collectOrgRoles, masterDataToOrgChart } from "@/lib/org-master-data";
-import { wouldCreateCycle } from "@/lib/org-tree-utils";
+import { wouldCreateCycle, removeEmployeeFromOrgChart } from "@/lib/org-tree-utils";
 import type {
   Assignment,
   Employee,
@@ -32,6 +32,7 @@ interface OnboardingContextValue {
   applyMasterData: (master: EmployeeMasterDataResponse, company: string) => void;
   updateEmployee: (employee: Employee) => void;
   addEmployee: (employee: Employee) => void;
+  removeEmployee: (employeeId: string) => void;
   updateAssignments: (assignments: Assignment[], employeeId: string) => void;
   updateAssignment: (assignment: Assignment | null, employeeId: string) => void;
   reparentEmployee: (employeeId: string, managerId: string | null) => void;
@@ -93,6 +94,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       ...prev,
       employees: [...prev.employees, employee],
     }));
+  }, []);
+
+  const removeEmployee = useCallback((employeeId: string) => {
+    setOrgChartState((prev) => removeEmployeeFromOrgChart(prev, employeeId));
   }, []);
 
   const updateAssignments = useCallback(
@@ -162,6 +167,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       applyMasterData,
       updateEmployee,
       addEmployee,
+      removeEmployee,
       updateAssignments,
       updateAssignment,
       reparentEmployee,
@@ -179,6 +185,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       applyMasterData,
       updateEmployee,
       addEmployee,
+      removeEmployee,
       updateAssignments,
       updateAssignment,
       reparentEmployee,

@@ -2,10 +2,19 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.operational import Assignment, Employee, RoleHistory
+from app.models.operational import (
+    Assignment,
+    DoaFileSnapshot,
+    Employee,
+    GitHubOwnershipSnapshot,
+    NotionDocSnapshot,
+    RoleHistory,
+    FileRiskSnapshot,
+)
 from app.models.tenant import Tenant
 from app.schemas.org import EmployeeSchema
 from app.schemas.role_evolution import (
+    EmployeeDeleteResponse,
     EmployeeUpdateRequest,
     EmployeeUpdateResponse,
     RoleHistoryRecord,
@@ -177,6 +186,88 @@ async def update_employee_with_role_evolution(
         employee_id=employee_id,
         role_changed=role_changed,
         role_history_entry=history_entry,
+        cognee_dataset=str(cognee_result["cognee_dataset"]),
+        graph_nodes_created=int(cognee_result["graph_nodes_created"]),
+        graph_edges_created=int(cognee_result["graph_edges_created"]),
+    )
+
+
+async def delete_employee_with_cognee_sync(
+    db: Session,
+    employee_id: str,
+    tenant: Tenant,
+) -> EmployeeDeleteResponse:
+    employee = (
+        db.query(Employee)
+        .filter(Employee.id == employee_id, Employee.tenant_id == tenant.id)
+        .one_or_none()
+    )
+    if not employee:
+        raise ValueError(f"Employee '{employee_id}' not found.")
+
+    employee_name = employee.name
+    new_manager_id = employee.manager_id
+
+    direct_reports_reparented = (
+        db.query(Employee)
+        .filter(Employee.manager_id == employee_id, Employee.tenant_id == tenant.id)
+        .update(
+            {Employee.manager_id: new_manager_id},
+            synchronize_session=False,
+        )
+    )
+
+    db.query(GitHubOwnershipSnapshot).filter(
+        GitHubOwnershipSnapshot.employee_id == employee_id,
+        GitHubOwnershipSnapshot.tenant_id == tenant.id,
+    ).delete(synchronize_session=False)
+
+    db.query(DoaFileSnapshot).filter(
+        DoaFileSnapshot.employee_id == employee_id,
+        DoaFileSnapshot.tenant_id == tenant.id,
+    ).delete(synchronize_session=False)
+
+    db.query(FileRiskSnapshot).filter(
+        FileRiskSnapshot.primary_owner_employee_id == employee_id,
+        FileRiskSnapshot.tenant_id == tenant.id,
+    ).update(
+        {
+            FileRiskSnapshot.primary_owner_employee_id: None,
+            FileRiskSnapshot.primary_owner_doa_pct: None,
+        },
+        synchronize_session=False,
+    )
+
+    db.query(NotionDocSnapshot).filter(
+        NotionDocSnapshot.owner_employee_id == employee_id,
+        NotionDocSnapshot.tenant_id == tenant.id,
+    ).update(
+        {NotionDocSnapshot.owner_employee_id: None},
+        synchronize_session=False,
+    )
+
+    db.delete(employee)
+    db.commit()
+
+    org = load_org_chart(db, tenant)
+    supplemental = (
+        f"Org chart removal: {employee_name} ({employee_id}) was removed from "
+        f"the organization. {direct_reports_reparented} direct report(s) were "
+        "re-parented to the removed employee's manager."
+    )
+    cognee_result = await ingest_org_chart_to_cognee(
+        org,
+        tenant_id=tenant.id,
+        custom_prompt=(
+            "Org chart update: remove deleted employees and refresh reporting "
+            "lines, manages, and ownsComponent relationships."
+        ),
+        supplemental_narrative=supplemental,
+    )
+
+    return EmployeeDeleteResponse(
+        employee_id=employee_id,
+        direct_reports_reparented=direct_reports_reparented,
         cognee_dataset=str(cognee_result["cognee_dataset"]),
         graph_nodes_created=int(cognee_result["graph_nodes_created"]),
         graph_edges_created=int(cognee_result["graph_edges_created"]),

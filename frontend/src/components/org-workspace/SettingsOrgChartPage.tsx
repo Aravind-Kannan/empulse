@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { OrgWorkspace } from "@/components/org-workspace/OrgWorkspace";
-import { fetchOrgChart, ingestOrgChart, updateOrgEmployee } from "@/lib/api";
-import { wouldCreateCycle } from "@/lib/org-tree-utils";
+import { deleteOrgEmployee, fetchOrgChart, ingestOrgChart, updateOrgEmployee } from "@/lib/api";
+import { removeEmployeeFromOrgChart, wouldCreateCycle } from "@/lib/org-tree-utils";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
 import { useWorkspace } from "@/context/WorkspaceContext";
 
@@ -96,6 +96,19 @@ export function SettingsOrgChartPage() {
     [refreshOperationalState],
   );
 
+  const handleDeleteEmployee = useCallback(
+    async (employeeId: string) => {
+      await deleteOrgEmployee(employeeId);
+
+      setOrgChart((prev) =>
+        prev ? removeEmployeeFromOrgChart(prev, employeeId) : prev,
+      );
+
+      await refreshOperationalState();
+    },
+    [refreshOperationalState],
+  );
+
   const handleAddEmployee = useCallback(async (employee: Employee) => {
     setOrgChart((prev) => {
       if (!prev) return prev;
@@ -158,6 +171,7 @@ export function SettingsOrgChartPage() {
         void refreshOperationalState();
       }}
       onUpdateEmployee={handleUpdateEmployee}
+      onDeleteEmployee={handleDeleteEmployee}
       onAddEmployee={handleAddEmployee}
       onSave={handleSave}
       backHref="/settings"

@@ -1,4 +1,4 @@
-import type { Employee } from "./types";
+import type { Employee, OrgChartPayload } from "./types";
 
 export interface TreeNode {
   employee: Employee;
@@ -156,6 +156,29 @@ export function collectLayoutEdges(nodes: LayoutNode[]): Array<{
     }
   }
   return edges;
+}
+
+export function removeEmployeeFromOrgChart(
+  orgChart: OrgChartPayload,
+  employeeId: string,
+): OrgChartPayload {
+  const removed = orgChart.employees.find((item) => item.id === employeeId);
+  if (!removed) return orgChart;
+
+  const replacementManager = removed.manager_id ?? null;
+  return {
+    ...orgChart,
+    employees: orgChart.employees
+      .filter((item) => item.id !== employeeId)
+      .map((item) =>
+        item.manager_id === employeeId
+          ? { ...item, manager_id: replacementManager }
+          : item,
+      ),
+    assignments: orgChart.assignments.filter(
+      (item) => item.employee_id !== employeeId,
+    ),
+  };
 }
 
 export { NODE_WIDTH, LEVEL_HEIGHT };
