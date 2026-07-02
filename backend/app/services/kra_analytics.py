@@ -6,8 +6,12 @@ from app.models.operational import Assignment, Component, Employee
 from app.schemas.kra import KraAnalyticsResponse, KraLink, KraNode
 from app.schemas.org import ACME_ORG_CHART
 from app.services.integration_telemetry import (
+    get_all_bus_factors,
     get_github_ownership,
+    get_notion_component_sources,
     has_github_sync,
+    has_notion_sync,
+    hydrate_notion_telemetry_from_db,
     is_github_spof,
 )
 from app.services.role_utils import is_leadership_role
@@ -29,6 +33,11 @@ DOCUMENTATION_SOURCES: dict[str, list[str]] = {
 
 
 def _doc_sources_for_component(component_id: str, name: str) -> list[str]:
+    if has_notion_sync():
+        sources = get_notion_component_sources(component_id)
+        if sources:
+            return sources
+        return [f"No Notion runbook for {name}"]
     return DOCUMENTATION_SOURCES.get(
         component_id,
         [f"Notion: {name} Overview"],
@@ -106,6 +115,8 @@ def _build_graph(
     for link in links:
         engineers_by_component[link.target].add(link.source)
 
+    bus_factors = get_all_bus_factors() if has_github_sync() else {}
+
     for node in nodes:
         if node.type != "component":
             continue
@@ -113,6 +124,7 @@ def _build_graph(
         github_spof = is_github_spof(node.id)
         node.is_spof = structural_spof or github_spof
         node.github_verified_spof = github_spof
+        node.bus_factor = bus_factors.get(node.id)
 
     return KraAnalyticsResponse(nodes=nodes, links=links)
 
@@ -126,6 +138,7 @@ def _fallback_acme_graph() -> KraAnalyticsResponse:
 
 
 def get_kra_graph(db: Session, tenant) -> KraAnalyticsResponse:
+    hydrate_notion_telemetry_from_db(db, tenant.id)
     employees = db.query(Employee).filter(Employee.tenant_id == tenant.id).all()
     components = db.query(Component).filter(Component.tenant_id == tenant.id).all()
     assignments = (

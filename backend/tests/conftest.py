@@ -1,0 +1,68 @@
+"""Shared fixtures for backend unit tests."""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import get_settings
+from app.database import Base
+from app.models.operational import Employee
+from app.models.tenant import Tenant
+
+
+@pytest.fixture()
+def db() -> Session:
+    engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = sessionmaker(bind=connection, autocommit=False, autoflush=False)()
+    Base.metadata.create_all(bind=connection)
+    try:
+        yield session
+    finally:
+        session.close()
+        transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+
+@pytest.fixture()
+def tenant_id() -> uuid.UUID:
+    return uuid.UUID("00000000-0000-4000-8000-000000000099")
+
+
+@pytest.fixture()
+def tenant(db: Session, tenant_id: uuid.UUID) -> Tenant:
+    row = Tenant(
+        id=tenant_id,
+        company_name="Test Co",
+        slug="test-co-era-step01",
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def add_employee(
+    db: Session,
+    tenant_id: uuid.UUID,
+    *,
+    employee_id: str,
+    name: str,
+    email: str,
+) -> Employee:
+    employee = Employee(
+        id=employee_id,
+        tenant_id=tenant_id,
+        name=name,
+        role="Engineer",
+        email=email,
+        tenure_years=1.0,
+    )
+    db.add(employee)
+    db.commit()
+    return employee

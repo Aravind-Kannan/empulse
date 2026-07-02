@@ -49,4 +49,5 @@ class FetchUsersRequest(BaseModel):
     jira_site_url: str | None = None
     jira_auth_email: str | None = None
     jira_api_token: str | None = None
+    jira_account_email: str | None = None
     jira_project_keys: str | None = None

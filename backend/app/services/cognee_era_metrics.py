@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from app.models.operational import Assignment, Component
-from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
-from app.services.integration_telemetry import get_github_ownership, get_jira_backlog_boost
+from app.services.integration_telemetry import (
+    get_github_ownership,
+    get_jira_backlog_boost,
+    has_jira_sync,
+)
 
 
 def _github_commit_hops_for_components(component_ids: set[str]) -> int:
+    from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY
+
     count = 0
     for activity in MOCK_GITHUB_ACTIVITY:
         for file_change in activity["files"]:
@@ -17,6 +22,19 @@ def _github_commit_hops_for_components(component_ids: set[str]) -> int:
 
 
 def _unresolved_jira_hops_for_components(component_ids: set[str]) -> int:
+    from app.services.integration_telemetry import get_cached_jira_issues
+
+    if has_jira_sync():
+        count = 0
+        for issue in get_cached_jira_issues():
+            if issue.component_id not in component_ids:
+                continue
+            if not issue.is_done:
+                count += 1
+        return count
+
+    from app.services.integration_feeds import MOCK_JIRA_ISSUES
+
     count = 0
     for issue in MOCK_JIRA_ISSUES:
         if issue["component_id"] not in component_ids:

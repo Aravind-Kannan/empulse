@@ -1,14 +1,25 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.era import EraAnalyticsResponse
+from app.schemas.era import EraAnalyticsResponse, EraEmployeeDetailResponse
+from app.schemas.era import (
+    EraReviewNetworkResponse,
+    EraTeamRiskyChangesResponse,
+)
+from app.schemas.file_risk import EraHotspotsResponse, KraFileRiskResponse
 from app.schemas.kra import (
     KraAnalyticsResponse,
     KraBackupAssignmentRequest,
     KraBackupAssignmentResponse,
 )
-from app.services.era_analytics import get_era_metrics
+from app.services.era_analytics import (
+    get_era_employee_detail,
+    get_era_metrics,
+    get_era_review_network,
+    get_era_team_risky_changes,
+)
+from app.services.github_file_risk import get_employee_hotspots, get_kra_file_risk
 from app.services.kra_analytics import (
     assign_backup_engineer,
     get_kra_graph,
@@ -25,6 +36,65 @@ def era_analytics(
     db: Session = Depends(get_db),
 ) -> EraAnalyticsResponse:
     return get_era_metrics(db, tenant)
+
+
+@router.get("/era/{employee_id}/review-network", response_model=EraReviewNetworkResponse)
+def era_employee_review_network(
+    employee_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EraReviewNetworkResponse:
+    payload = get_era_review_network(db, tenant, employee_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found.")
+    return payload
+
+
+@router.get("/team/risky-changes", response_model=EraTeamRiskyChangesResponse)
+def era_team_risky_changes(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+    since: str = Query(default="90d"),
+) -> EraTeamRiskyChangesResponse:
+    return get_era_team_risky_changes(db, tenant, since=since)
+
+
+@router.get("/era/{employee_id}/hotspots", response_model=EraHotspotsResponse)
+def era_employee_hotspots(
+    employee_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EraHotspotsResponse:
+    return EraHotspotsResponse(**get_employee_hotspots(db, tenant.id, employee_id))
+
+
+@router.get("/kra/file-risk", response_model=KraFileRiskResponse)
+def kra_file_risk(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+    component_id: str | None = Query(default=None),
+) -> KraFileRiskResponse:
+    return KraFileRiskResponse(**get_kra_file_risk(db, tenant.id, component_id=component_id))
+
+
+@router.get("/era/{employee_id}", response_model=EraEmployeeDetailResponse)
+def era_employee_detail(
+    employee_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> EraEmployeeDetailResponse:
+    detail = get_era_employee_detail(
+        db,
+        tenant,
+        employee_id,
+        limit=limit,
+        offset=offset,
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found.")
+    return detail
 
 
 @router.get("/kra", response_model=KraAnalyticsResponse)

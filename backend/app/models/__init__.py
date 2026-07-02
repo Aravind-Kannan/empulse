@@ -5,8 +5,14 @@ from app.models.operational import (
     Component,
     Employee,
     EmployeeIdentity,
+    GitHubOwnershipSnapshot,
+    DoaFileSnapshot,
+    FileRiskSnapshot,
+    NotionDocSnapshot,
     IncidentRecord,
     RoleHistory,
+    TenantIntegrationConfig,
+    UnmappedActivity,
 )
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -20,6 +26,12 @@ __all__ = [
     "Component",
     "Assignment",
     "EmployeeIdentity",
+    "UnmappedActivity",
+    "GitHubOwnershipSnapshot",
+    "DoaFileSnapshot",
+    "FileRiskSnapshot",
+    "NotionDocSnapshot",
+    "TenantIntegrationConfig",
     "RoleHistory",
     "IncidentRecord",
     "IngestJob",

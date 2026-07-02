@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
-from app.models.operational import Employee, EmployeeIdentity
+from app.models.operational import Employee, EmployeeIdentity, UnmappedActivity
 from app.schemas.identity import (
     EmployeeIdentityMapping,
     EmployeeIdentityRecord,
     EmployeeIdentityRow,
     IdentityReconciliationResponse,
     ProviderMember,
+)
+from app.services.unmapped_activity import (
+    get_total_unmapped_count,
+    get_unmapped_counts_by_provider,
 )
 
 PROVIDERS = ("github", "jira", "slack", "notion")
@@ -50,10 +57,33 @@ MOCK_PROVIDER_MEMBERS: dict[str, list[ProviderMember]] = {
 }
 
 
-def get_provider_members(provider: str) -> list[ProviderMember]:
+def get_provider_members(
+    provider: str,
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
+) -> list[ProviderMember]:
+    members, _ = load_provider_members_with_warning(provider, db, tenant_id)
+    return members
+
+
+def load_provider_members_with_warning(
+    provider: str,
+    db: Session | None,
+    tenant_id: uuid.UUID | None,
+) -> tuple[list[ProviderMember], str | None]:
     if provider not in MOCK_PROVIDER_MEMBERS:
-        return []
-    return MOCK_PROVIDER_MEMBERS[provider]
+        return [], None
+    fallback = MOCK_PROVIDER_MEMBERS[provider]
+    if db is not None and tenant_id is not None:
+        from app.services.provider_members import get_provider_members_for_tenant
+
+        return get_provider_members_for_tenant(
+            db,
+            tenant_id,
+            provider,
+            fallback_members=fallback,
+        )
+    return fallback, None
 
 
 def list_identity_mappings(db: Session, tenant) -> list[EmployeeIdentityRecord]:
@@ -74,8 +104,11 @@ def list_identity_mappings(db: Session, tenant) -> list[EmployeeIdentityRecord]:
     ]
 
 
-def _guess_mapping(employee: Employee, provider: str) -> str | None:
-    members = MOCK_PROVIDER_MEMBERS.get(provider, [])
+def _guess_mapping(
+    employee: Employee,
+    provider: str,
+    members: list[ProviderMember],
+) -> str | None:
     email = employee.email.lower()
     for member in members:
         if member.email and member.email.lower() == email:
@@ -111,11 +144,19 @@ def get_reconciliation(
     }
 
     rows: list[EmployeeIdentityRow] = []
+    provider_members: dict[str, list[ProviderMember]] = {}
+    provider_warnings: dict[str, str] = {}
+    for provider in active_providers:
+        members, warning = load_provider_members_with_warning(provider, db, tenant.id)
+        provider_members[provider] = members
+        if warning:
+            provider_warnings[provider] = warning
     for employee in employees:
         mappings: dict[str, str | None] = {}
         for provider in active_providers:
             saved = mapping_index.get((employee.id, provider))
-            mappings[provider] = saved or _guess_mapping(employee, provider)
+            members = provider_members.get(provider, [])
+            mappings[provider] = saved or _guess_mapping(employee, provider, members)
         rows.append(
             EmployeeIdentityRow(
                 employee_id=employee.id,
@@ -126,13 +167,13 @@ def get_reconciliation(
             )
         )
 
-    provider_members = {
-        provider: get_provider_members(provider) for provider in active_providers
-    }
     return IdentityReconciliationResponse(
         employees=rows,
         provider_members=provider_members,
         connected_providers=active_providers,
+        provider_warnings=provider_warnings,
+        unmapped_activity=get_unmapped_counts_by_provider(db, tenant.id),
+        total_unmapped_count=get_total_unmapped_count(db, tenant.id),
     )
 
 
@@ -163,16 +204,27 @@ def save_identity_mappings(
             continue
 
         value = mapping.provider_username_or_id.strip()
+        now = datetime.utcnow()
         if row:
             row.provider_username_or_id = value
+            row.confidence = "confirmed"
+            row.verified_at = now
         else:
             row = EmployeeIdentity(
                 tenant_id=tenant.id,
                 employee_id=mapping.employee_id,
                 provider=mapping.provider,
                 provider_username_or_id=value,
+                confidence="confirmed",
+                verified_at=now,
             )
             db.add(row)
+
+        db.query(UnmappedActivity).filter(
+            UnmappedActivity.tenant_id == tenant.id,
+            UnmappedActivity.provider == mapping.provider,
+            UnmappedActivity.provider_user_id == value,
+        ).delete(synchronize_session=False)
 
         db.flush()
         if row:

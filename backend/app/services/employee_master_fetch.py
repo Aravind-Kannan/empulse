@@ -16,7 +16,9 @@ from app.schemas.employee_master import (
     MasterDataRecord,
 )
 from app.services.employee_ids import employee_id_from_email
-from app.services.integration_sync import get_github_config, get_jira_config
+from app.services.integration_config_store import get_github_config, get_jira_config
+from app.services.jira_client import JiraClientError, fetch_jira_provider_members
+from app.schemas.integrations import JiraConfigRequest
 
 
 def enrich_jira_credentials_from_db(
@@ -702,6 +704,9 @@ def _source_credentials_provided(source: str, creds: FetchUsersRequest) -> bool:
 def _fetch_source_records(
     source: str,
     credentials: FetchUsersRequest | None,
+    *,
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> list[MasterDataRecord]:
     creds = credentials or FetchUsersRequest(sources=[source])
     live_requested = _source_credentials_provided(source, creds)
@@ -720,7 +725,11 @@ def _fetch_source_records(
         return _fetch_slack_users_fallback()
 
     if source == "github":
-        gh_config = get_github_config()
+        gh_config = (
+            get_github_config(db, tenant_id)
+            if db is not None and tenant_id is not None
+            else None
+        )
         repo_url = creds.github_repository_url or (
             gh_config.repository_url if gh_config else ""
         )
@@ -741,23 +750,48 @@ def _fetch_source_records(
         return _fetch_github_users_fallback_demo()
 
     if source == "jira":
-        site = (creds.jira_site_url or "").strip()
-        auth_email = (creds.jira_auth_email or "").strip()
-        token = (creds.jira_api_token or "").strip()
-        project_keys = creds.jira_project_keys or ""
-        if site and auth_email and token:
+        stored_config = (
+            get_jira_config(db, tenant_id)
+            if db is not None and tenant_id is not None
+            else None
+        )
+        site_url = (creds.jira_site_url or "").strip() or (
+            stored_config.site_url if stored_config else ""
+        )
+        api_token = (creds.jira_api_token or "").strip() or (
+            stored_config.api_token if stored_config else ""
+        )
+        account_email = (creds.jira_account_email or "").strip() or (
+            stored_config.account_email if stored_config else ""
+        )
+        project_keys = (creds.jira_project_keys or "").strip() or (
+            stored_config.project_keys if stored_config else ""
+        )
+        if site_url and api_token:
+            config = JiraConfigRequest(
+                site_url=site_url,
+                api_token=api_token,
+                account_email=account_email,
+                project_keys=project_keys,
+            )
             try:
-                return _fetch_jira_users_live(
-                    site,
-                    auth_email,
-                    token,
-                    project_keys=project_keys or None,
-                )
-            except (ValueError, requests.RequestException) as exc:
+                members = fetch_jira_provider_members(config)
+            except (JiraClientError, requests.RequestException) as exc:
                 raise ValueError(f"Jira member import failed: {exc}") from exc
+            return [
+                MasterDataRecord(
+                    source="jira",
+                    external_id=member.id,
+                    name=member.label.split(" (")[0],
+                    email=member.email or f"{member.id}@users.noreply.jira",
+                    title="Jira User",
+                    manager_email=None,
+                )
+                for member in members
+            ]
         if live_requested:
             raise ValueError(
-                "Jira site URL, account email, and API token are required."
+                "Jira site URL and API token are required."
             )
         return _fetch_jira_users_fallback()
 
@@ -872,7 +906,7 @@ def fetch_employee_master_data(
     credentials: FetchUsersRequest | None = None,
     flat_hierarchy: bool = False,
     tenant_id: uuid.UUID | None = None,
-    skip_failed_sources: bool = False,
+    db: Session | None = None,
 ) -> EmployeeMasterDataResponse:
     """
     Import workspace members from connected platforms.
@@ -891,21 +925,9 @@ def fetch_employee_master_data(
     sources_queried: list[str] = []
     source_errors: list[str] = []
     for source in active_sources:
-        try:
-            records = _fetch_source_records(source, credentials)
-        except ValueError as exc:
-            if skip_failed_sources:
-                source_errors.append(f"{source}: {exc}")
-                continue
-            raise
-        if not records:
-            message = f"{source}: no importable members returned."
-            if skip_failed_sources:
-                source_errors.append(message)
-                continue
-            raise ValueError(message)
-        raw_records.extend(records)
-        sources_queried.append(source)
+        raw_records.extend(
+            _fetch_source_records(source, credentials, db=db, tenant_id=tenant_id)
+        )
 
     if not raw_records:
         if source_errors:

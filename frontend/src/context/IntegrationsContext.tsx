@@ -11,8 +11,9 @@ import {
 } from "react";
 
 import {
+  deleteIntegrationConfig,
+  fetchIntegrationConfig,
   saveAndSyncIntegration,
-  syncAllIntegrations,
   syncIntegrationSource,
   syncMemberRoster,
 } from "@/lib/api";
@@ -67,6 +68,18 @@ interface SyncProgress {
   error: string | null;
 }
 
+function mergeIntegrationConfig(
+  local: IntegrationConfigMap,
+  remote: IntegrationConfigMap,
+): IntegrationConfigMap {
+  return {
+    slack: { ...DEFAULT_INTEGRATION_CONFIG.slack, ...local.slack, ...remote.slack },
+    notion: { ...DEFAULT_INTEGRATION_CONFIG.notion, ...local.notion, ...remote.notion },
+    github: { ...DEFAULT_INTEGRATION_CONFIG.github, ...local.github, ...remote.github },
+    jira: { ...DEFAULT_INTEGRATION_CONFIG.jira, ...local.jira, ...remote.jira },
+  };
+}
+
 interface IntegrationsContextValue {
   config: IntegrationConfigMap;
   statuses: Record<IntegrationId, IntegrationStatus>;
@@ -83,7 +96,7 @@ interface IntegrationsContextValue {
 
 const IntegrationsContext = createContext<IntegrationsContextValue | null>(null);
 
-const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira"]);
+const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira", "notion", "slack"]);
 
 function deriveStatuses(
   config: IntegrationConfigMap,
@@ -123,7 +136,28 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    setConfig(loadConfig(tenantId));
+    let cancelled = false;
+
+    async function hydrate() {
+      const local = loadConfig(tenantId);
+      if (!tenantId) {
+        if (!cancelled) setConfig(local);
+        return;
+      }
+
+      try {
+        const remote = await fetchIntegrationConfig();
+        const merged = mergeIntegrationConfig(local, remote);
+        if (!cancelled) {
+          setConfig(merged);
+          saveConfig(tenantId, merged);
+        }
+      } catch {
+        if (!cancelled) setConfig(local);
+      }
+    }
+
+    void hydrate();
     setSyncingIds(new Set());
     setSyncProgress({
       active: false,
@@ -132,6 +166,10 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       total: 0,
       error: null,
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [tenantId]);
 
   const persist = useCallback(
@@ -157,7 +195,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
             "oauthConnected",
             "branchTarget",
           ],
-          jira: ["siteUrl", "authEmail", "apiToken", "projectKeys"],
+          jira: ["siteUrl", "apiToken", "projectKeys", "accountEmail"],
         };
         const touchesCredentials = credentialFields[id].some(
           (field) => field in patch,
@@ -212,12 +250,17 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   );
 
   const disconnect = useCallback(
-    (id: IntegrationId) => {
+    async (id: IntegrationId) => {
       const cleared = {
         ...DEFAULT_INTEGRATION_CONFIG[id],
         previouslyConnected: true,
       };
       persist({ ...config, [id]: cleared });
+      try {
+        await deleteIntegrationConfig(id);
+      } catch {
+        // Local disconnect still applies if backend removal fails.
+      }
     },
     [config, persist],
   );
@@ -243,70 +286,28 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       BACKEND_SYNC_SOURCES.has(app.id),
     );
 
-    const company =
-      activeTenant?.companyName ?? session?.company ?? "My Company";
-
     setSyncProgress({
       active: true,
       currentSource: null,
       completed: [],
-      total: connected.length,
+      total: backendSources.length,
       error: null,
     });
     setSyncingIds(new Set(connected.map((app) => app.id)));
 
-    const completedNames = new Set<string>();
+    const completed: string[] = [];
 
     try {
-      if (memberSources.length > 0) {
+      for (const app of backendSources) {
         setSyncProgress((prev) => ({
           ...prev,
-          currentSource: "Member roster",
+          currentSource: app.name,
         }));
-
-        const result = await syncMemberRoster(memberSources, company, config);
-
-        if (result.source_errors?.length) {
-          setSyncProgress((prev) => ({
-            ...prev,
-            error: result.source_errors!.join(" "),
-          }));
-        }
-
-        for (const source of result.sources) {
-          const app = INTEGRATION_CATALOG.find((entry) => entry.id === source);
-          if (app) completedNames.add(app.name);
-        }
-
+        await saveAndSyncIntegration(app.id, config);
+        completed.push(app.name);
         setSyncProgress((prev) => ({
           ...prev,
-          completed: [...completedNames],
-        }));
-      }
-
-      if (backendSources.length > 0) {
-        setSyncProgress((prev) => ({
-          ...prev,
-          currentSource: "GitHub & Jira",
-        }));
-
-        if (backendSources.length === 2) {
-          const result = await syncAllIntegrations();
-          for (const item of result.results) {
-            const app = INTEGRATION_CATALOG.find(
-              (entry) => entry.id === item.source,
-            );
-            if (app) completedNames.add(app.name);
-          }
-        } else {
-          const source = backendSources[0]!.id as "github" | "jira";
-          await syncIntegrationSource(source);
-          completedNames.add(backendSources[0]!.name);
-        }
-
-        setSyncProgress((prev) => ({
-          ...prev,
-          completed: [...completedNames],
+          completed: [...completed],
         }));
       }
 
@@ -315,6 +316,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       setSyncProgress((prev) => ({
         ...prev,
         error: err instanceof Error ? err.message : "Global sync failed",
+        completed,
       }));
     } finally {
       setSyncingIds(new Set());
@@ -322,6 +324,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
         ...prev,
         active: false,
         currentSource: null,
+        completed,
       }));
     }
   }, [activeTenant?.companyName, config, refreshOperationalState, session?.company]);

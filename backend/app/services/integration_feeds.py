@@ -1,7 +1,12 @@
+# Legacy mock feeds — GitHub production sync uses github_client.py.
+# Jira production sync uses jira_client.py; mocks retained for offline fallback/tests.
+
 MOCK_GITHUB_ACTIVITY = [
     {
         "pr_number": 482,
         "commit_sha": "a1b2c3d4",
+        "author_provider": "github",
+        "author_provider_user_id": "gh-benrivera",
         "author_employee_id": "emp-eng-001",
         "branch": "main",
         "files": [
@@ -22,6 +27,8 @@ MOCK_GITHUB_ACTIVITY = [
     {
         "pr_number": 491,
         "commit_sha": "e5f6g7h8",
+        "author_provider": "github",
+        "author_provider_user_id": "gh-carapatel",
         "author_employee_id": "emp-eng-002",
         "branch": "main",
         "files": [
@@ -36,6 +43,8 @@ MOCK_GITHUB_ACTIVITY = [
     {
         "pr_number": 503,
         "commit_sha": "i9j0k1l2",
+        "author_provider": "github",
+        "author_provider_user_id": "gh-elena-k",
         "author_employee_id": "emp-eng-004",
         "branch": "feature/webhooks",
         "files": [
@@ -47,6 +56,22 @@ MOCK_GITHUB_ACTIVITY = [
             },
         ],
     },
+    {
+        "pr_number": 510,
+        "commit_sha": "m3n4o5p6",
+        "author_provider": "github",
+        "author_provider_user_id": "gh-ext-001",
+        "author_employee_id": None,
+        "branch": "main",
+        "files": [
+            {
+                "path": "services/payments/legacy_adapter.py",
+                "loc_added": 12,
+                "loc_removed": 2,
+                "component_id": "comp-payments",
+            },
+        ],
+    },
 ]
 
 MOCK_JIRA_ISSUES = [
@@ -55,6 +80,8 @@ MOCK_JIRA_ISSUES = [
         "issue_type": "Bug",
         "priority": "High",
         "status": "In Progress",
+        "assignee_provider": "jira",
+        "assignee_provider_user_id": "jira-cara",
         "assignee_employee_id": "emp-eng-002",
         "component_id": "comp-auth",
         "project_key": "ENG",
@@ -69,6 +96,8 @@ MOCK_JIRA_ISSUES = [
         "issue_type": "Task",
         "priority": "Medium",
         "status": "Open",
+        "assignee_provider": "jira",
+        "assignee_provider_user_id": "jira-ben",
         "assignee_employee_id": "emp-eng-001",
         "component_id": "comp-payments",
         "project_key": "ENG",
@@ -96,6 +125,8 @@ MOCK_JIRA_ISSUES = [
         "issue_type": "Bug",
         "priority": "Critical",
         "status": "Blocked",
+        "assignee_provider": "jira",
+        "assignee_provider_user_id": "jira-diego",
         "assignee_employee_id": "emp-eng-003",
         "component_id": "comp-payments",
         "project_key": "OPS",
@@ -109,6 +140,8 @@ MOCK_JIRA_ISSUES = [
         "issue_type": "Task",
         "priority": "Low",
         "status": "Done",
+        "assignee_provider": "jira",
+        "assignee_provider_user_id": "jira-elena",
         "assignee_employee_id": "emp-eng-004",
         "component_id": "comp-notifications",
         "project_key": "ENG",
@@ -121,6 +154,8 @@ MOCK_JIRA_ISSUES = [
         "issue_type": "Bug",
         "priority": "High",
         "status": "Open",
+        "assignee_provider": "jira",
+        "assignee_provider_user_id": None,
         "assignee_employee_id": None,
         "component_id": "comp-payments",
         "project_key": "ENG",
@@ -133,6 +168,8 @@ MOCK_JIRA_ISSUES = [
         "issue_type": "Bug",
         "priority": "Critical",
         "status": "Open",
+        "assignee_provider": "jira",
+        "assignee_provider_user_id": None,
         "assignee_employee_id": None,
         "component_id": "comp-auth",
         "project_key": "ENG",
@@ -145,6 +182,8 @@ MOCK_JIRA_ISSUES = [
         "issue_type": "Bug",
         "priority": "High",
         "status": "Open",
+        "assignee_provider": "jira",
+        "assignee_provider_user_id": None,
         "assignee_employee_id": None,
         "component_id": "comp-payments",
         "project_key": "OPS",

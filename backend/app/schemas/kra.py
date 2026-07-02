@@ -12,6 +12,7 @@ class KraNode(BaseModel):
     documentation_sources: list[str] = Field(default_factory=list)
     is_spof: bool = False
     github_verified_spof: bool = False
+    bus_factor: int | None = None
 
 
 class KraLink(BaseModel):

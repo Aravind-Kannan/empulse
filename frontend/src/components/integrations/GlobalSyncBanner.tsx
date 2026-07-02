@@ -84,18 +84,7 @@ export function GlobalSyncBanner() {
             ).map((app) => {
               const done = syncProgress.completed.includes(app.name);
               const active =
-                syncProgress.currentSource === app.name ||
-                (syncProgress.currentSource === "Member roster" &&
-                  (app.id === "slack" ||
-                    app.id === "notion" ||
-                    app.id === "github" ||
-                    app.id === "jira") &&
-                  syncProgress.active &&
-                  !done) ||
-                (syncProgress.currentSource === "GitHub & Jira" &&
-                  (app.id === "github" || app.id === "jira") &&
-                  syncProgress.active &&
-                  !done);
+                syncProgress.currentSource === app.name && syncProgress.active;
 
               return (
                 <li

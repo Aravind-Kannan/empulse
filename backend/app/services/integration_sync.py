@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import SkipValidation
@@ -13,15 +14,42 @@ from app.models.operational import Component, Employee
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
 from app.schemas.org import ACME_ORG_CHART
 from app.services.cognee_ingest import GraphComponent, GraphEmployee
+from app.services.github_client import (
+    fetch_github_pull_request_activity,
+    parse_repository_url,
+)
+from app.services.github_path_mapper import apply_path_mapping
+from app.services.github_types import GitHubPullRequestActivity
 from app.services.integration_telemetry import (
+    HIGH_PRIORITIES,
     apply_github_telemetry,
     apply_jira_telemetry,
+    apply_notion_telemetry,
+    apply_slack_telemetry,
+    get_github_ownership,
     get_telemetry_snapshot,
+    mark_sync_completed,
 )
+from app.services.identity_resolver import resolve_author_employee_id
 from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
-from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY, MOCK_JIRA_ISSUES
+from app.services.jira_client import fetch_jira_issues
+from app.services.jira_mapper import map_issue_to_component
+from app.services.jira_types import JiraIssueActivity
+from app.services.notion_client import (
+    fetch_notion_document_inventory,
+    load_fixture_document_inventory,
+)
+from app.services.notion_telemetry import (
+    compute_notion_telemetry,
+    inventory_dicts_to_records,
+    living_runbook_template_narrative,
+)
+from app.services.notion_types import NotionDocRecord
+from app.services.slack_client import fetch_slack_incident_threads, thread_title
+from app.services.slack_telemetry import compute_slack_telemetry
+from app.services.slack_types import SlackThreadRecord
 
 
 class GraphPullRequest(DataPoint):
@@ -32,6 +60,7 @@ class GraphPullRequest(DataPoint):
     loc_added: int
     loc_removed: int
     file_path: str
+    pr_url: str = ""
     contributedTo: SkipValidation[Any] = None
     modifies: SkipValidation[Any] = None
     metadata: dict = {"index_fields": ["pr_number", "file_path", "branch"]}
@@ -48,40 +77,39 @@ class GraphJiraTicket(DataPoint):
     metadata: dict = {"index_fields": ["ticket_id", "issue_type", "status"]}
 
 
-_integration_configs: dict[str, GitHubConfigRequest | JiraConfigRequest] = {}
+class GraphNotionPage(DataPoint):
+    page_id: str
+    title: str
+    last_edited: str
+    page_url: str = ""
+    page_kind: str = "runbook"
+    documentedBy: SkipValidation[Any] = None
+    authoredBy: SkipValidation[Any] = None
+    metadata: dict = {"index_fields": ["page_id", "title", "page_kind"]}
 
 
-def save_github_config(config: GitHubConfigRequest) -> None:
-    _integration_configs["github"] = config
+class GraphSlackThread(DataPoint):
+    thread_id: str
+    channel_name: str
+    title: str
+    thread_url: str = ""
+    resolvedBy: SkipValidation[Any] = None
+    discussesComponent: SkipValidation[Any] = None
+    metadata: dict = {"index_fields": ["thread_id", "channel_name", "title"]}
 
 
-def save_jira_config(config: JiraConfigRequest) -> None:
-    _integration_configs["jira"] = config
-
-
-def get_github_config() -> GitHubConfigRequest | None:
-    config = _integration_configs.get("github")
-    return config if isinstance(config, GitHubConfigRequest) else None
-
-
-def get_jira_config(
-    db: Session | None = None,
-    tenant_id: uuid.UUID | None = None,
-) -> JiraConfigRequest | None:
-    if db is not None and tenant_id is not None:
-        from app.services.jira_service import get_jira_config_for_tenant
-
-        db_config = get_jira_config_for_tenant(db, tenant_id)
-        if db_config:
-            return db_config
-    config = _integration_configs.get("jira")
-    return config if isinstance(config, JiraConfigRequest) else None
+from app.services.integration_config_store import (
+    get_github_config,
+    get_jira_config,
+    get_notion_config,
+    get_slack_config,
+)
 
 
 def _load_org_context(
     db: Session,
     tenant_id: uuid.UUID,
-) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent]]:
+) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent], dict[str, Component]]:
     employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
     components = db.query(Component).filter(Component.tenant_id == tenant_id).all()
 
@@ -106,7 +134,18 @@ def _load_org_context(
             )
             for component in ACME_ORG_CHART.components
         }
-        return employee_nodes, component_nodes
+        components_by_id = {
+            component.id: Component(
+                id=component.id,
+                tenant_id=tenant_id,
+                name=component.name,
+                description=component.description,
+                open_tasks_count=component.open_tasks_count,
+                unresolved_incidents=component.unresolved_incidents,
+            )
+            for component in ACME_ORG_CHART.components
+        }
+        return employee_nodes, component_nodes, components_by_id
 
     employee_nodes = {
         employee.id: GraphEmployee(
@@ -128,15 +167,39 @@ def _load_org_context(
         )
         for component in components
     }
-    return employee_nodes, component_nodes
+    components_by_id = {component.id: component for component in components}
+    return employee_nodes, component_nodes, components_by_id
+
+
+def fetch_and_map_github_activity(
+    config: GitHubConfigRequest,
+    components_by_id: dict[str, Component],
+    *,
+    use_fixture: bool = False,
+) -> tuple[list[GitHubPullRequestActivity], list[str], dict[str, int]]:
+    _, repo_name = parse_repository_url(config.repository_url)
+    activities, open_prs_by_login = fetch_github_pull_request_activity(
+        config, use_fixture=use_fixture
+    )
+    mapped, unmapped = apply_path_mapping(
+        activities,
+        path_component_map=config.path_component_map,
+        repo_name=repo_name,
+        components_by_id=components_by_id,
+        default_component_id=config.default_component_id,
+    )
+    return mapped, unmapped, open_prs_by_login
 
 
 def analyze_github_payload(
     config: GitHubConfigRequest,
     employee_nodes: dict[str, GraphEmployee],
     component_nodes: dict[str, GraphComponent],
+    db: Session,
+    tenant_id: uuid.UUID,
+    activities: list[GitHubPullRequestActivity],
 ) -> tuple[str, list[GraphPullRequest], int]:
-    """Mock document analyzer for GitHub commits, PRs, diffs, and LOC."""
+    """Build Cognee graph nodes from live GitHub pull request activity."""
     narrative_lines = [
         f"GitHub repository sync: {config.repository_url}",
         f"Target branch: {config.branch_target}",
@@ -145,26 +208,43 @@ def analyze_github_payload(
     data_points: list[GraphPullRequest] = []
     edge_count = 0
 
-    for activity in MOCK_GITHUB_ACTIVITY:
-        author = employee_nodes.get(activity["author_employee_id"])
-        for file_change in activity["files"]:
-            component = component_nodes.get(file_change["component_id"])
+    for activity in activities:
+        author_employee_id = resolve_author_employee_id(
+            db,
+            tenant_id,
+            "github",
+            activity.author_provider_user_id,
+            demo_fallback_employee_id=None,
+            quarantine_event_type="github_pr",
+            quarantine_payload={
+                "pr_number": activity.pr_number,
+                "commit_sha": activity.commit_sha,
+                "pr_url": activity.pr_url,
+            },
+        )
+        author = employee_nodes.get(author_employee_id) if author_employee_id else None
+        for file_change in activity.files:
+            if not file_change.component_id:
+                continue
+            component = component_nodes.get(file_change.component_id)
             pr_node = GraphPullRequest(
-                pr_number=activity["pr_number"],
-                commit_sha=activity["commit_sha"],
-                branch=activity.get("branch", config.branch_target),
+                pr_number=activity.pr_number,
+                commit_sha=activity.commit_sha,
+                branch=activity.branch or config.branch_target,
                 repository_url=config.repository_url,
-                loc_added=file_change["loc_added"],
-                loc_removed=file_change["loc_removed"],
-                file_path=file_change["path"],
+                loc_added=file_change.loc_added,
+                loc_removed=file_change.loc_removed,
+                file_path=file_change.path,
+                pr_url=activity.pr_url,
             )
             if author:
                 pr_node.contributedTo = (
                     Edge(
                         relationship_type="contributedTo",
                         properties={
-                            "loc_added": file_change["loc_added"],
-                            "loc_removed": file_change["loc_removed"],
+                            "loc_added": file_change.loc_added,
+                            "loc_removed": file_change.loc_removed,
+                            "pr_url": activity.pr_url,
                         },
                     ),
                     author,
@@ -174,33 +254,56 @@ def analyze_github_payload(
                 pr_node.modifies = (
                     Edge(
                         relationship_type="modifies",
-                        properties={"file_path": file_change["path"]},
+                        properties={
+                            "file_path": file_change.path,
+                            "pr_url": activity.pr_url,
+                        },
                     ),
                     component,
                 )
                 edge_count += 1
 
             data_points.append(pr_node)
-            author_name = author.name if author else "Unknown engineer"
-            component_name = component.name if component else file_change["component_id"]
+            author_name = author.name if author else activity.author_login
+            component_name = component.name if component else file_change.component_id
             narrative_lines.append(
-                f"PR #{activity['pr_number']} commit {activity['commit_sha']}: "
-                f"{author_name} changed {file_change['path']} "
-                f"(+{file_change['loc_added']}/-{file_change['loc_removed']} LOC) "
+                f"PR #{activity.pr_number} ({activity.pr_url}) commit {activity.commit_sha}: "
+                f"{author_name} changed {file_change.path} "
+                f"(+{file_change.loc_added}/-{file_change.loc_removed} LOC) "
                 f"modifying {component_name}."
             )
 
     return "\n".join(narrative_lines), data_points, edge_count
 
 
+def fetch_and_map_jira_issues(
+    config: JiraConfigRequest,
+    components_by_id: dict[str, Component],
+    *,
+    use_fixture: bool = False,
+) -> list[JiraIssueActivity]:
+    issues = fetch_jira_issues(config, use_fixture=use_fixture)
+    valid_ids = set(components_by_id)
+    mapped: list[JiraIssueActivity] = []
+    for issue in issues:
+        component_id = map_issue_to_component(
+            issue, config, valid_component_ids=valid_ids
+        )
+        if component_id:
+            issue.component_id = component_id
+        mapped.append(issue)
+    return mapped
+
+
 def analyze_jira_payload(
     config: JiraConfigRequest,
     employee_nodes: dict[str, GraphEmployee],
     component_nodes: dict[str, GraphComponent],
-    *,
-    issues: list[dict] | None = None,
+    db: Session,
+    tenant_id: uuid.UUID,
+    issues: list[JiraIssueActivity],
 ) -> tuple[str, list[GraphJiraTicket], int]:
-    """Mock document analyzer for Jira tickets, priorities, and assignments."""
+    """Build Cognee graph nodes from Jira issue activity."""
     project_filter = {
         key.strip().upper()
         for key in config.project_keys.split(",")
@@ -215,22 +318,35 @@ def analyze_jira_payload(
     data_points: list[GraphJiraTicket] = []
     edge_count = 0
 
-    for issue in source_issues:
-        if project_filter and issue["project_key"] not in project_filter:
+    for issue in issues:
+        if project_filter and issue.project_key not in project_filter:
+            continue
+        if issue.is_done:
             continue
 
+        assignee_employee_id: str | None = None
+        if issue.assignee_provider_user_id:
+            assignee_employee_id = resolve_author_employee_id(
+                db,
+                tenant_id,
+                "jira",
+                issue.assignee_provider_user_id,
+                email_hint=issue.assignee_email,
+                quarantine_event_type="jira_issue",
+                quarantine_payload={"issue_key": issue.issue_key},
+            )
         assignee = (
-            employee_nodes.get(issue["assignee_employee_id"])
-            if issue.get("assignee_employee_id")
-            else None
+            employee_nodes.get(assignee_employee_id) if assignee_employee_id else None
         )
-        component = component_nodes.get(issue["component_id"])
+        component = (
+            component_nodes.get(issue.component_id) if issue.component_id else None
+        )
         ticket_node = GraphJiraTicket(
-            ticket_id=issue["ticket_id"],
-            issue_type=issue["issue_type"],
-            priority=issue["priority"],
-            status=issue["status"],
-            project_key=issue["project_key"],
+            ticket_id=issue.issue_key,
+            issue_type=issue.issue_type,
+            priority=issue.priority,
+            status=issue.status,
+            project_key=issue.project_key,
         )
         if assignee:
             ticket_node.assignedTo = (
@@ -242,7 +358,7 @@ def analyze_jira_payload(
             ticket_node.blocksComponent = (
                 Edge(
                     relationship_type="blocksComponent",
-                    properties={"priority": issue["priority"], "status": issue["status"]},
+                    properties={"priority": issue.priority, "status": issue.status},
                 ),
                 component,
             )
@@ -250,13 +366,173 @@ def analyze_jira_payload(
 
         data_points.append(ticket_node)
         assignee_name = assignee.name if assignee else "Unassigned"
-        component_name = component.name if component else issue["component_id"]
-        description = issue.get("description", "")
+        component_name = component.name if component else (issue.component_id or "unmapped")
         narrative_lines.append(
-            f"{issue['ticket_id']} ({issue['issue_type']}, {issue['priority']}, "
-            f"{issue['status']}) assigned to {assignee_name}, "
+            f"{issue.issue_key} ({issue.issue_type}, {issue.priority}, "
+            f"{issue.status}) assigned to {assignee_name}, "
             f"blocking component {component_name}."
             + (f" {description}" if description else "")
+        )
+
+    return "\n".join(narrative_lines), data_points, edge_count
+
+
+def analyze_notion_payload(
+    employee_nodes: dict[str, GraphEmployee],
+    component_nodes: dict[str, GraphComponent],
+    docs: list[NotionDocRecord],
+) -> tuple[str, list, int]:
+    narrative_lines: list[str] = []
+    data_points: list = []
+    edge_count = 0
+    template_pages = 0
+
+    for doc in docs:
+        if doc.is_archived or doc.is_inaccessible:
+            continue
+
+        component = (
+            component_nodes.get(doc.component_id) if doc.component_id else None
+        )
+        author = (
+            employee_nodes.get(doc.owner_employee_id) if doc.owner_employee_id else None
+        )
+        page_node = GraphNotionPage(
+            page_id=doc.page_id,
+            title=doc.title,
+            last_edited=doc.last_edited_at.isoformat(),
+            page_url=doc.page_url,
+            page_kind=doc.page_kind,
+        )
+        if component:
+            page_node.documentedBy = (
+                Edge(relationship_type="documentedBy"),
+                component,
+            )
+            edge_count += 1
+        if author:
+            page_node.authoredBy = (
+                Edge(relationship_type="authoredBy"),
+                author,
+            )
+            edge_count += 1
+
+        data_points.append(page_node)
+        component_name = component.name if component else "unlinked"
+        author_name = author.name if author else "unknown"
+        narrative_lines.append(
+            f"Notion page '{doc.title}' ({doc.page_kind}) last edited "
+            f"{doc.last_edited_at.date()} documents {component_name}, "
+            f"authored by {author_name}."
+        )
+        if doc.is_ownership_template:
+            template_pages += 1
+
+    if template_pages:
+        narrative_lines.append(living_runbook_template_narrative())
+
+    return "\n".join(narrative_lines), data_points, edge_count
+
+
+def _notion_docs_for_crosscheck(db: Session, tenant_id: uuid.UUID) -> list[NotionDocRecord]:
+    from app.models.operational import NotionDocSnapshot
+
+    rows = (
+        db.query(NotionDocSnapshot)
+        .filter(NotionDocSnapshot.tenant_id == tenant_id)
+        .all()
+    )
+    return [
+        NotionDocRecord(
+            page_id=row.page_id,
+            title=row.title,
+            page_url=row.page_url,
+            last_edited_at=row.last_edited_at or datetime.now(UTC),
+            component_id=row.component_id,
+            owner_employee_id=row.owner_employee_id,
+            page_kind=row.page_kind,
+            is_archived=row.is_archived,
+            last_verified_at=row.last_verified_at,
+        )
+        for row in rows
+    ]
+
+
+def _map_slack_users_to_employees(
+    db: Session,
+    tenant_id: uuid.UUID,
+    slack_users: dict[str, str],
+) -> dict[str, str]:
+    employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
+    email_to_employee = {employee.email.lower(): employee.id for employee in employees}
+    mapping: dict[str, str] = {}
+    for slack_id, email in slack_users.items():
+        if not email:
+            employee_id = resolve_author_employee_id(
+                db,
+                tenant_id,
+                "slack",
+                slack_id,
+            )
+        else:
+            employee_id = email_to_employee.get(email.lower())
+            if not employee_id:
+                employee_id = resolve_author_employee_id(
+                    db,
+                    tenant_id,
+                    "slack",
+                    slack_id,
+                    email_hint=email,
+                )
+        if employee_id:
+            mapping[slack_id] = employee_id
+    return mapping
+
+
+def analyze_slack_payload(
+    employee_nodes: dict[str, GraphEmployee],
+    component_nodes: dict[str, GraphComponent],
+    threads: list[SlackThreadRecord],
+) -> tuple[str, list, int]:
+    narrative_lines: list[str] = []
+    data_points: list = []
+    edge_count = 0
+
+    for thread in threads:
+        if not thread.resolved_by_employee_id and not thread.is_on_call_channel:
+            continue
+        title = thread_title(thread.parent_text)
+        component = (
+            component_nodes.get(thread.component_id) if thread.component_id else None
+        )
+        resolver = (
+            employee_nodes.get(thread.resolved_by_employee_id)
+            if thread.resolved_by_employee_id
+            else None
+        )
+        thread_node = GraphSlackThread(
+            thread_id=f"{thread.channel_id}:{thread.thread_ts}",
+            channel_name=thread.channel_name,
+            title=title,
+            thread_url=thread.thread_url,
+        )
+        if resolver:
+            thread_node.resolvedBy = (
+                Edge(relationship_type="resolvedBy"),
+                resolver,
+            )
+            edge_count += 1
+        if component:
+            thread_node.discussesComponent = (
+                Edge(relationship_type="discussesComponent"),
+                component,
+            )
+            edge_count += 1
+        data_points.append(thread_node)
+        resolver_name = resolver.name if resolver else "unknown"
+        narrative_lines.append(
+            f"Slack incident thread '{title}' in #{thread.channel_name} "
+            f"resolved by {resolver_name}."
         )
 
     return "\n".join(narrative_lines), data_points, edge_count
@@ -266,21 +542,50 @@ async def process_external_app_sync(
     source: str,
     db: Session,
     tenant_id: uuid.UUID,
+    *,
+    use_github_fixture: bool = False,
+    use_jira_fixture: bool = False,
+    use_notion_fixture: bool = False,
+    use_slack_fixture: bool = False,
 ) -> dict[str, int | str]:
     """
     Transform raw app feed data, load into Cognee via add/cognify,
     and attach structured graph edges for multi-hop traversal.
     """
     normalized = source.lower().strip()
-    employee_nodes, component_nodes = _load_org_context(db, tenant_id)
+    employee_nodes, component_nodes, components_by_id = _load_org_context(db, tenant_id)
+    github_activities: list[GitHubPullRequestActivity] = []
+    open_prs_by_login: dict[str, int] = {}
+    jira_issues: list[JiraIssueActivity] = []
+    notion_snapshot = None
+    slack_snapshot = None
+    config = None
 
     if normalized == "github":
-        config = get_github_config()
+        config = get_github_config(db, tenant_id)
         if not config:
             raise ValueError("GitHub integration is not configured.")
-        narrative, data_points, edge_count = analyze_github_payload(
-            config, employee_nodes, component_nodes
+        github_activities, unmapped_paths, open_prs_by_login = fetch_and_map_github_activity(
+            config,
+            components_by_id,
+            use_fixture=use_github_fixture,
         )
+        if unmapped_paths:
+            narrative_prefix = (
+                f"Warning: {len(unmapped_paths)} file paths could not be mapped to components."
+            )
+        else:
+            narrative_prefix = ""
+        narrative, data_points, edge_count = analyze_github_payload(
+            config,
+            employee_nodes,
+            component_nodes,
+            db,
+            tenant_id,
+            github_activities,
+        )
+        if narrative_prefix:
+            narrative = f"{narrative_prefix}\n{narrative}"
         custom_prompt = (
             "Extract GitHub engineering activity including pull requests, commits, "
             "file diff pathways, LOC changes, and map contributors to components "
@@ -290,13 +595,106 @@ async def process_external_app_sync(
         config = get_jira_config(db, tenant_id)
         if not config:
             raise ValueError("Jira integration is not configured.")
-        from app.services.jira_service import sync_jira_to_cognee
-
-        result = await sync_jira_to_cognee(tenant_id, db)
-        return {
-            **result,
-            "telemetry": get_telemetry_snapshot(),
+        jira_issues = fetch_and_map_jira_issues(
+            config,
+            components_by_id,
+            use_fixture=use_jira_fixture,
+        )
+        narrative, data_points, edge_count = analyze_jira_payload(
+            config,
+            employee_nodes,
+            component_nodes,
+            db,
+            tenant_id,
+            jira_issues,
+        )
+        custom_prompt = (
+            "Extract Jira issue metadata including ticket IDs, issue types, priorities, "
+            "status indicators, and link assignees and blocked components via "
+            "assignedTo and blocksComponent relationships."
+        )
+    elif normalized == "notion":
+        config = get_notion_config(db, tenant_id)
+        if not config:
+            raise ValueError("Notion integration is not configured.")
+        component_names = {
+            component_id: component.name
+            for component_id, component in components_by_id.items()
         }
+        if use_notion_fixture:
+            pages, people_expertise = load_fixture_document_inventory()
+        else:
+            pages, people_expertise = fetch_notion_document_inventory(
+                config.integration_token,
+                config.database_ids or None,
+                component_names=component_names,
+            )
+        employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
+        email_to_employee = {employee.email.lower(): employee.id for employee in employees}
+        docs = inventory_dicts_to_records(
+            pages,
+            email_to_employee=email_to_employee,
+        )
+        narrative, data_points, edge_count = analyze_notion_payload(
+            employee_nodes,
+            component_nodes,
+            docs,
+        )
+        custom_prompt = (
+            "Extract Notion documentation pages including runbooks, architecture docs, "
+            "and ownership transfer templates. Link pages to components via documentedBy "
+            "and authors via authoredBy relationships."
+        )
+        github_active = {
+            component_id
+            for component_id, owners in get_github_ownership().items()
+            if owners
+        }
+        notion_snapshot = compute_notion_telemetry(
+            db,
+            tenant_id,
+            docs,
+            people_expertise=people_expertise,
+            components_with_github_activity=github_active,
+        )
+    elif normalized == "slack":
+        config = get_slack_config(db, tenant_id)
+        if not config:
+            raise ValueError("Slack integration is not configured.")
+        component_names = {
+            component_id: component.name
+            for component_id, component in components_by_id.items()
+        }
+        threads, slack_users, sync_warnings = fetch_slack_incident_threads(
+            config,
+            component_names=component_names,
+            use_fixture=use_slack_fixture,
+        )
+        slack_id_to_employee = _map_slack_users_to_employees(db, tenant_id, slack_users)
+        notion_docs = _notion_docs_for_crosscheck(db, tenant_id)
+        slack_snapshot = compute_slack_telemetry(
+            db,
+            tenant_id,
+            threads,
+            slack_id_to_employee=slack_id_to_employee,
+            notion_docs=notion_docs or None,
+        )
+        if sync_warnings:
+            slack_snapshot.sync_warnings.extend(sync_warnings)
+        narrative, data_points, edge_count = analyze_slack_payload(
+            employee_nodes,
+            component_nodes,
+            threads,
+        )
+        if slack_snapshot.sync_warnings:
+            narrative = (
+                f"Warnings: {'; '.join(slack_snapshot.sync_warnings)}\n{narrative}"
+            )
+        custom_prompt = (
+            "Extract Slack incident thread metadata including channel names, "
+            "thread titles, and link resolvers to components via resolvedBy "
+            "and discussesComponent relationships. Do not store message bodies."
+        )
     else:
         raise ValueError(f"Unsupported integration source '{source}'.")
 
@@ -312,7 +710,32 @@ async def process_external_app_sync(
 
     telemetry: dict[str, object] = {}
     if normalized == "github":
-        telemetry["github_ownership"] = apply_github_telemetry(db, tenant_id)
+        telemetry["github_ownership"] = apply_github_telemetry(
+            db,
+            tenant_id,
+            github_activities,
+            open_prs_by_login=open_prs_by_login or None,
+        )
+    elif normalized == "jira":
+        high_priorities = set(config.high_priorities) if config else HIGH_PRIORITIES
+        telemetry["jira_backlog"] = apply_jira_telemetry(
+            db,
+            tenant_id,
+            jira_issues,
+            high_priorities=high_priorities,
+        )
+    elif normalized == "notion" and notion_snapshot is not None:
+        telemetry["notion_docs"] = apply_notion_telemetry(
+            db,
+            tenant_id,
+            notion_snapshot,
+        )
+    elif normalized == "slack" and slack_snapshot is not None:
+        telemetry["slack_incidents"] = apply_slack_telemetry(slack_snapshot)
+
+    db.commit()
+
+    mark_sync_completed(normalized)
 
     return {
         "source": normalized,

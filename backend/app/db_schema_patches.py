@@ -17,6 +17,11 @@ TENANT_SCOPED_TABLES = (
     "assignments",
     "role_history",
     "employee_identities",
+    "unmapped_activities",
+    "github_ownership_snapshots",
+    "doa_file_snapshots",
+    "file_risk_snapshots",
+    "notion_doc_snapshots",
 )
 
 
@@ -114,3 +119,49 @@ def apply_schema_patches(engine: Engine) -> None:
                             "UNIQUE (tenant_id, email)"
                         )
                     )
+
+        if inspector.has_table("employee_identities"):
+            identity_columns = _column_names(inspector, "employee_identities")
+            if "confidence" not in identity_columns:
+                logger.info("Adding confidence column to employee_identities")
+                conn.execute(
+                    text(
+                        "ALTER TABLE employee_identities "
+                        "ADD COLUMN confidence VARCHAR(16) NOT NULL DEFAULT 'confirmed'"
+                    )
+                )
+            if "verified_at" not in identity_columns:
+                logger.info("Adding verified_at column to employee_identities")
+                conn.execute(
+                    text(
+                        "ALTER TABLE employee_identities "
+                        "ADD COLUMN verified_at TIMESTAMP"
+                    )
+                )
+
+        if inspector.has_table("components"):
+            component_columns = _column_names(inspector, "components")
+            if "criticality" not in component_columns:
+                logger.info("Adding criticality column to components")
+                conn.execute(
+                    text(
+                        "ALTER TABLE components "
+                        "ADD COLUMN criticality VARCHAR(32) NOT NULL DEFAULT 'tier2_core'"
+                    )
+                )
+
+    from app.models.operational import (
+        DoaFileSnapshot,
+        FileRiskSnapshot,
+        GitHubOwnershipSnapshot,
+        NotionDocSnapshot,
+        TenantIntegrationConfig,
+        UnmappedActivity,
+    )
+
+    UnmappedActivity.__table__.create(bind=engine, checkfirst=True)
+    GitHubOwnershipSnapshot.__table__.create(bind=engine, checkfirst=True)
+    DoaFileSnapshot.__table__.create(bind=engine, checkfirst=True)
+    FileRiskSnapshot.__table__.create(bind=engine, checkfirst=True)
+    NotionDocSnapshot.__table__.create(bind=engine, checkfirst=True)
+    TenantIntegrationConfig.__table__.create(bind=engine, checkfirst=True)

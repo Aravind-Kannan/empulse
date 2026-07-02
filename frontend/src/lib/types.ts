@@ -143,6 +143,75 @@ export interface IngestJobStatusResponse {
   completed_at: string | null;
 }
 
+export type EraDimensionKey =
+  | "knowledge"
+  | "operational"
+  | "documentation"
+  | "structural"
+  | "burnout";
+
+export type IdentityCoverageLevel = "confirmed" | "high" | "missing";
+
+export type IntegrationId = "github" | "jira" | "slack" | "notion";
+
+export interface EraDimensions {
+  knowledge: number;
+  operational: number;
+  documentation: number;
+  structural: number;
+  burnout: number;
+  partial?: Partial<Record<EraDimensionKey, boolean>>;
+}
+
+export interface EraEvidenceSource {
+  provider: string;
+  label: string;
+  url: string | null;
+}
+
+export interface EraEvidenceItem {
+  id: string;
+  dimension: EraDimensionKey;
+  severity: "high" | "medium" | "low";
+  title: string;
+  description: string;
+  impact_points: number;
+  sources: EraEvidenceSource[];
+  synthetic?: boolean;
+  mitigation_status?: "open" | "in_progress" | "done" | "dismissed";
+}
+
+export interface EraAffectedComponent {
+  id: string;
+  name: string;
+  spof: boolean;
+  criticality: "tier1_revenue" | "tier2_core" | "tier3_support";
+  ownership_pct?: number | null;
+}
+
+export interface EraRecoveryEstimate {
+  min: number;
+  max: number;
+}
+
+export interface EraUnmappedActivityCount {
+  provider: IntegrationId;
+  count: number;
+}
+
+export interface EraTeamSummary {
+  avg_risk_score: number;
+  high_risk_count: number;
+  medium_risk_count: number;
+  low_risk_count: number;
+  spof_component_count: number;
+  open_p1_count: number;
+  undocumented_incident_count: number;
+  top_risk_driver: EraDimensionKey;
+  estimated_recovery_weeks: EraRecoveryEstimate;
+  data_health_pct: number;
+}
+
 export interface EraEmployeeMetrics {
   employee_id: string;
   name: string;
@@ -155,11 +224,89 @@ export interface EraEmployeeMetrics {
   risk_factor_score: number;
   risk_level: "low" | "medium" | "high";
   jira_backlog_boost?: number;
+  dimensions?: EraDimensions | null;
+  evidence?: EraEvidenceItem[];
+  evidence_total_count?: number;
+  affected_components?: EraAffectedComponent[];
+  identity_coverage?: Partial<Record<IntegrationId, IdentityCoverageLevel>>;
+  data_completeness_pct?: number;
+  recovery_estimate_weeks?: EraRecoveryEstimate;
+  departure_watchlist?: boolean;
+  trend_7d?: number | null;
+  excluded?: boolean;
+  exclusion_reason?: string | null;
 }
 
 export interface EraAnalyticsResponse {
+  computed_at: string;
+  demo_mode: boolean;
+  warnings: string[];
+  team_summary: EraTeamSummary;
   employees: EraEmployeeMetrics[];
+  unmapped_activity: EraUnmappedActivityCount[];
+  sync_freshness: Partial<Record<IntegrationId, string | null>>;
 }
+
+export interface EraEmployeeDetailResponse {
+  computed_at: string;
+  employee: EraEmployeeMetrics;
+  evidence: EraEvidenceItem[];
+  evidence_total_count: number;
+  limit: number;
+  offset: number;
+}
+
+export interface EraReviewNetworkEdge {
+  reviewer_employee_id: string;
+  author_employee_id: string;
+  review_count: number;
+  reviewer_login: string;
+  author_login: string;
+}
+
+export interface EraReviewNetworkMetrics {
+  employee_id: string;
+  review_concentration_pct: number;
+  reviews_given_count: number;
+  reviews_received_count: number;
+  sole_reviewer_count: number;
+  unique_reviewers_on_prs: number;
+  isolation_score: number;
+  backup_review_score: number;
+  recent_pr_count: number;
+  no_backup_pr_urls: string[];
+  top_reviewer_employee_id?: string | null;
+  top_reviewer_login?: string | null;
+}
+
+export interface EraReviewNetworkResponse {
+  computed_at: string;
+  employee_id: string;
+  window_days: number;
+  metrics: EraReviewNetworkMetrics | null;
+  incoming_reviewers: EraReviewNetworkEdge[];
+}
+
+export interface EraRiskyChangeItem {
+  pr_number: number;
+  pr_url: string;
+  author_employee_id?: string | null;
+  author_login: string;
+  author_name?: string | null;
+  severity: string;
+  rule: string;
+  title: string;
+  description: string;
+  merged_at?: string | null;
+  impact_points: number;
+}
+
+export interface EraTeamRiskyChangesResponse {
+  computed_at: string;
+  window_days: number;
+  items: EraRiskyChangeItem[];
+}
+
 
 export interface KraNode {
   id: string;
@@ -189,6 +336,42 @@ export interface KraBackupAssignmentResponse {
   employee_id: string;
   codebase_share_pct: number;
   is_spof_resolved: boolean;
+}
+
+export type FileRiskQuadrant =
+  | "critical"
+  | "stable_niche"
+  | "active_shared"
+  | "healthy";
+
+export interface FileRiskItem {
+  component_id: string;
+  component_name: string;
+  repo_path: string;
+  file_path: string;
+  churn_score: number;
+  contributor_count: number;
+  bus_factor: number;
+  quadrant: FileRiskQuadrant;
+  primary_owner_employee_id?: string | null;
+  primary_owner_name?: string | null;
+  primary_owner_doa_pct?: number | null;
+  github_url?: string | null;
+  computed_at: string;
+}
+
+export interface KraFileRiskResponse {
+  component_id: string | null;
+  component_name: string | null;
+  files: FileRiskItem[];
+  quadrant_counts: Record<string, number>;
+  cross_training_priority: FileRiskItem[];
+}
+
+export interface EraHotspotsResponse {
+  employee_id: string;
+  critical_count: number;
+  files: FileRiskItem[];
 }
 
 export type IncidentStatus =
@@ -336,4 +519,5 @@ export interface IdentityReconciliationResponse {
   employees: EmployeeIdentityRow[];
   provider_members: Partial<Record<IdentityProvider, ProviderMember[]>>;
   connected_providers: IdentityProvider[];
+  provider_warnings?: Partial<Record<IdentityProvider, string>>;
 }

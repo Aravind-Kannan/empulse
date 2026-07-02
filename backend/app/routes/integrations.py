@@ -10,18 +10,35 @@ from app.schemas.integrations import (
     IntegrationSyncResponse,
     IntegrationValidateResponse,
     JiraConfigRequest,
-    MemberRosterSyncResponse,
+    NotionConfigRequest,
     NotionValidateRequest,
+    SlackConfigRequest,
     SlackValidateRequest,
+    StoredGitHubConfig,
+    StoredJiraConfig,
+    StoredNotionConfig,
+    StoredSlackConfig,
+    TenantIntegrationsConfigResponse,
 )
-from app.services.member_roster_sync import sync_member_roster
-from app.services.integration_sync import (
+from app.services.employee_master_fetch import fetch_employee_master_data
+from app.services.integration_config_store import (
+    delete_source_config,
+    get_all_configs,
     get_github_config,
     get_jira_config,
-    process_external_app_sync,
-    process_global_sync,
+    get_notion_config,
+    get_slack_config,
+    get_source_config,
+    is_source_configured,
     save_github_config,
     save_jira_config,
+    save_notion_config,
+    save_slack_config,
+)
+from app.services.integration_validate import validate_jira_credentials
+from app.services.integration_sync import (
+    process_external_app_sync,
+    process_global_sync,
 )
 from app.schemas.employee_master import (
     EmployeeMasterDataResponse,
@@ -41,14 +58,41 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 logger = logging.getLogger(__name__)
 
 
+def _bundle_response(db: Session, tenant_id) -> TenantIntegrationsConfigResponse:
+    stored = get_all_configs(db, tenant_id)
+    return TenantIntegrationsConfigResponse(
+        slack=StoredSlackConfig(**stored["slack"]),
+        notion=StoredNotionConfig(**stored["notion"]),
+        github=StoredGitHubConfig(**stored["github"]),
+        jira=StoredJiraConfig(**stored["jira"]),
+    )
+
+
+@router.get("/config", response_model=TenantIntegrationsConfigResponse)
+def get_integration_config(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> TenantIntegrationsConfigResponse:
+    return _bundle_response(db, tenant.id)
+
+
 @router.post("/github/config", response_model=IntegrationConfigResponse)
-def configure_github(payload: GitHubConfigRequest) -> IntegrationConfigResponse:
-    if not payload.personal_access_token and not payload.oauth_connected:
+def configure_github(
+    payload: GitHubConfigRequest,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationConfigResponse:
+    existing = get_github_config(db, tenant.id)
+    if (
+        not payload.personal_access_token.strip()
+        and not payload.oauth_connected
+        and not existing
+    ):
         raise HTTPException(
             status_code=422,
             detail="GitHub requires a personal access token or OAuth authorization.",
         )
-    save_github_config(payload)
+    save_github_config(db, tenant.id, payload)
     return IntegrationConfigResponse(
         source="github",
         configured=True,
@@ -57,14 +101,107 @@ def configure_github(payload: GitHubConfigRequest) -> IntegrationConfigResponse:
 
 
 @router.post("/jira/config", response_model=IntegrationConfigResponse)
-def configure_jira(payload: JiraConfigRequest) -> IntegrationConfigResponse:
-    if not payload.api_token.strip():
+def configure_jira(
+    payload: JiraConfigRequest,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationConfigResponse:
+    stored = get_source_config(db, tenant.id, "jira")
+    token = payload.api_token.strip() or (stored.get("api_token") or "").strip()
+    account_email = payload.account_email.strip() or (stored.get("account_email") or "").strip()
+    project_keys = payload.project_keys.strip() or (stored.get("project_keys") or "").strip()
+    site_url = payload.site_url.strip() or (stored.get("site_url") or "").strip()
+
+    if not token:
         raise HTTPException(status_code=422, detail="Jira API token is required.")
-    save_jira_config(payload)
+    if not site_url:
+        raise HTTPException(status_code=422, detail="Jira site URL is required.")
+    if not project_keys:
+        raise HTTPException(
+            status_code=422,
+            detail="Jira project keys are required (comma-separated, e.g. SCRUM).",
+        )
+
+    try:
+        resolved_email, validation_message = validate_jira_credentials(
+            site_url,
+            token,
+            account_email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    save_jira_config(
+        db,
+        tenant.id,
+        JiraConfigRequest(
+            site_url=site_url,
+            project_keys=project_keys,
+            api_token=token,
+            account_email=resolved_email,
+            component_field_map=payload.component_field_map or stored.get("component_field_map") or {},
+            label_component_map=payload.label_component_map or stored.get("label_component_map") or {},
+            project_component_map=payload.project_component_map or stored.get("project_component_map") or {},
+            default_component_id=payload.default_component_id or stored.get("default_component_id"),
+            high_priorities=payload.high_priorities or stored.get("high_priorities") or ["Highest", "High", "Critical"],
+        ),
+    )
     return IntegrationConfigResponse(
         source="jira",
         configured=True,
-        message="Jira integration configuration saved.",
+        message=validation_message,
+    )
+
+
+@router.post("/slack/config", response_model=IntegrationConfigResponse)
+def configure_slack(
+    payload: SlackConfigRequest,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationConfigResponse:
+    if not payload.bot_token.strip():
+        raise HTTPException(status_code=422, detail="Slack bot token is required.")
+    save_slack_config(db, tenant.id, payload)
+    return IntegrationConfigResponse(
+        source="slack",
+        configured=True,
+        message="Slack integration configuration saved.",
+    )
+
+
+@router.post("/notion/config", response_model=IntegrationConfigResponse)
+def configure_notion(
+    payload: NotionConfigRequest,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationConfigResponse:
+    if not payload.integration_token.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Notion integration token is required.",
+        )
+    save_notion_config(db, tenant.id, payload)
+    return IntegrationConfigResponse(
+        source="notion",
+        configured=True,
+        message="Notion integration configuration saved.",
+    )
+
+
+@router.delete("/{source}/config", response_model=IntegrationConfigResponse)
+def remove_integration_config(
+    source: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationConfigResponse:
+    normalized = source.lower().strip()
+    if normalized not in {"github", "jira", "slack", "notion"}:
+        raise HTTPException(status_code=404, detail=f"Unknown integration '{source}'.")
+    delete_source_config(db, tenant.id, normalized)
+    return IntegrationConfigResponse(
+        source=normalized,  # type: ignore[arg-type]
+        configured=False,
+        message=f"{normalized.title()} integration disconnected.",
     )
 
 
@@ -99,12 +236,11 @@ def integration_status(
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
-    from app.services.jira_service import get_jira_integration
-
-    jira = get_jira_integration(db, tenant.id)
     return {
-        "github": get_github_config() is not None,
-        "jira": jira is not None and jira.status in ("connected", "syncing"),
+        "github": is_source_configured(db, tenant.id, "github"),
+        "jira": is_source_configured(db, tenant.id, "jira"),
+        "slack": is_source_configured(db, tenant.id, "slack"),
+        "notion": is_source_configured(db, tenant.id, "notion"),
     }
 
 
@@ -150,6 +286,7 @@ def fetch_users_post(
             credentials=credentials,
             flat_hierarchy=credentials.flat_hierarchy,
             tenant_id=tenant.id,
+            db=db,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -194,9 +331,18 @@ async def sync_integration(
     source: str,
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
+    use_fixture: bool = Query(default=False),
 ) -> IntegrationSyncResponse:
     try:
-        result = await process_external_app_sync(source, db, tenant.id)
+        result = await process_external_app_sync(
+            source,
+            db,
+            tenant.id,
+            use_github_fixture=use_fixture,
+            use_jira_fixture=use_fixture,
+            use_notion_fixture=use_fixture,
+            use_slack_fixture=use_fixture,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -214,15 +360,19 @@ async def sync_all_configured(
     db: Session = Depends(get_db),
 ) -> GlobalSyncResponse:
     sources: list[str] = []
-    if get_github_config():
+    if get_github_config(db, tenant.id):
         sources.append("github")
     if get_jira_config(db, tenant.id):
         sources.append("jira")
+    if get_notion_config(db, tenant.id):
+        sources.append("notion")
+    if get_slack_config(db, tenant.id):
+        sources.append("slack")
 
     if not sources:
         raise HTTPException(
             status_code=400,
-            detail="No GitHub or Jira integrations are configured for sync.",
+            detail="No configured integrations are available for sync.",
         )
 
     try:
