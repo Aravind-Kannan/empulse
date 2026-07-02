@@ -498,6 +498,54 @@ export interface IntegrationSyncResult {
   graph_nodes_created: number;
   graph_edges_created: number;
   narrative_preview: string;
+  items_fetched?: number;
+  items_new?: number;
+  items_updated?: number;
+  items_skipped?: number;
+  skipped_preview?: string[];
+  already_synced_note?: string;
+}
+
+export type IntegrationSyncJobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type IntegrationSyncPhase =
+  | "fetching"
+  | "building_graph"
+  | "cognifying"
+  | "finalizing";
+
+export interface IntegrationSyncJobAcceptedResponse {
+  job_id: string;
+  source: string;
+  status: IntegrationSyncJobStatus;
+  poll_url: string;
+  message: string;
+}
+
+export interface IntegrationSyncJobsAcceptedResponse {
+  jobs: IntegrationSyncJobAcceptedResponse[];
+  message: string;
+}
+
+export interface IntegrationSyncJobStatusResponse {
+  job_id: string;
+  source: string;
+  status: IntegrationSyncJobStatus;
+  phase: IntegrationSyncPhase | null;
+  progress_message: string | null;
+  error: string | null;
+  result: IntegrationSyncResult | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface IntegrationSyncJobListResponse {
+  jobs: IntegrationSyncJobStatusResponse[];
 }
 
 export interface GlobalSyncResult {

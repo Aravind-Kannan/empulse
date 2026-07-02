@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
 from app.database import Base
+from app.models.integration_sync_job import IntegrationSyncJob  # noqa: F401
+from app.models.integration_sync_record import IntegrationSyncRecord  # noqa: F401
 from app.models.operational import Employee
 from app.models.tenant import Tenant
 

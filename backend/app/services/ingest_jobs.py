@@ -15,6 +15,7 @@ from app.models.ingest_job import IngestJob
 from app.models.tenant import Tenant
 from app.schemas.ingest_job import IngestJobStatusResponse
 from app.schemas.org import OrgChartIngestRequest, OrgChartIngestResponse
+from app.services.background_runner import run_off_main_loop
 from app.services.cognee_ingest import ingest_org_chart_to_cognee
 from app.services.org_chart_read import load_org_chart
 
@@ -132,6 +133,13 @@ def _update_job_status(
 
 
 async def run_org_chart_ingest_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+    try:
+        await run_off_main_loop(_execute_org_chart_ingest_job, job_id, tenant_id)
+    finally:
+        _RUNNING_TASKS.pop(job_id, None)
+
+
+async def _execute_org_chart_ingest_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
     db = SessionLocal()
     try:
         _update_job_status(db, job_id, status="running")
@@ -161,11 +169,11 @@ async def run_org_chart_ingest_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> N
             logger.exception("Failed to mark ingest job %s as failed", job_id)
     finally:
         db.close()
-        _RUNNING_TASKS.pop(job_id, None)
 
 
 def schedule_org_chart_ingest_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
-    task = asyncio.create_task(run_org_chart_ingest_job(job_id, tenant_id))
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(run_org_chart_ingest_job(job_id, tenant_id))
     _RUNNING_TASKS[job_id] = task
 
     def _log_task_failure(done: asyncio.Task) -> None:

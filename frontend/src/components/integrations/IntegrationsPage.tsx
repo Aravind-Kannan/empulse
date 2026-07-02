@@ -7,8 +7,8 @@ import { IntegrationsDirectory } from "./IntegrationsDirectory";
 
 export function IntegrationsPage() {
   return (
-    <div className="mx-auto max-w-6xl space-y-8 p-8">
-      <header className="space-y-4">
+    <div className="mx-auto max-w-5xl p-6 lg:p-8">
+      <header className="mb-6 space-y-4">
         <Link
           href="/settings"
           className="inline-flex items-center gap-1.5 text-sm text-zinc-500 transition hover:text-zinc-300"
@@ -25,15 +25,14 @@ export function IntegrationsPage() {
               Integrations
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-zinc-400">
-              Connect engineering tools and sync their metadata into your Cognee
-              knowledge graph. Manage credentials and trigger ingestion from one
-              place.
+              Connect engineering tools and sync metadata into your Cognee
+              knowledge graph.
             </p>
           </div>
         </div>
       </header>
 
-      <IntegrationsDirectory />
+      <IntegrationsDirectory showSyncToolbar />
     </div>
   );
 }

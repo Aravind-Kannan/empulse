@@ -373,14 +373,27 @@ async def sync_jira_to_cognee(tenant_id: uuid.UUID, db: Session) -> dict[str, An
         await asyncio.sleep(0.1)
         documents = _sanitize_issues(issues)
         config = _integration_to_config(integration)
-        from app.services.integration_sync import _load_org_context, analyze_jira_payload
+        from app.services.integration_sync import (
+            _load_org_context,
+            analyze_jira_payload,
+            fetch_and_map_jira_issues,
+        )
 
-        employee_nodes, component_nodes = _load_org_context(db, tenant_id)
+        employee_nodes, component_nodes, components_by_id = _load_org_context(
+            db, tenant_id
+        )
+        jira_issues = await asyncio.to_thread(
+            fetch_and_map_jira_issues,
+            config,
+            components_by_id,
+        )
         narrative, data_points, edge_count = analyze_jira_payload(
             config,
             employee_nodes,
             component_nodes,
-            issues=issues,
+            db,
+            tenant_id,
+            jira_issues,
         )
         sanitize_ms = int((time.perf_counter() - t1) * 1000)
         _update_stage(

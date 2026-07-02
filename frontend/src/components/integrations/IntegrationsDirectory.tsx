@@ -1,53 +1,144 @@
 "use client";
 
-import { useIntegrations } from "@/context/IntegrationsContext";
-import { INTEGRATION_CATALOG } from "@/lib/integrations";
+import { useMemo } from "react";
+import { Loader2, RefreshCw } from "lucide-react";
 
-import { GlobalSyncBanner } from "./GlobalSyncBanner";
-import { IntegrationCard } from "./IntegrationCard";
+import { useIntegrations } from "@/context/IntegrationsContext";
+import {
+  INTEGRATION_CATALOG,
+  getConnectedIntegrationIds,
+  isIntegrationConnected,
+} from "@/lib/integrations";
+import { jobsBySource, latestJobPerSource } from "@/lib/sync-jobs";
+
+import { IntegrationRow } from "./IntegrationRow";
 import {
   IntegrationConfigDrawer,
   useSelectedIntegration,
 } from "./IntegrationConfigDrawer";
 
 interface IntegrationsDirectoryProps {
-  showSyncBanner?: boolean;
+  showSyncToolbar?: boolean;
   className?: string;
 }
 
 export function IntegrationsDirectory({
-  showSyncBanner = true,
+  showSyncToolbar = false,
   className = "",
 }: IntegrationsDirectoryProps) {
-  const { getStatus } = useIntegrations();
+  const {
+    config,
+    syncJobs,
+    syncProgress,
+    syncActionError,
+    globalSyncPending,
+    getStatus,
+    triggerGlobalSync,
+    triggerSourceSync,
+  } = useIntegrations();
   const { selectedApp, open, close } = useSelectedIntegration();
+
+  const latestBySource = useMemo(() => latestJobPerSource(syncJobs), [syncJobs]);
+  const allJobsBySource = useMemo(() => jobsBySource(syncJobs), [syncJobs]);
+  const connectedCount = getConnectedIntegrationIds(config).length;
+  const isGlobalBusy = syncProgress.active || globalSyncPending;
+  const progressPct =
+    syncProgress.total > 0
+      ? Math.round((syncProgress.completed.length / syncProgress.total) * 100)
+      : 0;
 
   return (
     <>
-      <div className={`space-y-8 ${className}`}>
-        {showSyncBanner && <GlobalSyncBanner />}
+      <div className={`space-y-6 ${className}`}>
+        {showSyncToolbar && (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm text-zinc-400">
+                  {connectedCount === 0
+                    ? "Connect a source below to start syncing into your knowledge graph."
+                    : `${connectedCount} source${connectedCount === 1 ? "" : "s"} connected. Sync pulls metadata into Cognee — unchanged items are skipped.`}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isGlobalBusy || connectedCount === 0}
+                onClick={() => void triggerGlobalSync()}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isGlobalBusy ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Syncing all…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4" />
+                    Sync all connected ({connectedCount})
+                  </>
+                )}
+              </button>
+            </div>
+
+            {syncActionError && (
+              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                {syncActionError}
+              </p>
+            )}
+
+            {(syncProgress.active || globalSyncPending) && (
+              <div className="space-y-2 rounded-xl border border-zinc-800 bg-zinc-950/40 px-4 py-3">
+                <div className="flex items-center justify-between text-xs text-zinc-500">
+                  <span>
+                    {syncProgress.currentSource
+                      ? `Ingesting ${syncProgress.currentSource}…`
+                      : "Preparing sync jobs…"}
+                  </span>
+                  <span>{progressPct}%</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-500 ease-out"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <section>
           <div className="mb-4">
             <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
-              App directory
+              Integrations
             </h2>
             <p className="mt-1 text-sm text-zinc-400">
-              Connect engineering tools — credentials are shared across onboarding
-              and settings.
+              Connect, configure, and sync each source from one place.
             </p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {INTEGRATION_CATALOG.map((app) => (
-              <IntegrationCard
-                key={app.id}
-                app={app}
-                status={getStatus(app.id)}
-                onAction={() => open(app.id)}
-              />
-            ))}
-          </div>
+          <ul className="space-y-2">
+            {INTEGRATION_CATALOG.map((app) => {
+              const status = getStatus(app.id);
+              const connected = isIntegrationConnected(app.id, config);
+
+              return (
+                <IntegrationRow
+                  key={app.id}
+                  app={app}
+                  status={status}
+                  connected={connected}
+                  syncing={status === "syncing"}
+                  latestJob={latestBySource.get(app.id) ?? null}
+                  sourceJobs={allJobsBySource.get(app.id) ?? []}
+                  onConfigure={() => open(app.id)}
+                  onSync={() => {
+                    void triggerSourceSync(app.id);
+                  }}
+                />
+              );
+            })}
+          </ul>
         </section>
       </div>
 

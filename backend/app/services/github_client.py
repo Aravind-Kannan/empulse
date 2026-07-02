@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 SYNC_WINDOW_MONTHS = 6
+MAX_PATCH_CHARS = 3_000
 FIXTURE_PATH = (
     Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures" / "github_merged_prs.json"
 )
@@ -215,6 +216,10 @@ def _activity_from_dict(item: dict) -> GitHubPullRequestActivity:
                 loc_added=file_row["loc_added"],
                 loc_removed=file_row["loc_removed"],
                 component_id=file_row.get("component_id"),
+                status=file_row.get("status", "modified"),
+                patch_preview=file_row.get("patch_preview", ""),
+                blob_sha=file_row.get("blob_sha", ""),
+                previous_path=file_row.get("previous_path", ""),
             )
             for file_row in item.get("files", [])
         ],
@@ -399,11 +404,18 @@ class GitHubClient:
         )
         files: list[GitHubFileChange] = []
         for row in response.json():
+            patch = row.get("patch") or ""
+            if len(patch) > MAX_PATCH_CHARS:
+                patch = patch[: MAX_PATCH_CHARS - 3] + "..."
             files.append(
                 GitHubFileChange(
                     path=row["filename"],
                     loc_added=row.get("additions", 0),
                     loc_removed=row.get("deletions", 0),
+                    status=row.get("status") or "modified",
+                    patch_preview=patch,
+                    blob_sha=row.get("sha") or "",
+                    previous_path=row.get("previous_filename") or "",
                 )
             )
         return files

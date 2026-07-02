@@ -15,6 +15,7 @@ from app.schemas.jira import (
     JiraValidateRequest,
     JiraValidateResponse,
 )
+from app.services.background_runner import run_off_main_loop
 from app.services.jira_service import (
     connect_jira_integration,
     get_jira_debug_state,
@@ -30,6 +31,10 @@ router = APIRouter(prefix="/api/integrations/jira", tags=["jira"])
 
 
 async def _run_jira_sync_background(tenant_id: uuid.UUID) -> None:
+    await run_off_main_loop(_execute_jira_sync, tenant_id)
+
+
+async def _execute_jira_sync(tenant_id: uuid.UUID) -> None:
     db = SessionLocal()
     try:
         await sync_jira_to_cognee(tenant_id, db)

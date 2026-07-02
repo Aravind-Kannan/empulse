@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import SkipValidation
 from sqlalchemy.orm import Session
@@ -14,6 +15,10 @@ from app.models.operational import Component, Employee
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
 from app.schemas.org import ACME_ORG_CHART
 from app.services.cognee_ingest import GraphComponent, GraphEmployee
+from app.services.github_code import (
+    GitHubCodeFileSnapshot,
+    collect_github_code_snapshots,
+)
 from app.services.github_client import (
     fetch_github_pull_request_activity,
     parse_repository_url,
@@ -51,6 +56,28 @@ from app.services.notion_types import NotionDocRecord
 from app.services.slack_client import fetch_slack_incident_threads, thread_title
 from app.services.slack_telemetry import compute_slack_telemetry
 from app.services.slack_types import SlackThreadRecord
+from app.services.sync_ledger import (
+    count_graph_edges,
+    plan_sync_ingest,
+    record_synced_items,
+)
+
+
+class GraphCodeFile(DataPoint):
+    repository_url: str
+    file_path: str
+    ref: str
+    content_preview: str = ""
+    patch_preview: str = ""
+    blame_summary: str = ""
+    primary_authors: str = ""
+    blob_sha: str = ""
+    documentsComponent: SkipValidation[Any] = None
+    blameAttributedTo: SkipValidation[Any] = None
+    metadata: dict = {
+        "index_fields": ["file_path", "repository_url", "ref", "primary_authors"],
+        "identity_fields": ["repository_url", "file_path", "ref"],
+    }
 
 
 class GraphPullRequest(DataPoint):
@@ -64,7 +91,10 @@ class GraphPullRequest(DataPoint):
     pr_url: str = ""
     contributedTo: SkipValidation[Any] = None
     modifies: SkipValidation[Any] = None
-    metadata: dict = {"index_fields": ["pr_number", "file_path", "branch"]}
+    metadata: dict = {
+        "index_fields": ["pr_number", "file_path", "branch"],
+        "identity_fields": ["repository_url", "pr_number", "commit_sha", "file_path"],
+    }
 
 
 class GraphJiraTicket(DataPoint):
@@ -75,7 +105,10 @@ class GraphJiraTicket(DataPoint):
     project_key: str
     assignedTo: SkipValidation[Any] = None
     blocksComponent: SkipValidation[Any] = None
-    metadata: dict = {"index_fields": ["ticket_id", "issue_type", "status"]}
+    metadata: dict = {
+        "index_fields": ["ticket_id", "issue_type", "status"],
+        "identity_fields": ["ticket_id"],
+    }
 
 
 class GraphNotionPage(DataPoint):
@@ -86,7 +119,10 @@ class GraphNotionPage(DataPoint):
     page_kind: str = "runbook"
     documentedBy: SkipValidation[Any] = None
     authoredBy: SkipValidation[Any] = None
-    metadata: dict = {"index_fields": ["page_id", "title", "page_kind"]}
+    metadata: dict = {
+        "index_fields": ["page_id", "title", "page_kind"],
+        "identity_fields": ["page_id"],
+    }
 
 
 class GraphSlackThread(DataPoint):
@@ -96,7 +132,10 @@ class GraphSlackThread(DataPoint):
     thread_url: str = ""
     resolvedBy: SkipValidation[Any] = None
     discussesComponent: SkipValidation[Any] = None
-    metadata: dict = {"index_fields": ["thread_id", "channel_name", "title"]}
+    metadata: dict = {
+        "index_fields": ["thread_id", "channel_name", "title"],
+        "identity_fields": ["thread_id"],
+    }
 
 
 from app.services.integration_config_store import (
@@ -298,6 +337,67 @@ def analyze_github_payload(
     return "\n".join(narrative_lines), data_points, edge_count
 
 
+def analyze_github_code_payload(
+    snapshots: list[GitHubCodeFileSnapshot],
+    employee_nodes: dict[str, GraphEmployee],
+    component_nodes: dict[str, GraphComponent],
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> tuple[list[str], list[GraphCodeFile], int]:
+    """Build Cognee nodes from file contents, diffs, and blame ranges."""
+    narrative_lines: list[str] = []
+    data_points: list[GraphCodeFile] = []
+    edge_count = 0
+
+    for snap in snapshots:
+        component = (
+            component_nodes.get(snap.component_id) if snap.component_id else None
+        )
+        node = GraphCodeFile(
+            repository_url=snap.repository_url,
+            file_path=snap.file_path,
+            ref=snap.ref,
+            content_preview=snap.content_preview,
+            patch_preview=snap.patch_preview,
+            blame_summary=snap.blame_summary(),
+            primary_authors=", ".join(snap.primary_authors[:8]),
+            blob_sha=snap.content_sha,
+        )
+        if component:
+            node.documentsComponent = (
+                Edge(relationship_type="documentsComponent"),
+                component,
+            )
+            edge_count += 1
+
+        top_author = snap.primary_authors[0] if snap.primary_authors else None
+        if top_author:
+            employee_id = resolve_author_employee_id(
+                db,
+                tenant_id,
+                "github",
+                f"gh-{top_author}",
+                quarantine_event_type="github_blame",
+                quarantine_payload={"file_path": snap.file_path, "ref": snap.ref},
+            )
+            author = employee_nodes.get(employee_id) if employee_id else None
+            if author:
+                node.blameAttributedTo = (
+                    Edge(relationship_type="blameAttributedTo"),
+                    author,
+                )
+                edge_count += 1
+
+        data_points.append(node)
+        blame_note = snap.blame_summary() or "no blame ranges"
+        narrative_lines.append(
+            f"Code file {snap.file_path} @ {snap.ref[:12]} "
+            f"({len(snap.content_preview)} chars, blame: {blame_note})."
+        )
+
+    return narrative_lines, data_points, edge_count
+
+
 def fetch_and_map_jira_issues(
     config: JiraConfigRequest,
     components_by_id: dict[str, Component],
@@ -331,7 +431,6 @@ def analyze_jira_payload(
         for key in config.project_keys.split(",")
         if key.strip()
     }
-    source_issues = issues if issues is not None else MOCK_JIRA_ISSUES
     narrative_lines = [
         f"Jira site sync: {config.site_url}",
         f"Project keys: {config.project_keys or 'all'}",
@@ -568,11 +667,16 @@ async def process_external_app_sync(
     use_jira_fixture: bool = False,
     use_notion_fixture: bool = False,
     use_slack_fixture: bool = False,
+    progress: Callable[[str, str], None] | None = None,
 ) -> dict[str, int | str]:
     """
     Transform raw app feed data, load into Cognee via add/cognify,
     and attach structured graph edges for multi-hop traversal.
     """
+    def report(phase: str, message: str) -> None:
+        if progress is not None:
+            progress(phase, message)
+
     normalized = source.lower().strip()
     employee_nodes, component_nodes, components_by_id = _load_org_context(db, tenant_id)
     github_activities: list[GitHubPullRequestActivity] = []
@@ -587,7 +691,9 @@ async def process_external_app_sync(
         config = get_github_config(db, tenant_id)
         if not config:
             raise ValueError("GitHub integration is not configured.")
-        github_activities, unmapped_paths, open_prs_by_login = fetch_and_map_github_activity(
+        report("fetching", "Fetching pull requests and file changes from GitHub…")
+        github_activities, unmapped_paths, open_prs_by_login = await asyncio.to_thread(
+            fetch_and_map_github_activity,
             config,
             components_by_id,
             use_fixture=use_github_fixture,
@@ -608,16 +714,38 @@ async def process_external_app_sync(
         )
         if narrative_prefix:
             narrative = f"{narrative_prefix}\n{narrative}"
+        report("fetching", "Fetching file contents, diffs, and blame metadata…")
+        code_snapshots = await asyncio.to_thread(
+            collect_github_code_snapshots,
+            config,
+            github_activities,
+            use_fixture=use_github_fixture,
+        )
+        code_lines, code_points, code_edges = analyze_github_code_payload(
+            code_snapshots,
+            employee_nodes,
+            component_nodes,
+            db,
+            tenant_id,
+        )
+        data_points.extend(code_points)
+        edge_count += code_edges
+        if code_lines:
+            narrative = narrative + "\n" + "\n".join(code_lines)
+        report("building_graph", "Building Cognee graph nodes from GitHub activity…")
         custom_prompt = (
             "Extract GitHub engineering activity including pull requests, commits, "
-            "file diff pathways, LOC changes, and map contributors to components "
-            "via contributedTo and modifies relationships."
+            "file diff pathways, LOC changes, source file contents, git blame line "
+            "ownership, and map contributors to components via contributedTo, "
+            "modifies, documentsComponent, and blameAttributedTo relationships."
         )
     elif normalized == "jira":
         config = get_jira_config(db, tenant_id)
         if not config:
             raise ValueError("Jira integration is not configured.")
-        jira_issues = fetch_and_map_jira_issues(
+        report("fetching", "Fetching Jira issues and assignees…")
+        jira_issues = await asyncio.to_thread(
+            fetch_and_map_jira_issues,
             config,
             components_by_id,
             use_fixture=use_jira_fixture,
@@ -630,6 +758,7 @@ async def process_external_app_sync(
             tenant_id,
             jira_issues,
         )
+        report("building_graph", "Building Cognee graph nodes from Jira issues…")
         custom_prompt = (
             "Extract Jira issue metadata including ticket IDs, issue types, priorities, "
             "status indicators, and link assignees and blocked components via "
@@ -639,6 +768,7 @@ async def process_external_app_sync(
         config = get_notion_config(db, tenant_id)
         if not config:
             raise ValueError("Notion integration is not configured.")
+        report("fetching", "Fetching Notion pages and workspace members…")
         component_names = {
             component_id: component.name
             for component_id, component in components_by_id.items()
@@ -646,7 +776,8 @@ async def process_external_app_sync(
         if use_notion_fixture:
             pages, people_expertise = load_fixture_document_inventory()
         else:
-            pages, people_expertise = fetch_notion_document_inventory(
+            pages, people_expertise = await asyncio.to_thread(
+                fetch_notion_document_inventory,
                 config.integration_token,
                 config.database_ids or None,
                 component_names=component_names,
@@ -662,6 +793,7 @@ async def process_external_app_sync(
             component_nodes,
             docs,
         )
+        report("building_graph", "Building Cognee graph nodes from Notion docs…")
         custom_prompt = (
             "Extract Notion documentation pages including runbooks, architecture docs, "
             "and ownership transfer templates. Link pages to components via documentedBy "
@@ -683,11 +815,13 @@ async def process_external_app_sync(
         config = get_slack_config(db, tenant_id)
         if not config:
             raise ValueError("Slack integration is not configured.")
+        report("fetching", "Fetching Slack incident threads…")
         component_names = {
             component_id: component.name
             for component_id, component in components_by_id.items()
         }
-        threads, slack_users, sync_warnings, slack_sync_stats = fetch_slack_incident_threads(
+        threads, slack_users, sync_warnings, slack_sync_stats = await asyncio.to_thread(
+            fetch_slack_incident_threads,
             config,
             component_names=component_names,
             use_fixture=use_slack_fixture,
@@ -708,6 +842,7 @@ async def process_external_app_sync(
             component_nodes,
             threads,
         )
+        report("building_graph", "Building Cognee graph nodes from Slack threads…")
         if slack_snapshot.sync_warnings:
             narrative = (
                 f"Warnings: {'; '.join(slack_snapshot.sync_warnings)}\n{narrative}"
@@ -720,16 +855,29 @@ async def process_external_app_sync(
     else:
         raise ValueError(f"Unsupported integration source '{source}'.")
 
+    ingest_plan = plan_sync_ingest(db, tenant_id, normalized, data_points)
+    data_points = ingest_plan.to_ingest
+    edge_count = count_graph_edges(data_points)
+
+    report("building_graph", ingest_plan.progress_message())
+
     if data_points:
+        report("building_graph", f"Indexing {len(data_points)} graph nodes into Cognee…")
         await tenant_add_data_points(tenant_id, data_points)
+        record_synced_items(db, tenant_id, normalized, ingest_plan.ledger_items)
 
     dataset = tenant_dataset_name(tenant_id)
-    await tenant_add_and_cognify(
-        narrative,
-        tenant_id,
-        custom_prompt=custom_prompt,
-    )
+    if ingest_plan.should_cognify:
+        report("cognifying", ingest_plan.cognify_message())
+        await tenant_add_and_cognify(
+            narrative,
+            tenant_id,
+            custom_prompt=custom_prompt,
+        )
+    else:
+        report("cognifying", ingest_plan.cognify_message())
 
+    report("finalizing", "Applying telemetry and finishing sync…")
     telemetry: dict[str, object] = {}
     if normalized == "github":
         telemetry["github_ownership"] = apply_github_telemetry(
@@ -764,13 +912,24 @@ async def process_external_app_sync(
     mark_sync_completed(normalized)
     record_integration_sync(db, tenant_id, normalized)
 
+    ledger_note = ingest_plan.result_note()
+    narrative_preview = narrative[:280]
+    if ledger_note:
+        narrative_preview = f"{ledger_note} {narrative_preview}"[:280]
+
     result: dict[str, int | str] = {
         "source": normalized,
         "cognee_dataset": dataset,
-        "documents_ingested": 1,
+        "documents_ingested": len(data_points) if data_points else 0,
         "graph_nodes_created": len(data_points),
         "graph_edges_created": edge_count,
-        "narrative_preview": narrative[:280],
+        "narrative_preview": narrative_preview,
+        "items_fetched": ingest_plan.fetched_count,
+        "items_new": ingest_plan.new_count,
+        "items_updated": ingest_plan.updated_count,
+        "items_skipped": ingest_plan.skipped_count,
+        "skipped_preview": ingest_plan.skipped_preview,
+        "already_synced_note": ledger_note,
         "telemetry": telemetry or get_telemetry_snapshot(),
     }
     if normalized == "slack" and slack_sync_stats is not None:

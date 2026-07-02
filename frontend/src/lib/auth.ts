@@ -141,14 +141,23 @@ export function sessionFromAuthState(
 export async function fetchAuthProviders(): Promise<{
   google: boolean;
   github: boolean;
-}> {
-  const response = await apiFetch(`${API_BASE}/api/auth/providers`, {
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    return { google: false, github: false };
+} | null> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 5_000);
+    const response = await fetch(`${API_BASE}/api/auth/providers`, {
+      cache: "no-store",
+      credentials: "include",
+      signal: controller.signal,
+    });
+    window.clearTimeout(timeoutId);
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  } catch {
+    return null;
   }
-  return response.json();
 }
 
 export async function fetchCurrentSession(): Promise<{

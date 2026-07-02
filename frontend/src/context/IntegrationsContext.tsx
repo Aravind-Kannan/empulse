@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -13,10 +14,13 @@ import {
 import {
   deleteIntegrationConfig,
   fetchIntegrationConfig,
+  fetchIntegrationSyncJobs,
   saveAndSyncIntegration,
+  syncAllIntegrations,
   syncIntegrationSource,
-  syncMemberRoster,
 } from "@/lib/api";
+import { formatFetchError } from "@/lib/api-client";
+import { formatSyncJobError } from "@/lib/sync-errors";
 import { useAuth } from "@/context/AuthContext";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import {
@@ -30,7 +34,7 @@ import {
   type IntegrationId,
   type IntegrationStatus,
 } from "@/lib/integrations";
-
+import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 
 function integrationsStorageKey(tenantId: string | null | undefined): string | null {
   if (!tenantId) return null;
@@ -108,7 +112,11 @@ function mergeIntegrationConfig(
 interface IntegrationsContextValue {
   config: IntegrationConfigMap;
   statuses: Record<IntegrationId, IntegrationStatus>;
+  syncJobs: IntegrationSyncJobStatusResponse[];
   syncProgress: SyncProgress;
+  syncActionError: string | null;
+  pendingSyncSources: ReadonlySet<IntegrationId>;
+  globalSyncPending: boolean;
   updateConfig: <K extends IntegrationId>(
     id: K,
     patch: Partial<IntegrationConfigMap[K]>,
@@ -117,19 +125,36 @@ interface IntegrationsContextValue {
   disconnect: (id: IntegrationId) => void;
   getStatus: (id: IntegrationId) => IntegrationStatus;
   triggerGlobalSync: () => Promise<void>;
+  triggerSourceSync: (id: IntegrationId) => Promise<void>;
+  refreshSyncJobs: () => Promise<void>;
 }
 
 const IntegrationsContext = createContext<IntegrationsContextValue | null>(null);
 
 const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira", "notion", "slack"]);
+const SYNC_POLL_INTERVAL_MS = 2000;
+
+function sourceDisplayName(source: string): string {
+  return (
+    INTEGRATION_CATALOG.find((app) => app.id === source)?.name ??
+    source.charAt(0).toUpperCase() + source.slice(1)
+  );
+}
 
 function deriveStatuses(
   config: IntegrationConfigMap,
-  syncingIds: Set<IntegrationId>,
+  syncJobs: IntegrationSyncJobStatusResponse[],
+  pendingSources: ReadonlySet<IntegrationId>,
 ): Record<IntegrationId, IntegrationStatus> {
+  const activeSources = new Set(
+    syncJobs
+      .filter((job) => job.status === "queued" || job.status === "running")
+      .map((job) => job.source as IntegrationId),
+  );
+
   const statuses = {} as Record<IntegrationId, IntegrationStatus>;
   for (const app of INTEGRATION_CATALOG) {
-    if (syncingIds.has(app.id)) {
+    if (activeSources.has(app.id) || pendingSources.has(app.id)) {
       statuses[app.id] = "syncing";
     } else if (isIntegrationConnected(app.id, config)) {
       statuses[app.id] = "connected";
@@ -144,21 +169,66 @@ function deriveStatuses(
   return statuses;
 }
 
+function deriveSyncProgress(
+  syncJobs: IntegrationSyncJobStatusResponse[],
+): SyncProgress {
+  const activeJobs = syncJobs.filter(
+    (job) => job.status === "queued" || job.status === "running",
+  );
+  const completed = syncJobs
+    .filter((job) => job.status === "completed")
+    .map((job) => sourceDisplayName(job.source));
+  const failedJob = syncJobs.find((job) => job.status === "failed");
+
+  const currentJob = activeJobs[0];
+  const relevantJobs = syncJobs.filter(
+    (job) =>
+      job.status === "queued" ||
+      job.status === "running" ||
+      job.status === "completed" ||
+      job.status === "failed",
+  );
+  const total = Math.max(
+    relevantJobs.length,
+    completed.length + activeJobs.length,
+  );
+
+  return {
+    active: activeJobs.length > 0,
+    currentSource: currentJob ? sourceDisplayName(currentJob.source) : null,
+    completed,
+    total,
+    error: failedJob?.error ?? null,
+  };
+}
+
 export function IntegrationsProvider({ children }: { children: ReactNode }) {
-  const { activeTenant, session } = useAuth();
+  const { activeTenant } = useAuth();
   const tenantId = activeTenant?.id ?? null;
   const { refreshOperationalState } = useWorkspace();
   const [config, setConfig] = useState<IntegrationConfigMap>(
     DEFAULT_INTEGRATION_CONFIG,
   );
-  const [syncingIds, setSyncingIds] = useState<Set<IntegrationId>>(new Set());
-  const [syncProgress, setSyncProgress] = useState<SyncProgress>({
-    active: false,
-    currentSource: null,
-    completed: [],
-    total: 0,
-    error: null,
-  });
+  const [syncJobs, setSyncJobs] = useState<IntegrationSyncJobStatusResponse[]>([]);
+  const [pendingSyncSources, setPendingSyncSources] = useState<Set<IntegrationId>>(
+    () => new Set(),
+  );
+  const [globalSyncPending, setGlobalSyncPending] = useState(false);
+  const [syncActionError, setSyncActionError] = useState<string | null>(null);
+  const hadActiveSyncJobs = useRef(false);
+
+  const refreshSyncJobs = useCallback(async () => {
+    if (!tenantId) {
+      setSyncJobs([]);
+      return;
+    }
+    try {
+      const response = await fetchIntegrationSyncJobs({ limit: 50 });
+      setSyncJobs(response.jobs);
+    } catch {
+      // Keep last known jobs if polling fails briefly.
+    }
+  }, [tenantId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,19 +253,42 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     }
 
     void hydrate();
-    setSyncingIds(new Set());
-    setSyncProgress({
-      active: false,
-      currentSource: null,
-      completed: [],
-      total: 0,
-      error: null,
-    });
+    void refreshSyncJobs();
 
     return () => {
       cancelled = true;
     };
-  }, [tenantId]);
+  }, [tenantId, refreshSyncJobs]);
+
+  const syncProgress = useMemo(
+    () => deriveSyncProgress(syncJobs),
+    [syncJobs],
+  );
+
+  const hasActiveSyncJobs = useMemo(
+    () =>
+      syncJobs.some(
+        (job) => job.status === "queued" || job.status === "running",
+      ),
+    [syncJobs],
+  );
+
+  useEffect(() => {
+    if (!tenantId || !hasActiveSyncJobs) return;
+
+    const interval = window.setInterval(() => {
+      void refreshSyncJobs();
+    }, SYNC_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [tenantId, refreshSyncJobs, hasActiveSyncJobs]);
+
+  useEffect(() => {
+    if (hadActiveSyncJobs.current && !hasActiveSyncJobs) {
+      void refreshOperationalState();
+    }
+    hadActiveSyncJobs.current = hasActiveSyncJobs;
+  }, [hasActiveSyncJobs, refreshOperationalState]);
 
   const persist = useCallback(
     (next: IntegrationConfigMap) => {
@@ -250,31 +343,18 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     async (id: IntegrationId) => {
       if (!isIntegrationConnected(id, config)) return;
 
-      setSyncingIds((prev) => new Set(prev).add(id));
-      setSyncProgress((prev) => ({ ...prev, error: null }));
-
       try {
         if (BACKEND_SYNC_SOURCES.has(id)) {
           await saveAndSyncIntegration(id, config);
+          await refreshSyncJobs();
         } else {
           await new Promise((resolve) => setTimeout(resolve, 800));
         }
-        await refreshOperationalState();
       } catch (err) {
-        setSyncProgress((prev) => ({
-          ...prev,
-          error: err instanceof Error ? err.message : "Sync failed",
-        }));
         throw err;
-      } finally {
-        setSyncingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
       }
     },
-    [config, refreshOperationalState],
+    [config, refreshSyncJobs],
   );
 
   const disconnect = useCallback(
@@ -294,13 +374,37 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   );
 
   const statuses = useMemo(
-    () => deriveStatuses(config, syncingIds),
-    [config, syncingIds],
+    () => deriveStatuses(config, syncJobs, pendingSyncSources),
+    [config, syncJobs, pendingSyncSources],
   );
 
   const getStatus = useCallback(
     (id: IntegrationId) => statuses[id],
     [statuses],
+  );
+
+  const triggerSourceSync = useCallback(
+    async (id: IntegrationId) => {
+      if (!BACKEND_SYNC_SOURCES.has(id)) return;
+      if (!isIntegrationConnected(id, config)) return;
+
+      setSyncActionError(null);
+      setPendingSyncSources((prev) => new Set(prev).add(id));
+
+      try {
+        await syncIntegrationSource(id);
+        await refreshSyncJobs();
+      } catch (err) {
+        setSyncActionError(formatSyncJobError(formatFetchError(err, `${id} sync failed`)));
+      } finally {
+        setPendingSyncSources((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [config, refreshSyncJobs],
   );
 
   const triggerGlobalSync = useCallback(async () => {
@@ -309,74 +413,60 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     );
     if (connected.length === 0) return;
 
-    const memberSources = getConnectedMemberImportSources(config);
     const backendSources = connected.filter((app) =>
       BACKEND_SYNC_SOURCES.has(app.id),
     );
+    if (backendSources.length === 0) return;
 
-    setSyncProgress({
-      active: true,
-      currentSource: null,
-      completed: [],
-      total: backendSources.length,
-      error: null,
-    });
-    setSyncingIds(new Set(connected.map((app) => app.id)));
-
-    const completed: string[] = [];
+    setSyncActionError(null);
+    setGlobalSyncPending(true);
+    setPendingSyncSources(
+      () => new Set(backendSources.map((app) => app.id)),
+    );
 
     try {
-      for (const app of backendSources) {
-        setSyncProgress((prev) => ({
-          ...prev,
-          currentSource: app.name,
-        }));
-        await saveAndSyncIntegration(app.id, config);
-        completed.push(app.name);
-        setSyncProgress((prev) => ({
-          ...prev,
-          completed: [...completed],
-        }));
-      }
-
-      await refreshOperationalState();
+      await syncAllIntegrations();
+      await refreshSyncJobs();
     } catch (err) {
-      setSyncProgress((prev) => ({
-        ...prev,
-        error: err instanceof Error ? err.message : "Global sync failed",
-        completed,
-      }));
+      setSyncActionError(formatSyncJobError(formatFetchError(err, "Global sync failed")));
     } finally {
-      setSyncingIds(new Set());
-      setSyncProgress((prev) => ({
-        ...prev,
-        active: false,
-        currentSource: null,
-        completed,
-      }));
+      setGlobalSyncPending(false);
+      setPendingSyncSources(new Set());
     }
-  }, [activeTenant?.companyName, config, refreshOperationalState, session?.company]);
+  }, [config, refreshSyncJobs]);
 
   const value = useMemo(
     () => ({
       config,
       statuses,
+      syncJobs,
       syncProgress,
+      syncActionError,
+      pendingSyncSources,
+      globalSyncPending,
       updateConfig,
       connect,
       disconnect,
       getStatus,
       triggerGlobalSync,
+      triggerSourceSync,
+      refreshSyncJobs,
     }),
     [
       config,
       statuses,
+      syncJobs,
       syncProgress,
+      syncActionError,
+      pendingSyncSources,
+      globalSyncPending,
       updateConfig,
       connect,
       disconnect,
       getStatus,
       triggerGlobalSync,
+      triggerSourceSync,
+      refreshSyncJobs,
     ],
   );
 

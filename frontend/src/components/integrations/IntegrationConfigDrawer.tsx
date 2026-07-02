@@ -130,7 +130,7 @@ function buildConnectSteps(
       label:
         integrationId === "jira"
           ? "Queuing background sync into knowledge graph"
-          : `Fetching ${integrationName} data and syncing into knowledge graph`,
+          : `Queuing ${integrationName} sync into knowledge graph`,
       status: "pending",
     },
     {
@@ -217,8 +217,8 @@ function ConnectProgressPanel({ steps }: { steps: ConnectStep[] }) {
         ))}
       </ol>
       <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-        This can take up to a minute while we call external APIs and build the
-        graph. Please keep this panel open.
+        Sync runs in the background. Large GitHub repos can take several minutes —
+        track progress on the integration row.
       </p>
     </div>
   );
@@ -228,7 +228,7 @@ export function IntegrationConfigDrawer({
   app,
   onClose,
 }: IntegrationConfigDrawerProps) {
-  const { config, updateConfig, disconnect } = useIntegrations();
+  const { config, updateConfig, disconnect, refreshSyncJobs } = useIntegrations();
   const { refreshOperationalState } = useWorkspace();
   const [saving, setSaving] = useState(false);
   const [connectSteps, setConnectSteps] = useState<ConnectStep[]>([]);
@@ -289,8 +289,9 @@ export function IntegrationConfigDrawer({
         });
         await runStep("sync", async () => {
           await syncIntegrationSource("notion");
+          await refreshSyncJobs();
         });
-        setSuccess(`${message} Connected and synced.`);
+        setSuccess(`${message} Sync queued — track progress below or on integrations.`);
       } else if (app.id === "slack") {
         if (!config.slack.botToken.trim()) {
           throw new Error("Slack bot token is required.");
@@ -309,8 +310,9 @@ export function IntegrationConfigDrawer({
         });
         await runStep("sync", async () => {
           await syncIntegrationSource("slack");
+          await refreshSyncJobs();
         });
-        setSuccess(`${message} Connected and synced.`);
+        setSuccess(`${message} Sync queued — track progress below or on integrations.`);
       } else if (app.id === "github") {
         const selectedRepos =
           config.github.repositoryUrls.length > 0
@@ -367,8 +369,9 @@ export function IntegrationConfigDrawer({
         });
         await runStep("sync", async () => {
           await syncIntegrationSource("github");
+          await refreshSyncJobs();
         });
-        setSuccess(`${message} Connected and synced.`);
+        setSuccess(`${message} Sync queued — track progress below or on integrations.`);
       } else if (app.id === "jira") {
         const validationError = validateJiraConfigDraft(config.jira);
         if (validationError) {

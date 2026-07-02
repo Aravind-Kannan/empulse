@@ -51,7 +51,7 @@ export function Sidebar() {
       : "Workspace";
 
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-zinc-800 bg-slate-950">
+    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-zinc-800 bg-slate-950">
       <div className="flex items-center gap-3 border-b border-zinc-800 px-5 py-5">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-zinc-100">
           <BrainCircuit className="h-5 w-5" />

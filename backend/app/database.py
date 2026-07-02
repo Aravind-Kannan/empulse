@@ -26,6 +26,8 @@ def get_db() -> Generator[Session, None, None]:
 def init_db() -> None:
     from app.models import (  # noqa: F401
         ingest_job,
+        integration_sync_job,
+        integration_sync_record,
         jira_integration,
         operational,
         tenant,

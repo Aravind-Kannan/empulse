@@ -11,6 +11,10 @@ class GitHubFileChange:
     loc_added: int
     loc_removed: int
     component_id: str | None = None
+    status: str = "modified"
+    patch_preview: str = ""
+    blob_sha: str = ""
+    previous_path: str = ""
 
 
 @dataclass

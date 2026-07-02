@@ -57,6 +57,8 @@ export interface IntegrationDefinition {
   name: string;
   description: string;
   syncsToCognee: string;
+  /** Concrete data pulled during graph sync (matches backend fetch scope). */
+  syncPullItems: string[];
   accent: string;
   accentBg: string;
   iconClassName: string;
@@ -68,7 +70,13 @@ export const INTEGRATION_CATALOG: IntegrationDefinition[] = [
     name: "Slack",
     description: "Incident threads, on-call channels, and engineering announcements.",
     syncsToCognee:
-      "Channel metadata, incident threads, and on-call rotations into the knowledge graph.",
+      "Incident thread metadata and on-call channel activity into the knowledge graph.",
+    syncPullItems: [
+      "Incident & on-call channel threads (90-day lookback)",
+      "Thread titles, channel names, and resolver identity",
+      "resolvedBy and discussesComponent graph edges",
+      "No message bodies stored — metadata only",
+    ],
     accent: "text-[#E01E5A]",
     accentBg: "bg-[#4A154B]",
     iconClassName: "text-white",
@@ -78,7 +86,13 @@ export const INTEGRATION_CATALOG: IntegrationDefinition[] = [
     name: "Notion",
     description: "Runbooks, architecture docs, and team wikis.",
     syncsToCognee:
-      "Page hierarchy, runbook content, and ownership tags for documentation coverage.",
+      "Documentation pages and authorship links for coverage analytics.",
+    syncPullItems: [
+      "Pages from workspace search and configured databases",
+      "Runbook & architecture doc titles and ownership tags",
+      "documentedBy and authoredBy links to components & people",
+      "Documentation coverage telemetry vs GitHub activity",
+    ],
     accent: "text-zinc-100",
     accentBg: "bg-transparent",
     iconClassName: "text-white",
@@ -88,7 +102,14 @@ export const INTEGRATION_CATALOG: IntegrationDefinition[] = [
     name: "GitHub",
     description: "Repositories, pull requests, and code ownership.",
     syncsToCognee:
-      "Repo structure, CODEOWNERS, PR history, and branch protection metadata.",
+      "Pull requests, file diffs, source code, and blame ownership into the knowledge graph.",
+    syncPullItems: [
+      "Merged PRs from configured repos & branches (6-month window)",
+      "Per-PR file paths, LOC changes, and diff patch previews",
+      "Source file contents (up to 40 mapped files per sync)",
+      "Git blame line ranges and primary author attribution",
+      "contributedTo, modifies, documentsComponent, and blameAttributedTo edges",
+    ],
     accent: "text-zinc-100",
     accentBg: "bg-[#24292f]",
     iconClassName: "text-white",
@@ -98,7 +119,13 @@ export const INTEGRATION_CATALOG: IntegrationDefinition[] = [
     name: "Jira",
     description: "Sprints, epics, and operational work items.",
     syncsToCognee:
-      "Project keys, issue links, sprint velocity, and component assignment edges.",
+      "Open issue metadata and assignee links into the knowledge graph.",
+    syncPullItems: [
+      "Open issues from configured project keys",
+      "Ticket type, priority, status, and assignee",
+      "assignedTo and blocksComponent graph edges",
+      "Backlog & high-priority telemetry (done issues skipped)",
+    ],
     accent: "text-[#2684FF]",
     accentBg: "bg-transparent",
     iconClassName: "",

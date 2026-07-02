@@ -43,8 +43,37 @@ export function clearAuthCredentials() {
   setAuthCredentials(null, null);
 }
 
-export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
-  const headers = new Headers(init?.headers);
+export type ApiFetchInit = RequestInit & {
+  /** Client-side timeout in ms. Default 20s. Set 0 to disable. */
+  timeoutMs?: number;
+};
+
+export function isFetchAbortError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "AbortError" || error.name === "TimeoutError";
+  }
+  return false;
+}
+
+export function formatFetchError(
+  error: unknown,
+  fallback = "Request failed",
+): string {
+  if (isFetchAbortError(error)) {
+    return "API request timed out. Backend may be busy with a sync — wait and retry, or restart the server.";
+  }
+  if (error instanceof TypeError && error.message === "Failed to fetch") {
+    return "Cannot reach the API server. Ensure the backend is running on port 8000.";
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+}
+
+export function apiFetch(url: string, init?: ApiFetchInit): Promise<Response> {
+  const { timeoutMs = 20_000, signal: externalSignal, ...rest } = init ?? {};
+  const headers = new Headers(rest.headers);
   const token = getAccessToken();
   const tenantId = getActiveTenantId();
 
@@ -55,9 +84,31 @@ export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
     headers.set("X-Tenant-ID", tenantId);
   }
 
+  if (typeof window === "undefined" || externalSignal || timeoutMs === 0) {
+    return fetch(url, {
+      credentials: "include",
+      ...rest,
+      headers,
+      signal: externalSignal,
+    });
+  }
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort(
+      new DOMException(
+        `Request timed out after ${timeoutMs}ms`,
+        "TimeoutError",
+      ),
+    );
+  }, timeoutMs);
+
   return fetch(url, {
     credentials: "include",
-    ...init,
+    ...rest,
     headers,
+    signal: controller.signal,
+  }).finally(() => {
+    window.clearTimeout(timeoutId);
   });
 }

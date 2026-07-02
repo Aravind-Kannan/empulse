@@ -61,7 +61,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     }
   }, [authStatus, isLoading, pathname, router, session?.onboarded]);
 
-  if (isLoading) {
+  // Login/signup must render immediately — don't block on session probe (backend may be slow).
+  if (isLoading && !isAuthPath(pathname)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-zinc-400">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" />

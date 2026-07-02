@@ -3,6 +3,7 @@ from app.ssl import configure_ssl
 configure_ssl()
 
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,11 +25,22 @@ from app.routes.investigation import router as investigation_router
 from app.routes.jira import router as jira_router
 from app.routes.tenants import router as tenants_router
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     setup_cognee()
     init_db()
+
+    from app.services.integration_sync_jobs import recover_orphaned_sync_jobs
+
+    recovered = recover_orphaned_sync_jobs()
+    if recovered:
+        logger.warning(
+            "Marked %d orphaned integration sync job(s) failed after restart",
+            recovered,
+        )
 
     from cognee.run_migrations import run_relational_migrations
 
@@ -44,6 +56,11 @@ async def lifespan(_: FastAPI):
         await ensure_tenant_cognee_dataset(tenant.id)
     finally:
         db.close()
+
+    logger.info(
+        "API ready. Heavy sync/ingest jobs are serialized (one at a time). "
+        "Avoid uvicorn --reload during long syncs."
+    )
 
     yield
 

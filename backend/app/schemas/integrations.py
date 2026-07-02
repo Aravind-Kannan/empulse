@@ -177,6 +177,12 @@ class IntegrationSyncResponse(BaseModel):
     graph_nodes_created: int
     graph_edges_created: int
     narrative_preview: str
+    items_fetched: int = 0
+    items_new: int = 0
+    items_updated: int = 0
+    items_skipped: int = 0
+    skipped_preview: list[str] = Field(default_factory=list)
+    already_synced_note: str = ""
     channels_discovered: int | None = None
     channels_synced: int | None = None
     messages_ingested: int | None = None

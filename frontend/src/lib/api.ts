@@ -11,6 +11,10 @@ import type {
   HandoverResponse,
   IncidentStatus,
   IncidentSummary,
+  IntegrationSyncJobAcceptedResponse,
+  IntegrationSyncJobListResponse,
+  IntegrationSyncJobStatusResponse,
+  IntegrationSyncJobsAcceptedResponse,
   IntegrationSyncResult,
   InvestigationDiagnostics,
   KraAnalyticsResponse,
@@ -803,9 +807,10 @@ export async function saveJiraIntegrationConfig(
 
 export async function syncIntegrationSource(
   source: "github" | "jira" | "notion" | "slack",
-): Promise<IntegrationSyncResult> {
+): Promise<IntegrationSyncJobAcceptedResponse> {
   const response = await apiFetch(`${API_BASE}/api/integrations/sync/${source}`, {
     method: "POST",
+    timeoutMs: 45_000,
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, `${source} sync failed`));
@@ -813,9 +818,10 @@ export async function syncIntegrationSource(
   return response.json();
 }
 
-export async function syncAllIntegrations(): Promise<GlobalSyncResult> {
+export async function syncAllIntegrations(): Promise<IntegrationSyncJobsAcceptedResponse> {
   const response = await apiFetch(`${API_BASE}/api/integrations/sync`, {
     method: "POST",
+    timeoutMs: 45_000,
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Global sync failed"));
@@ -823,10 +829,40 @@ export async function syncAllIntegrations(): Promise<GlobalSyncResult> {
   return response.json();
 }
 
+export async function fetchIntegrationSyncJobs(options?: {
+  activeOnly?: boolean;
+  limit?: number;
+}): Promise<IntegrationSyncJobListResponse> {
+  const params = new URLSearchParams();
+  if (options?.activeOnly) params.set("active_only", "true");
+  if (options?.limit) params.set("limit", String(options.limit));
+  const query = params.toString();
+  const response = await apiFetch(
+    `${API_BASE}/api/integrations/sync/jobs${query ? `?${query}` : ""}`,
+    { cache: "no-store", timeoutMs: 15_000 },
+  );
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Failed to load sync jobs"));
+  }
+  return response.json();
+}
+
+export async function fetchIntegrationSyncJobStatus(
+  jobId: string,
+): Promise<IntegrationSyncJobStatusResponse> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/sync/jobs/${jobId}`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Failed to load sync job"));
+  }
+  return response.json();
+}
+
 export async function saveAndSyncIntegration(
   id: IntegrationId,
   config: IntegrationConfigMap,
-): Promise<IntegrationSyncResult | null> {
+): Promise<IntegrationSyncJobAcceptedResponse | null> {
   if (id === "github") {
     await saveGitHubIntegrationConfig(config.github);
     return syncIntegrationSource("github");

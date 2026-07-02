@@ -1,8 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 import logging
+import uuid
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.schemas.integration_sync_job import (
+    IntegrationSyncJobAcceptedResponse,
+    IntegrationSyncJobListResponse,
+    IntegrationSyncJobStatusResponse,
+    IntegrationSyncJobsAcceptedResponse,
+)
 from app.schemas.integrations import (
     GitHubBranchesRequest,
     GitHubBranchesResponse,
@@ -10,9 +17,7 @@ from app.schemas.integrations import (
     GitHubDiscoverRequest,
     GitHubDiscoverResponse,
     GitHubValidateRequest,
-    GlobalSyncResponse,
     IntegrationConfigResponse,
-    IntegrationSyncResponse,
     IntegrationValidateResponse,
     JiraConfigRequest,
     MemberRosterSyncResponse,
@@ -51,9 +56,13 @@ from app.services.integration_validate import (
     validate_notion_token,
     validate_slack_bot_token,
 )
-from app.services.integration_sync import (
-    process_external_app_sync,
-    process_global_sync,
+from app.services.integration_sync_jobs import (
+    create_integration_sync_job,
+    get_integration_sync_job_for_tenant,
+    job_to_accepted_response,
+    job_to_status_response,
+    list_integration_sync_jobs,
+    schedule_integration_sync_job,
 )
 from app.schemas.employee_master import (
     EmployeeMasterDataResponse,
@@ -456,39 +465,58 @@ async def sync_members(
     return MemberRosterSyncResponse(**result)
 
 
-@router.post("/sync/{source}", response_model=IntegrationSyncResponse)
+@router.get("/sync/jobs", response_model=IntegrationSyncJobListResponse)
+def list_sync_jobs(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=20, ge=1, le=100),
+    active_only: bool = Query(default=False),
+) -> IntegrationSyncJobListResponse:
+    jobs = list_integration_sync_jobs(
+        db,
+        tenant.id,
+        limit=limit,
+        active_only=active_only,
+    )
+    return IntegrationSyncJobListResponse(
+        jobs=[job_to_status_response(job) for job in jobs],
+    )
+
+
+@router.get("/sync/jobs/{job_id}", response_model=IntegrationSyncJobStatusResponse)
+def get_sync_job_status(
+    job_id: uuid.UUID,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationSyncJobStatusResponse:
+    job = get_integration_sync_job_for_tenant(db, job_id, tenant.id)
+    return job_to_status_response(job)
+
+
+@router.post(
+    "/sync/{source}",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=IntegrationSyncJobAcceptedResponse,
+)
 async def sync_integration(
     source: str,
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
-    use_fixture: bool = Query(default=False),
-) -> IntegrationSyncResponse:
-    try:
-        result = await process_external_app_sync(
-            source,
-            db,
-            tenant.id,
-            use_github_fixture=use_fixture,
-            use_jira_fixture=use_fixture,
-            use_notion_fixture=use_fixture,
-            use_slack_fixture=use_fixture,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Cognee sync failed for {source}: {exc}",
-        ) from exc
-
-    return IntegrationSyncResponse(**result)
+) -> IntegrationSyncJobAcceptedResponse:
+    job = create_integration_sync_job(db, tenant_id=tenant.id, source=source)
+    schedule_integration_sync_job(job.id, tenant.id)
+    return job_to_accepted_response(job)
 
 
-@router.post("/sync", response_model=GlobalSyncResponse)
+@router.post(
+    "/sync",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=IntegrationSyncJobsAcceptedResponse,
+)
 async def sync_all_configured(
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
-) -> GlobalSyncResponse:
+) -> IntegrationSyncJobsAcceptedResponse:
     sources: list[str] = []
     if get_github_config(db, tenant.id):
         sources.append("github")
@@ -505,24 +533,17 @@ async def sync_all_configured(
             detail="No configured integrations are available for sync.",
         )
 
-    try:
-        results = await process_global_sync(db, tenant.id, sources)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Global Cognee sync failed: {exc}",
-        ) from exc
+    accepted: list[IntegrationSyncJobAcceptedResponse] = []
+    for source in sources:
+        job = create_integration_sync_job(db, tenant_id=tenant.id, source=source)
+        schedule_integration_sync_job(job.id, tenant.id)
+        accepted.append(job_to_accepted_response(job))
 
-    from app.services.era_snapshots import snapshot_era_metrics
-
-    try:
-        snapshot_era_metrics(db, tenant)
-    except Exception:
-        pass
-
-    sync_results = [IntegrationSyncResponse(**result) for result in results]
-    return GlobalSyncResponse(
-        results=sync_results,
-        total_nodes_created=sum(item.graph_nodes_created for item in sync_results),
-        total_edges_created=sum(item.graph_edges_created for item in sync_results),
+    return IntegrationSyncJobsAcceptedResponse(
+        jobs=accepted,
+        message=(
+            f"Queued {len(accepted)} integration sync job"
+            f"{'s' if len(accepted) != 1 else ''}. "
+            "Track progress in the sync jobs panel."
+        ),
     )

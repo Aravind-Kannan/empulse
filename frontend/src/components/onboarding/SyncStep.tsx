@@ -1,34 +1,23 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2, Network } from "lucide-react";
 
 import { GlobalSyncBanner } from "@/components/integrations/GlobalSyncBanner";
 import { OnboardingShell } from "@/components/onboarding/OnboardingShell";
 import { useAuth } from "@/context/AuthContext";
 import { useIntegrations } from "@/context/IntegrationsContext";
-import {
-  getConnectedIntegrationIds,
-  INTEGRATION_CATALOG,
-  isIntegrationConnected,
-} from "@/lib/integrations";
+import { getConnectedIntegrationIds } from "@/lib/integrations";
 
 export function SyncStep() {
   const router = useRouter();
   const { completeOnboarding } = useAuth();
-  const { config, syncProgress, triggerGlobalSync } = useIntegrations();
+  const { config, syncProgress } = useIntegrations();
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [syncStarted, setSyncStarted] = useState(false);
 
   const connectedCount = getConnectedIntegrationIds(config).length;
-
-  useEffect(() => {
-    if (connectedCount === 0 || syncStarted) return;
-    setSyncStarted(true);
-    void triggerGlobalSync();
-  }, [connectedCount, syncStarted, triggerGlobalSync]);
 
   async function handleFinish() {
     setFinishing(true);
@@ -53,42 +42,21 @@ export function SyncStep() {
             Sync your knowledge graph
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-zinc-400">
-            Ingest metadata from every connected source into your tenant&apos;s
-            Cognee dataset. Workspaces unlock as each integration finishes
-            syncing.
+            Pull PRs, source code, blame, docs, and tickets from connected apps
+            into your tenant Cognee dataset. Start sync when ready — unchanged
+            data is skipped automatically.
           </p>
         </div>
       </div>
 
-      <GlobalSyncBanner />
+      {connectedCount === 0 && (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          No integrations connected yet. Go back to connect Slack, GitHub, Jira,
+          or Notion — or skip to the dashboard and connect later.
+        </div>
+      )}
 
-      <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
-          Workspace readiness
-        </h2>
-        <ul className="mt-4 space-y-2">
-          {INTEGRATION_CATALOG.map((app) => {
-            const connected = isIntegrationConnected(app.id, config);
-            return (
-              <li
-                key={app.id}
-                className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/50 px-4 py-3 text-sm"
-              >
-                <span className="text-zinc-300">{app.name}</span>
-                <span
-                  className={
-                    connected
-                      ? "text-emerald-400"
-                      : "text-zinc-600"
-                  }
-                >
-                  {connected ? "Connected" : "Not connected"}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+      <GlobalSyncBanner />
 
       {error && (
         <div className="mt-6 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
