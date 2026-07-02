@@ -11,6 +11,7 @@ from app.schemas.integrations import (
     IntegrationSyncResponse,
     IntegrationValidateResponse,
     JiraConfigRequest,
+    MemberRosterSyncResponse,
     NotionConfigRequest,
     NotionValidateRequest,
     SlackConfigRequest,
@@ -21,7 +22,6 @@ from app.schemas.integrations import (
     StoredSlackConfig,
     TenantIntegrationsConfigResponse,
 )
-from app.services.employee_master_fetch import fetch_employee_master_data
 from app.services.integration_config_store import (
     delete_source_config,
     get_all_configs,
@@ -54,10 +54,7 @@ from app.services.employee_master_fetch import (
     enrich_jira_credentials_from_db,
     fetch_employee_master_data,
 )
-from app.services.integration_validate import (
-    validate_notion_token,
-    validate_slack_bot_token,
-)
+from app.services.member_roster_sync import sync_member_roster
 from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
