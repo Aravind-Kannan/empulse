@@ -1,143 +1,236 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Loader2, Send } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Bot, Loader2, Send, User, Sparkles } from "lucide-react";
 
 import { streamInvestigationChat } from "@/lib/api";
-import type { InvestigationDiagnostics } from "@/lib/types";
+import type { InvestigationAnalysisStatus } from "@/lib/types";
+import type { InvestigationChatMessage } from "@/hooks/useIncidentInvestigation";
 
-const CHIP_SUGGESTIONS = [
-  "Payment Gateway is timing out. Jira: PROJ-992",
-  "Auth Service returning 503 errors",
-  "Notification Hub retry queue backing up",
-  "Escalate to on-call engineer",
-  "Check recent deployments for Payment Gateway",
-];
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-}
+import { InvestigationAnalysisProgress } from "./InvestigationAnalysisProgress";
 
 interface InvestigationChatPanelProps {
   incidentId: string | null;
-  onDiagnostics: (diagnostics: InvestigationDiagnostics) => void;
+  activeIncidentTitle: string | null;
+  suggestions: string[];
+  messages: InvestigationChatMessage[];
+  onMessagesChange: (messages: InvestigationChatMessage[]) => void;
 }
 
 export function InvestigationChatPanel({
   incidentId,
-  onDiagnostics,
+  activeIncidentTitle,
+  suggestions,
+  messages,
+  onMessagesChange,
 }: InvestigationChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "I'm connected to the Cognee knowledge graph. Describe the incident or pick a suggestion chip to begin traversal.",
-    },
-  ]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [analysisStatus, setAnalysisStatus] =
+    useState<InvestigationAnalysisStatus | null>(null);
   const streamIdRef = useRef<string | null>(null);
+  const assistantContentRef = useRef("");
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, streaming, analysisStatus]);
+
+  useEffect(() => {
+    setInput("");
+    setStreaming(false);
+    setAnalysisStatus(null);
+    streamIdRef.current = null;
+    assistantContentRef.current = "";
+  }, [incidentId]);
+
+  function patchAssistantMessage(
+    baseMessages: InvestigationChatMessage[],
+    assistantId: string,
+    content: string,
+  ) {
+    return baseMessages.map((msg) =>
+      msg.id === assistantId ? { ...msg, content } : msg,
+    );
+  }
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
 
-    const userMsg: ChatMessage = {
+    const userMsg: InvestigationChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: trimmed,
     };
-    setMessages((prev) => [...prev, userMsg]);
+    const assistantId = `assistant-${Date.now()}`;
+    const baseMessages: InvestigationChatMessage[] = [
+      ...messages,
+      userMsg,
+      { id: assistantId, role: "assistant", content: "" },
+    ];
+
+    onMessagesChange(baseMessages);
     setInput("");
     setStreaming(true);
-
-    const assistantId = `assistant-${Date.now()}`;
+    setAnalysisStatus(null);
     streamIdRef.current = assistantId;
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", content: "" },
-    ]);
+    assistantContentRef.current = "";
 
     try {
       await streamInvestigationChat(
         trimmed,
         incidentId,
         (token) => {
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantId
-                ? { ...msg, content: msg.content + token }
-                : msg,
+          assistantContentRef.current += token;
+          onMessagesChange(
+            patchAssistantMessage(
+              baseMessages,
+              assistantId,
+              assistantContentRef.current,
             ),
           );
         },
-        (diagnostics) => {
-          onDiagnostics(diagnostics);
+        (status) => {
+          setAnalysisStatus(status);
         },
       );
     } catch (err) {
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantId
-            ? {
-                ...msg,
-                content:
-                  err instanceof Error
-                    ? `Stream failed: ${err.message}`
-                    : "Stream failed.",
-              }
-            : msg,
+      onMessagesChange(
+        patchAssistantMessage(
+          baseMessages,
+          assistantId,
+          err instanceof Error
+            ? `Could not complete analysis: ${err.message}`
+            : "Could not complete analysis.",
         ),
       );
     } finally {
       setStreaming(false);
+      setAnalysisStatus(null);
       streamIdRef.current = null;
+      assistantContentRef.current = "";
     }
   }
 
   return (
-    <div className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-900/30">
-      <div className="border-b border-zinc-800 px-4 py-3">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
-          Investigation chat
-        </h3>
-      </div>
-
-      <div className="flex-1 space-y-3 overflow-y-auto p-4">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`max-w-[95%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
-              msg.role === "user"
-                ? "ml-auto bg-sky-600/20 text-sky-100"
-                : "bg-zinc-800/80 text-zinc-200"
-            }`}
-          >
-            {msg.content}
-            {streaming && msg.id === streamIdRef.current && (
-              <Loader2 className="mt-1 inline h-3 w-3 animate-spin text-zinc-400" />
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div className="border-t border-zinc-800 p-4">
-        <div className="mb-3 flex flex-wrap gap-2">
-          {CHIP_SUGGESTIONS.map((chip) => (
-            <button
-              key={chip}
-              type="button"
-              disabled={streaming}
-              onClick={() => sendMessage(chip)}
-              className="rounded-full border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100 disabled:opacity-50"
-            >
-              {chip}
-            </button>
-          ))}
+    <div className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-950/20 backdrop-blur-sm shadow-xl">
+      {/* Header */}
+      <div className="flex items-center gap-2.5 border-b border-zinc-800/80 px-4 py-3.5 bg-zinc-900/10">
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+          <Bot className="h-4 w-4" />
         </div>
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-200">
+            Investigation Assistant
+          </h3>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">
+            AI-Powered Assistant
+          </p>
+        </div>
+      </div>
+
+      {/* Messages Area */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-zinc-800">
+        {messages.map((msg) => {
+          const isUser = msg.role === "user";
+          return (
+            <div
+              key={msg.id}
+              className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}
+            >
+              {/* Avatar */}
+              <div
+                className={`flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full border text-xs font-semibold ${
+                  isUser
+                    ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
+                    : "border-zinc-700 bg-zinc-800 text-zinc-300"
+                }`}
+              >
+                {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+              </div>
+
+              {/* Message Bubble */}
+              <div
+                className={`group relative max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm transition-all duration-200 ${
+                  isUser
+                    ? "bg-sky-600/15 border border-sky-500/20 text-sky-100 rounded-tr-none"
+                    : "bg-zinc-900/65 border border-zinc-800/90 text-zinc-200 rounded-tl-none"
+                }`}
+              >
+                <div className="whitespace-pre-wrap break-words">
+                  {msg.content}
+                </div>
+
+                {streaming &&
+                  msg.id === streamIdRef.current &&
+                  !msg.content &&
+                  analysisStatus && (
+                    <div className="mt-1 py-1">
+                      <InvestigationAnalysisProgress
+                        phase={analysisStatus.phase}
+                        message={analysisStatus.message}
+                      />
+                    </div>
+                  )}
+
+                {streaming &&
+                  msg.id === streamIdRef.current &&
+                  !msg.content &&
+                  !analysisStatus && (
+                    <div className="inline-flex items-center gap-2 py-1 text-zinc-400">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />
+                      <span className="text-xs animate-pulse">Starting analysis…</span>
+                    </div>
+                  )}
+
+                {streaming &&
+                  msg.id === streamIdRef.current &&
+                  msg.content && (
+                    <span className="inline-flex ml-1.5 align-middle">
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+                      </span>
+                    </span>
+                  )}
+              </div>
+            </div>
+          );
+        })}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Footer / Input Area */}
+      <div className="border-t border-zinc-800/80 p-4 bg-zinc-900/10">
+        {/* Suggestions */}
+        {suggestions.length > 0 && (
+          <div className="mb-3.5">
+            <div className="mb-2 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              <Sparkles className="h-3 w-3 text-sky-400/80" />
+              <span>Suggested questions</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 max-h-[100px] overflow-y-auto pr-1">
+              {suggestions.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  disabled={streaming || !incidentId}
+                  onClick={() => sendMessage(chip)}
+                  className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-2.5 py-1 text-xs text-zinc-300 transition-all duration-150 hover:border-zinc-600 hover:bg-zinc-800/50 hover:text-zinc-100 disabled:opacity-40 disabled:hover:bg-zinc-900/40 disabled:hover:border-zinc-800"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Input Form */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -148,14 +241,18 @@ export function InvestigationChatPanel({
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Payment Gateway is timing out. Jira: PROJ-992"
-            disabled={streaming}
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500 disabled:opacity-50"
+            placeholder={
+              activeIncidentTitle
+                ? `Ask about ${activeIncidentTitle}…`
+                : "Select an incident to ask follow-up questions…"
+            }
+            disabled={streaming || !incidentId}
+            className="flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2 text-sm text-zinc-100 outline-none transition-all duration-150 placeholder:text-zinc-600 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 disabled:opacity-40"
           />
           <button
             type="submit"
-            disabled={streaming || !input.trim()}
-            className="flex items-center justify-center rounded-lg bg-zinc-100 px-3 py-2 text-slate-950 transition hover:bg-white disabled:opacity-50"
+            disabled={streaming || !input.trim() || !incidentId}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-slate-950 transition-all duration-150 hover:bg-white active:scale-95 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:opacity-40 disabled:active:scale-100"
           >
             {streaming ? (
               <Loader2 className="h-4 w-4 animate-spin" />

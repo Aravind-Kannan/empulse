@@ -10,6 +10,7 @@ from app.schemas.integration_sync_job import (
     IntegrationSyncJobStatusResponse,
     IntegrationSyncJobsAcceptedResponse,
 )
+from app.schemas.jira import parse_project_keys
 from app.schemas.integrations import (
     GitHubBranchesRequest,
     GitHubBranchesResponse,
@@ -181,18 +182,18 @@ def configure_jira(
     stored = get_source_config(db, tenant.id, "jira")
     token = payload.api_token.strip() or (stored.get("api_token") or "").strip()
     account_email = payload.account_email.strip() or (stored.get("account_email") or "").strip()
-    project_keys = payload.project_keys.strip() or (stored.get("project_keys") or "").strip()
+    project_keys_raw = payload.project_keys.strip() or (stored.get("project_keys") or "").strip()
     site_url = payload.site_url.strip() or (stored.get("site_url") or "").strip()
 
     if not token:
         raise HTTPException(status_code=422, detail="Jira API token is required.")
     if not site_url:
         raise HTTPException(status_code=422, detail="Jira site URL is required.")
-    if not project_keys:
-        raise HTTPException(
-            status_code=422,
-            detail="Jira project keys are required (comma-separated, e.g. SCRUM).",
-        )
+
+    try:
+        project_keys = ", ".join(parse_project_keys(project_keys_raw))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
         resolved_email, validation_message = validate_jira_credentials(
@@ -218,10 +219,30 @@ def configure_jira(
             high_priorities=payload.high_priorities or stored.get("high_priorities") or ["Highest", "High", "Critical"],
         ),
     )
+    from app.services.jira_service import upsert_jira_integration_from_config
+
+    upsert_jira_integration_from_config(
+        db,
+        tenant.id,
+        JiraConfigRequest(
+            site_url=site_url,
+            project_keys=project_keys,
+            api_token=token,
+            account_email=resolved_email,
+        ),
+        status="connected",
+    )
     return IntegrationConfigResponse(
         source="jira",
         configured=True,
-        message=validation_message,
+        message=(
+            f"{validation_message} "
+            + (
+                f"Scoped to projects: {project_keys}."
+                if project_keys
+                else "Syncing all accessible projects."
+            )
+        ),
     )
 
 

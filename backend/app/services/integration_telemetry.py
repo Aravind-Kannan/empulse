@@ -980,6 +980,10 @@ def get_slack_escalation_warnings() -> list[dict]:
     return list(_slack_escalation_warnings)
 
 
+def get_cached_slack_threads():
+    return list(_slack_threads_cache)
+
+
 def apply_slack_telemetry(snapshot) -> dict[str, object]:
     global _slack_synced, _slack_employee_signals, _slack_escalation_warnings
     global _slack_threads_cache

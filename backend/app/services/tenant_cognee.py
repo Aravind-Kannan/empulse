@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
+
+_tenant_cognee_locks: dict[uuid.UUID, asyncio.Lock] = {}
+
+
+def _tenant_cognee_lock(tenant_id: uuid.UUID) -> asyncio.Lock:
+    lock = _tenant_cognee_locks.get(tenant_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _tenant_cognee_locks[tenant_id] = lock
+    return lock
 
 import cognee
 from cognee.context_global_variables import (
@@ -73,8 +84,9 @@ async def tenant_cognee_context_for_dataset(dataset_name: str) -> AsyncIterator[
 
 
 async def tenant_add_data_points(tenant_id: uuid.UUID, data_points: list) -> None:
-    async with tenant_cognee_context(tenant_id):
-        await add_data_points(data_points)
+    async with _tenant_cognee_lock(tenant_id):
+        async with tenant_cognee_context(tenant_id):
+            await add_data_points(data_points)
 
 
 async def tenant_add_and_cognify(
@@ -84,12 +96,34 @@ async def tenant_add_and_cognify(
     custom_prompt: str | None = None,
 ) -> dict:
     dataset = tenant_dataset_name(tenant_id)
-    async with tenant_cognee_context(tenant_id):
-        return await run_cognee_add_and_cognify(
-            content,
-            dataset_name=dataset,
-            custom_prompt=custom_prompt,
-        )
+    async with _tenant_cognee_lock(tenant_id):
+        async with tenant_cognee_context(tenant_id):
+            return await run_cognee_add_and_cognify(
+                content,
+                dataset_name=dataset,
+                custom_prompt=custom_prompt,
+            )
+
+
+async def tenant_write_memory_record(
+    tenant_id: uuid.UUID,
+    record: dict,
+    *,
+    custom_prompt: str | None = None,
+) -> None:
+    """Append structured memory to the tenant dataset and re-cognify."""
+    import json
+
+    dataset = tenant_dataset_name(tenant_id)
+    content = json.dumps(record, indent=2)
+    prompt = custom_prompt or (
+        "Extract incident lifecycle updates, resolution notes, and status "
+        "transitions for future investigation retrieval."
+    )
+    async with _tenant_cognee_lock(tenant_id):
+        async with tenant_cognee_context(tenant_id):
+            await cognee.add(content, dataset_name=dataset)
+            await cognee.cognify(datasets=dataset, custom_prompt=prompt)
 
 
 async def tenant_graph_search(

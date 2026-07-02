@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -13,6 +14,8 @@ class JiraIssueActivity:
     status: str
     status_category: str
     project_key: str
+    summary: str = ""
+    updated_at: datetime | None = None
     assignee_provider_user_id: str | None = None
     assignee_email: str | None = None
     component_id: str | None = None

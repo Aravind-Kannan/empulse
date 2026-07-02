@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 IncidentStatus = Literal[
     "Open",
@@ -10,22 +10,31 @@ IncidentStatus = Literal[
     "Closed",
 ]
 
+IncidentSource = Literal["jira", "slack"]
+
 
 class IncidentSummary(BaseModel):
     id: str
     title: str
     status: IncidentStatus
     system_scope: str
-    jira_id: str
+    jira_id: str = ""
     updated_at: str
+    source: IncidentSource
+    priority: str | None = None
+    channel_name: str | None = None
 
 
 class IncidentListResponse(BaseModel):
     incidents: list[IncidentSummary]
+    suggestions: list[str] = Field(default_factory=list)
+    sources_connected: dict[str, bool] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class IncidentStatusUpdate(BaseModel):
     status: IncidentStatus
+    resolution_note: str | None = None
 
 
 class SmeRecommendation(BaseModel):
@@ -38,7 +47,7 @@ class SmeRecommendation(BaseModel):
 
 class InvestigationReference(BaseModel):
     id: str
-    type: Literal["slack", "notion", "postmortem"]
+    type: Literal["slack", "notion", "postmortem", "jira"]
     title: str
     url: str
     snippet: str
@@ -48,9 +57,12 @@ class InvestigationDiagnostics(BaseModel):
     probable_root_cause: str
     confidence_score: float = Field(ge=0, le=100)
     workaround: str
+    workaround_available: bool = True
     smes: list[SmeRecommendation]
     references: list[InvestigationReference]
-    graph_hops: list[str] = Field(default_factory=list)
+    slack_threads: list[InvestigationReference] = Field(default_factory=list)
+    jira_tickets: list[InvestigationReference] = Field(default_factory=list)
+    notion_pages: list[InvestigationReference] = Field(default_factory=list)
 
 
 class InvestigationChatRequest(BaseModel):
@@ -59,6 +71,8 @@ class InvestigationChatRequest(BaseModel):
 
 
 class InvestigationChatChunk(BaseModel):
-    type: Literal["token", "diagnostics", "done"]
+    type: Literal["token", "diagnostics", "status", "done"]
     content: str | None = None
+    phase: Literal["searching", "matching", "summarizing"] | None = None
+    message: str | None = None
     diagnostics: InvestigationDiagnostics | None = None

@@ -517,6 +517,16 @@ export interface IncidentSummary {
   system_scope: string;
   jira_id: string;
   updated_at: string;
+  source: "jira" | "slack";
+  priority?: string | null;
+  channel_name?: string | null;
+}
+
+export interface IncidentListResult {
+  incidents: IncidentSummary[];
+  suggestions: string[];
+  sources_connected: Record<string, boolean>;
+  warnings: string[];
 }
 
 export interface SmeRecommendation {
@@ -529,7 +539,7 @@ export interface SmeRecommendation {
 
 export interface InvestigationReference {
   id: string;
-  type: "slack" | "notion" | "postmortem";
+  type: "slack" | "notion" | "postmortem" | "jira";
   title: string;
   url: string;
   snippet: string;
@@ -539,9 +549,33 @@ export interface InvestigationDiagnostics {
   probable_root_cause: string;
   confidence_score: number;
   workaround: string;
+  workaround_available?: boolean;
   smes: SmeRecommendation[];
   references: InvestigationReference[];
-  graph_hops: string[];
+  slack_threads: InvestigationReference[];
+  jira_tickets: InvestigationReference[];
+  notion_pages: InvestigationReference[];
+}
+
+export type InvestigationAnalysisPhase =
+  | "searching"
+  | "matching"
+  | "summarizing";
+
+export interface InvestigationAnalysisStatus {
+  phase: InvestigationAnalysisPhase;
+  message: string;
+}
+
+export interface IncidentInvestigationCacheEntry {
+  diagnostics: InvestigationDiagnostics;
+  chatMessages: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+  }>;
+  incidentUpdatedAt: string;
+  cachedAt: number;
 }
 
 export interface EmployeeOption {

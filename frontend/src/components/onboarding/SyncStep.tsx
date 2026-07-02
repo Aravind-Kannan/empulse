@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Network } from "lucide-react";
 
 import { GlobalSyncBanner } from "@/components/integrations/GlobalSyncBanner";
@@ -13,11 +13,18 @@ import { getConnectedIntegrationIds } from "@/lib/integrations";
 export function SyncStep() {
   const router = useRouter();
   const { completeOnboarding } = useAuth();
-  const { config, syncProgress } = useIntegrations();
+  const { config, syncProgress, triggerGlobalSync } = useIntegrations();
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const syncStartedRef = useRef(false);
 
   const connectedCount = getConnectedIntegrationIds(config).length;
+
+  useEffect(() => {
+    if (connectedCount === 0 || syncStartedRef.current || syncProgress.active) return;
+    syncStartedRef.current = true;
+    void triggerGlobalSync();
+  }, [connectedCount, syncProgress.active, triggerGlobalSync]);
 
   async function handleFinish() {
     setFinishing(true);
@@ -57,6 +64,12 @@ export function SyncStep() {
       )}
 
       <GlobalSyncBanner />
+
+      {syncProgress.error && (
+        <div className="mt-6 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          Sync failed: {syncProgress.error}
+        </div>
+      )}
 
       {error && (
         <div className="mt-6 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">

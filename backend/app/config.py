@@ -1,4 +1,6 @@
 import os
+import shutil
+import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
@@ -98,6 +100,54 @@ def get_settings() -> Settings:
     return Settings()
 
 
+def _cognee_metadata_is_healthy(db_path: Path) -> bool:
+    if not db_path.is_file() or db_path.stat().st_size < 1024:
+        return False
+    try:
+        with sqlite3.connect(db_path) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        return {"datasets", "users", "acls"}.issubset(tables)
+    except sqlite3.Error:
+        return False
+
+
+def ensure_cognee_metadata_database(settings: Settings) -> None:
+    """
+    Seed Cognee's SQLite metadata DB when missing or left in a broken state.
+
+    Fresh Alembic runs on an empty file can stall before core tables exist
+    (ab7e313804ae expects legacy ``acls``). Copy the packaged template, then
+    let ``run_relational_migrations()`` advance it to head.
+    """
+    db_dir = Path(settings.cognee_system_root) / "databases"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    db_path = db_dir / "cognee_db"
+
+    if _cognee_metadata_is_healthy(db_path):
+        return
+
+    if db_path.exists():
+        db_path.unlink()
+
+    template = (
+        Path(cognee.__file__).resolve().parent
+        / ".cognee_system"
+        / "databases"
+        / "cognee_db"
+    )
+    if not template.is_file():
+        raise RuntimeError(
+            "Cognee metadata template missing. Reinstall cognee in the backend venv."
+        )
+
+    shutil.copy2(template, db_path)
+
+
 def setup_cognee() -> None:
     """Initialize Cognee storage layout, Ollama LLM, and provider configuration."""
     settings = get_settings()
@@ -142,8 +192,11 @@ def setup_cognee() -> None:
         settings.cognee_data_root,
         settings.cognee_system_root,
         settings.cognee_cache_root,
+        str(Path(settings.cognee_system_root) / "databases"),
     ):
         Path(path).mkdir(parents=True, exist_ok=True)
+
+    ensure_cognee_metadata_database(settings)
 
 
 async def run_cognee_add_and_cognify(

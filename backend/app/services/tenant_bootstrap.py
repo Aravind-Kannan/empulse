@@ -1,7 +1,8 @@
-"""Seed default tenant and demo incident records."""
+"""Seed default tenant and optional demo incident records."""
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 
@@ -56,6 +57,10 @@ _DEMO_INCIDENTS = [
 
 
 def seed_default_incidents(db: Session, tenant_id: uuid.UUID) -> None:
+    flag = os.getenv("EMPULSE_SEED_DEMO_INCIDENTS", "").strip().lower()
+    if flag not in {"1", "true", "yes"}:
+        return
+
     existing = (
         db.query(IncidentRecord)
         .filter(IncidentRecord.tenant_id == tenant_id)

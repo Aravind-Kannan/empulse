@@ -5,10 +5,13 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from requests.exceptions import ReadTimeout, RequestException
 
 from app.schemas.identity import ProviderMember
 from app.schemas.integrations import JiraConfigRequest
@@ -23,6 +26,8 @@ FIXTURE_PATH = (
 )
 
 JIRA_FIELDS = [
+    "summary",
+    "updated",
     "issuetype",
     "priority",
     "status",
@@ -34,6 +39,10 @@ JIRA_FIELDS = [
     "parent",
     "customfield_10016",
 ]
+
+# (connect_timeout_seconds, read_timeout_seconds)
+JIRA_REQUEST_TIMEOUT = (10, 90)
+JIRA_REQUEST_RETRIES = 3
 
 JIRA_PERSON_ACCOUNT_TYPES = {"atlassian", "customer"}
 JIRA_APP_ACCOUNT_TYPES = {"app"}
@@ -92,6 +101,7 @@ def issues_from_mock_feed(site_url: str = "https://acme.atlassian.net") -> list[
                 status=status,
                 status_category=status_category,
                 project_key=row["project_key"],
+                summary=row.get("description", row["ticket_id"])[:200],
                 assignee_provider_user_id=row.get("assignee_provider_user_id"),
                 component_id=row.get("component_id"),
                 issue_url=issue_browse_url(site_url, row["ticket_id"]),
@@ -102,6 +112,13 @@ def issues_from_mock_feed(site_url: str = "https://acme.atlassian.net") -> list[
 
 def _issue_from_dict(item: dict, *, site_url: str) -> JiraIssueActivity:
     key = item["issue_key"]
+    updated_raw = item.get("updated_at")
+    updated_at = None
+    if updated_raw:
+        try:
+            updated_at = datetime.fromisoformat(str(updated_raw).replace("Z", "+00:00"))
+        except ValueError:
+            updated_at = None
     return JiraIssueActivity(
         issue_key=key,
         issue_type=item["issue_type"],
@@ -109,6 +126,8 @@ def _issue_from_dict(item: dict, *, site_url: str) -> JiraIssueActivity:
         status=item["status"],
         status_category=item.get("status_category", "indeterminate"),
         project_key=item["project_key"],
+        summary=item.get("summary", key),
+        updated_at=updated_at,
         assignee_provider_user_id=item.get("assignee_provider_user_id"),
         assignee_email=item.get("assignee_email"),
         component_id=item.get("component_id"),
@@ -140,6 +159,13 @@ def _issue_from_api_payload(issue: dict, *, site_url: str) -> JiraIssueActivity:
     parent = fields.get("parent")
     story_points = fields.get("customfield_10016") or 0.0
     key = issue.get("key") or ""
+    updated_raw = fields.get("updated")
+    updated_at = None
+    if updated_raw:
+        try:
+            updated_at = datetime.fromisoformat(str(updated_raw).replace("Z", "+00:00"))
+        except ValueError:
+            updated_at = None
     return JiraIssueActivity(
         issue_key=key,
         issue_type=issue_type,
@@ -147,6 +173,8 @@ def _issue_from_api_payload(issue: dict, *, site_url: str) -> JiraIssueActivity:
         status=status,
         status_category=status_category,
         project_key=project_key,
+        summary=(fields.get("summary") or key).strip(),
+        updated_at=updated_at,
         assignee_provider_user_id=assignee_id,
         assignee_email=assignee_email,
         jira_component_names=[name for name in components if name],
@@ -176,7 +204,11 @@ class JiraClient:
             for key in self.config.project_keys.split(",")
             if key.strip()
         ]
-        jql_parts = ["statusCategory != Done"]
+        jql_parts = [
+            "issuetype in (Bug, Incident)",
+            "statusCategory != Done",
+            "updated >= -14d",
+        ]
         if project_keys:
             joined = ", ".join(f'"{key}"' for key in project_keys)
             jql_parts.insert(0, f"project in ({joined})")
@@ -188,7 +220,7 @@ class JiraClient:
             body: dict[str, object] = {
                 "jql": jql,
                 "fields": JIRA_FIELDS,
-                "maxResults": 100,
+                "maxResults": 50,
             }
             if next_page_token:
                 body["nextPageToken"] = next_page_token
@@ -212,21 +244,45 @@ class JiraClient:
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.site_url}{path}"
-        response = self._session.request(
-            method,
-            url,
-            headers=_auth_headers(self.config),
-            timeout=30,
-            **kwargs,
+        last_error: Exception | None = None
+        for attempt in range(JIRA_REQUEST_RETRIES):
+            try:
+                response = self._session.request(
+                    method,
+                    url,
+                    headers=_auth_headers(self.config),
+                    timeout=JIRA_REQUEST_TIMEOUT,
+                    **kwargs,
+                )
+            except ReadTimeout as exc:
+                last_error = exc
+                if attempt + 1 >= JIRA_REQUEST_RETRIES:
+                    raise JiraClientError(
+                        f"Jira API timed out after {JIRA_REQUEST_TIMEOUT[1]}s "
+                        f"({JIRA_REQUEST_RETRIES} attempts). Check site reachability "
+                        f"and project scope, then retry."
+                    ) from exc
+                time.sleep(2**attempt)
+                continue
+            except RequestException as exc:
+                raise JiraClientError(f"Jira API request failed: {exc}") from exc
+
+            if response.status_code == 429:
+                if attempt + 1 >= JIRA_REQUEST_RETRIES:
+                    raise JiraClientError("Jira API rate limit exceeded; retry later.")
+                retry_after = int(response.headers.get("Retry-After", "2"))
+                time.sleep(max(retry_after, 2**attempt))
+                continue
+            if response.status_code >= 400:
+                raise JiraClientError(
+                    f"Jira API {method} {path} failed ({response.status_code}): "
+                    f"{response.text[:200]}"
+                )
+            return response
+
+        raise JiraClientError(
+            f"Jira API request failed after {JIRA_REQUEST_RETRIES} attempts: {last_error}"
         )
-        if response.status_code == 429:
-            raise JiraClientError("Jira API rate limit exceeded; retry later.")
-        if response.status_code >= 400:
-            raise JiraClientError(
-                f"Jira API {method} {path} failed ({response.status_code}): "
-                f"{response.text[:200]}"
-            )
-        return response
 
 
 def _is_jira_person(user: dict) -> bool:

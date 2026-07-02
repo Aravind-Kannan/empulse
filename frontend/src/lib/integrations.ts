@@ -39,6 +39,8 @@ export interface GitHubConfig {
 export interface JiraConfig {
   siteUrl: string;
   authEmail: string;
+  /** @deprecated Legacy localStorage key; use authEmail */
+  accountEmail?: string;
   projectKeys: string;
   apiToken: string;
   validated?: boolean;
