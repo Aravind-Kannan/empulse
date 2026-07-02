@@ -166,5 +166,47 @@
     "documents_appended": 0,
     "last_error": "too many values to unpack (expected 2, got 3)",
     "updated_at": "2026-07-02T12:09:20.087569+00:00"
+  },
+  "26e024e6-c94a-443f-8be1-2e5821a0a31d": {
+    "tenant_id": "26e024e6-c94a-443f-8be1-2e5821a0a31d",
+    "status": "failed",
+    "stages": [
+      {
+        "name": "Fetching Issues",
+        "status": "completed",
+        "started_at": "2026-07-02T12:25:16.640497+00:00",
+        "completed_at": "2026-07-02T12:25:17.369723+00:00",
+        "duration_ms": 729,
+        "detail": "Fetched 0 issues from projects SCRUM."
+      },
+      {
+        "name": "Sanitizing Metadata",
+        "status": "failed",
+        "started_at": "2026-07-02T12:25:17.370309+00:00",
+        "completed_at": null,
+        "duration_ms": null,
+        "detail": "too many values to unpack (expected 2)"
+      },
+      {
+        "name": "Vector Append",
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "duration_ms": null,
+        "detail": null
+      },
+      {
+        "name": "Graph Cognify",
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "duration_ms": null,
+        "detail": null
+      }
+    ],
+    "issues_fetched": 0,
+    "documents_appended": 0,
+    "last_error": "too many values to unpack (expected 2)",
+    "updated_at": "2026-07-02T12:25:17.551523+00:00"
   }
 }
