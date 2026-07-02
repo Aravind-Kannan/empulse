@@ -45,6 +45,184 @@ def slack_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token.strip()}"}
 
 
+CHANNEL_READ_SCOPES = (
+    "channels:read",
+    "groups:read",
+    "channels:history",
+    "groups:history",
+)
+
+
+def _format_slack_conversations_error(error: str) -> str:
+    if error == "missing_scope":
+        scopes = ", ".join(CHANNEL_READ_SCOPES)
+        return (
+            f"Slack bot token is missing required channel scopes. Add {scopes} "
+            "under OAuth & Permissions, reinstall the app to your workspace, and "
+            "copy a fresh xoxb- token."
+        )
+    if error == "invalid_auth":
+        return (
+            "Slack rejected this token (invalid_auth). Reinstall the app to your "
+            "workspace and copy a fresh Bot User OAuth Token (xoxb-…)."
+        )
+    if error == "token_revoked":
+        return (
+            "Slack token was revoked. Reinstall the app and copy a fresh xoxb- token."
+        )
+    return f"Slack conversations.list failed: {error}"
+
+
+def _normalize_channel(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(raw.get("id", "")),
+        "name": str(raw.get("name") or raw.get("id") or ""),
+        "is_private": bool(raw.get("is_private")),
+        "is_member": bool(raw.get("is_member")),
+        "num_members": raw.get("num_members"),
+    }
+
+
+def list_accessible_channels(token: str) -> list[dict[str, Any]]:
+    """Paginate conversations.list and return normalized channel objects."""
+    cleaned = token.strip()
+    if not cleaned:
+        raise ValueError("Slack bot token is required.")
+
+    channels: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, str] = {
+            "types": "public_channel,private_channel",
+            "exclude_archived": "true",
+            "limit": "200",
+        }
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            response = requests.get(
+                "https://slack.com/api/conversations.list",
+                headers=slack_headers(cleaned),
+                params=params,
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise ValueError(f"Could not reach Slack API: {exc}") from exc
+
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            raise ValueError(
+                _format_slack_conversations_error(
+                    str(payload.get("error", "unknown_error"))
+                )
+            )
+
+        for raw in payload.get("channels") or []:
+            if isinstance(raw, dict) and raw.get("id"):
+                channels.append(_normalize_channel(raw))
+
+        cursor = (payload.get("response_metadata") or {}).get("next_cursor")
+        if not cursor:
+            break
+    return channels
+
+
+def discover_channel_ids(token: str) -> list[str]:
+    """Return channel IDs the bot has joined and can read."""
+    return [
+        channel["id"]
+        for channel in list_accessible_channels(token)
+        if channel.get("is_member") and channel.get("id")
+    ]
+
+
+def fetch_channel_history(
+    token: str,
+    channel_id: str,
+    *,
+    limit: int = 200,
+    oldest: float | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch up to `limit` messages from conversations.history."""
+    if limit <= 0:
+        return []
+
+    messages: list[dict[str, Any]] = []
+    cursor: str | None = None
+    remaining = limit
+    while remaining > 0:
+        page_limit = min(remaining, 200)
+        params: dict[str, Any] = {
+            "channel": channel_id,
+            "limit": page_limit,
+        }
+        if oldest is not None:
+            params["oldest"] = str(oldest)
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            response = requests.get(
+                "https://slack.com/api/conversations.history",
+                headers=slack_headers(token),
+                params=params,
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise ValueError(
+                f"Could not reach Slack API for channel {channel_id}: {exc}"
+            ) from exc
+
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            raise ValueError(
+                _format_slack_conversations_error(
+                    str(payload.get("error", "unknown_error"))
+                )
+            )
+
+        batch = payload.get("messages") or []
+        messages.extend(batch)
+        remaining -= len(batch)
+        cursor = (payload.get("response_metadata") or {}).get("next_cursor")
+        if not cursor or not batch:
+            break
+    return messages[:limit]
+
+
+def resolve_sync_channels(
+    token: str,
+    config: SlackConfigRequest,
+) -> tuple[set[str], set[str], set[str], dict[str, str], int]:
+    """
+    Resolve channel sets for sync, always re-discovering member channels.
+
+    Returns (configured, incident, on_call, channel_id_to_name, channels_discovered).
+    """
+    allowlist = set(parse_csv_ids(config.channel_ids))
+    discovered = list_accessible_channels(token)
+    member_channels = [
+        channel for channel in discovered if channel.get("is_member")
+    ]
+    id_to_name = {
+        channel["id"]: channel["name"]
+        for channel in member_channels
+        if channel.get("id")
+    }
+    discovered_ids = set(id_to_name)
+    channels_discovered = len(discovered_ids)
+
+    if allowlist:
+        configured = allowlist & discovered_ids or allowlist
+    else:
+        configured = discovered_ids
+
+    incident = set(parse_csv_ids(config.incident_channel_ids)) or configured
+    on_call = set(parse_csv_ids(config.on_call_channel_ids)) or configured
+    return configured, incident, on_call, id_to_name, channels_discovered
+
+
 def build_thread_url(workspace_url: str, channel_id: str, thread_ts: str) -> str:
     host = urlparse(workspace_url.strip()).netloc or "slack.com"
     ts_compact = thread_ts.replace(".", "")
@@ -208,32 +386,12 @@ def _fetch_conversation_history(
     *,
     oldest: float | None = None,
 ) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    cursor: str | None = None
-    while True:
-        params: dict[str, Any] = {"channel": channel_id, "limit": 200}
-        if oldest is not None:
-            params["oldest"] = str(oldest)
-        if cursor:
-            params["cursor"] = cursor
-        response = requests.get(
-            "https://slack.com/api/conversations.history",
-            headers=slack_headers(token),
-            params=params,
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok"):
-            raise ValueError(
-                f"Slack conversations.history failed for {channel_id}: "
-                f"{payload.get('error', 'unknown_error')}"
-            )
-        messages.extend(payload.get("messages") or [])
-        cursor = (payload.get("response_metadata") or {}).get("next_cursor")
-        if not cursor:
-            break
-    return messages
+    return fetch_channel_history(
+        token,
+        channel_id,
+        limit=10_000,
+        oldest=oldest,
+    )
 
 
 def _fetch_thread_replies(
@@ -275,38 +433,71 @@ def fetch_slack_incident_threads(
     component_names: dict[str, str] | None = None,
     use_fixture: bool = False,
     now: datetime | None = None,
-) -> tuple[list[SlackThreadRecord], dict[str, str], list[str]]:
+) -> tuple[list[SlackThreadRecord], dict[str, str], list[str], dict[str, int]]:
     """
-    Return (threads, slack_user_id_to_email, warnings).
+    Return (threads, slack_user_id_to_email, warnings, sync_stats).
+
+    sync_stats keys: channels_discovered, channels_synced, messages_ingested.
     """
     component_names = component_names or {}
+    empty_stats = {
+        "channels_discovered": 0,
+        "channels_synced": 0,
+        "messages_ingested": 0,
+    }
     if use_fixture or not config.bot_token.strip():
         workspace_url, threads, users = load_fixture_channel_history()
         if not config.workspace_url.strip():
             config = config.model_copy(update={"workspace_url": workspace_url})
-        return threads, users, []
+        fixture_stats = {
+            "channels_discovered": len({thread.channel_id for thread in threads}),
+            "channels_synced": len({thread.channel_id for thread in threads}),
+            "messages_ingested": sum(len(thread.messages) for thread in threads),
+        }
+        return threads, users, [], fixture_stats
 
     now = now or datetime.now(UTC)
     oldest = now.timestamp() - (LOOKBACK_DAYS * 86400)
-    _, incident_channels, on_call_channels = resolve_channel_sets(config)
+    try:
+        _, incident_channels, on_call_channels, id_to_name, channels_discovered = (
+            resolve_sync_channels(config.bot_token, config)
+        )
+    except ValueError as exc:
+        return [], {}, [str(exc)], empty_stats
+
     target_channels = incident_channels | on_call_channels
     if not target_channels:
-        return [], {}, ["No Slack channels configured for incident or on-call sync."]
+        return (
+            [],
+            {},
+            [
+                "No Slack channels available for sync. Invite the bot to channels "
+                "you want imported, or add channel IDs under Advanced settings."
+            ],
+            {**empty_stats, "channels_discovered": channels_discovered},
+        )
 
     warnings: list[str] = []
     threads: list[SlackThreadRecord] = []
     user_emails: dict[str, str] = {}
+    messages_ingested = 0
+    channels_synced = 0
 
     for channel_id in sorted(target_channels):
+        channel_name = id_to_name.get(channel_id, channel_id)
         try:
-            history = _fetch_conversation_history(
+            history = fetch_channel_history(
                 config.bot_token,
                 channel_id,
+                limit=10_000,
                 oldest=oldest,
             )
         except ValueError as exc:
             warnings.append(str(exc))
             continue
+
+        channels_synced += 1
+        messages_ingested += len(history)
 
         parent_messages = [
             message
@@ -324,6 +515,7 @@ def fetch_slack_incident_threads(
                 warnings.append(str(exc))
                 replies = [parent]
 
+            messages_ingested += max(0, len(replies) - 1)
             messages = [_message_from_dict(row) for row in replies]
             mentions: list[str] = []
             for message in messages:
@@ -331,7 +523,6 @@ def fetch_slack_incident_threads(
                 if message.user_id and message.user_id not in user_emails:
                     user_emails[message.user_id] = ""
 
-            channel_name = channel_id
             record = SlackThreadRecord(
                 channel_id=channel_id,
                 channel_name=channel_name,
@@ -362,7 +553,12 @@ def fetch_slack_incident_threads(
                 )
             threads.append(record)
 
-    return threads, user_emails, warnings
+    sync_stats = {
+        "channels_discovered": channels_discovered,
+        "channels_synced": channels_synced,
+        "messages_ingested": messages_ingested,
+    }
+    return threads, user_emails, warnings, sync_stats
 
 
 def is_after_hours(ts: datetime) -> bool:

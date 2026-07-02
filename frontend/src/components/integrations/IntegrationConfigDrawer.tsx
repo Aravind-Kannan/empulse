@@ -547,6 +547,10 @@ export function IntegrationConfigDrawer({
         return (
           <>
             <SetupGuide integrationId="slack" />
+            <div className="rounded-lg border border-sky-900/50 bg-sky-950/30 p-3 text-xs leading-relaxed text-sky-200/90">
+              All channels the bot has joined will be synced automatically. Re-sync
+              anytime to pick up new channels.
+            </div>
             <Field label="Workspace URL" hint="e.g. https://acme.slack.com">
               <input
                 type="url"
@@ -568,17 +572,27 @@ export function IntegrationConfigDrawer({
                 placeholder="xoxb-..."
               />
             </Field>
-            <Field label="Channel IDs" hint="Comma-separated channel IDs to sync">
-              <input
-                type="text"
-                value={config.slack.channelIds}
-                onChange={(e) =>
-                  updateConfig("slack", { channelIds: e.target.value })
-                }
-                placeholder="C0123ABC, C0456DEF"
-                className={inputClass}
-              />
-            </Field>
+            <details className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+              <summary className="cursor-pointer text-sm text-zinc-300">
+                Advanced: limit to channel IDs
+              </summary>
+              <div className="mt-3">
+                <Field
+                  label="Channel IDs (optional)"
+                  hint="Leave empty for auto-discovery. Comma-separated IDs to restrict sync."
+                >
+                  <input
+                    type="text"
+                    value={config.slack.channelIds}
+                    onChange={(e) =>
+                      updateConfig("slack", { channelIds: e.target.value })
+                    }
+                    placeholder="Leave empty for auto-discovery"
+                    className={inputClass}
+                  />
+                </Field>
+              </div>
+            </details>
           </>
         );
 

@@ -7,6 +7,7 @@ import requests
 from app.services.employee_master_fetch import _format_slack_api_error
 from app.services.github_client import parse_repository_url
 from app.services.notion_client import NOTION_VERSION, count_accessible_resources
+from app.services.slack_client import discover_channel_ids
 
 
 def validate_notion_token(token: str) -> str:
@@ -261,4 +262,12 @@ def validate_slack_bot_token(token: str) -> str:
             _format_slack_api_error(users_payload.get("error", "unknown_error"))
         )
 
-    return f"Slack token valid — {bot} on {team}. Member import scopes verified."
+    try:
+        channel_count = len(discover_channel_ids(cleaned))
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    return (
+        f"Slack token valid — {bot} on {team}. "
+        f"Found {channel_count} accessible channel(s)."
+    )

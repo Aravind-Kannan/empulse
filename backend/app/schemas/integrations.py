@@ -177,6 +177,9 @@ class IntegrationSyncResponse(BaseModel):
     graph_nodes_created: int
     graph_edges_created: int
     narrative_preview: str
+    channels_discovered: int | None = None
+    channels_synced: int | None = None
+    messages_ingested: int | None = None
 
 
 class GlobalSyncResponse(BaseModel):

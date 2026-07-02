@@ -580,6 +580,7 @@ async def process_external_app_sync(
     jira_issues: list[JiraIssueActivity] = []
     notion_snapshot = None
     slack_snapshot = None
+    slack_sync_stats: dict[str, int] | None = None
     config = None
 
     if normalized == "github":
@@ -686,7 +687,7 @@ async def process_external_app_sync(
             component_id: component.name
             for component_id, component in components_by_id.items()
         }
-        threads, slack_users, sync_warnings = fetch_slack_incident_threads(
+        threads, slack_users, sync_warnings, slack_sync_stats = fetch_slack_incident_threads(
             config,
             component_names=component_names,
             use_fixture=use_slack_fixture,
@@ -758,7 +759,7 @@ async def process_external_app_sync(
 
     mark_sync_completed(normalized)
 
-    return {
+    result: dict[str, int | str] = {
         "source": normalized,
         "cognee_dataset": dataset,
         "documents_ingested": 1,
@@ -767,6 +768,11 @@ async def process_external_app_sync(
         "narrative_preview": narrative[:280],
         "telemetry": telemetry or get_telemetry_snapshot(),
     }
+    if normalized == "slack" and slack_sync_stats is not None:
+        result["channels_discovered"] = slack_sync_stats.get("channels_discovered", 0)
+        result["channels_synced"] = slack_sync_stats.get("channels_synced", 0)
+        result["messages_ingested"] = slack_sync_stats.get("messages_ingested", 0)
+    return result
 
 
 async def process_global_sync(

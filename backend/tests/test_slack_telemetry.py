@@ -219,13 +219,14 @@ def test_analyze_slack_payload_graph_nodes():
 
 
 def test_fetch_fixture_threads_without_token():
-    threads, users, warnings = fetch_slack_incident_threads(
+    threads, users, warnings, stats = fetch_slack_incident_threads(
         SlackConfigRequest(),
         use_fixture=True,
     )
     assert threads
     assert users["U_BEN"] == "ben@acme.com"
     assert not warnings
+    assert stats["channels_synced"] >= 1
 
 
 def test_slack_config_round_trip(db, tenant):
