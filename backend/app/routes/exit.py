@@ -22,10 +22,19 @@ def get_exit_employees(
 def get_handover(
     tenant: CurrentTenant,
     id: str = Query(..., description="Employee id"),
+    prefill: str | None = Query(
+        None,
+        description="When set to 'era', enrich handover with ERA evidence sections",
+    ),
     db: Session = Depends(get_db),
 ) -> HandoverResponse:
     try:
-        return build_handover_markdown(db, id, tenant)
+        return build_handover_markdown(
+            db,
+            id,
+            tenant,
+            prefill_era=prefill == "era",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

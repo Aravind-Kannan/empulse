@@ -626,6 +626,47 @@ def get_cached_jira_issues() -> list[JiraIssueActivity]:
     return list(_jira_issues_cache)
 
 
+def count_team_open_p1_issues(
+    *,
+    high_priorities: set[str] | None = None,
+) -> int:
+    """Count open high-priority Jira issues (P1/P2) across the team."""
+    if not _jira_synced:
+        return 0
+    priorities = high_priorities or HIGH_PRIORITIES
+    count = 0
+    for issue in _jira_issues_cache:
+        if issue.is_done or issue.is_subtask:
+            continue
+        if issue.is_high_priority and issue.priority in priorities:
+            count += 1
+    return count
+
+
+def get_unassigned_p1_by_component(
+    *,
+    high_priorities: set[str] | None = None,
+) -> dict[str, list[JiraIssueActivity]]:
+    """Unassigned high-priority bugs/incidents grouped by mapped component."""
+    if not _jira_synced:
+        return {}
+    priorities = high_priorities or HIGH_PRIORITIES
+    grouped: dict[str, list[JiraIssueActivity]] = defaultdict(list)
+    for issue in _jira_issues_cache:
+        if issue.is_done:
+            continue
+        if issue.assignee_provider_user_id:
+            continue
+        if not issue.is_bug_or_incident:
+            continue
+        if issue.priority not in priorities:
+            continue
+        if not issue.component_id:
+            continue
+        grouped[issue.component_id].append(issue)
+    return dict(grouped)
+
+
 def has_jira_sync() -> bool:
     return _jira_synced
 

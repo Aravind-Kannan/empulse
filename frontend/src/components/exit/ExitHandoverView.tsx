@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Copy, Download, Loader2 } from "lucide-react";
 
 import { fetchExitEmployees, fetchHandover } from "@/lib/api";
 import type { EmployeeOption, HandoverResponse } from "@/lib/types";
 
-export function ExitHandoverView() {
+function ExitHandoverContent() {
+  const searchParams = useSearchParams();
+  const employeeParam = searchParams.get("employee");
+  const prefillEra = searchParams.get("prefill") === "era";
+
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [handover, setHandover] = useState<HandoverResponse | null>(null);
@@ -19,27 +24,31 @@ export function ExitHandoverView() {
     fetchExitEmployees()
       .then((data) => {
         setEmployees(data);
-        if (data[0]) setSelectedId(data[0].id);
+        if (employeeParam && data.some((emp) => emp.id === employeeParam)) {
+          setSelectedId(employeeParam);
+        } else if (data[0]) {
+          setSelectedId(data[0].id);
+        }
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Failed to load employees"),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [employeeParam]);
 
   useEffect(() => {
     if (!selectedId) return;
 
     setGenerating(true);
     setError(null);
-    fetchHandover(selectedId)
+    fetchHandover(selectedId, { prefillEra })
       .then(setHandover)
       .catch((err) => {
         setHandover(null);
         setError(err instanceof Error ? err.message : "Handover failed");
       })
       .finally(() => setGenerating(false));
-  }, [selectedId]);
+  }, [selectedId, prefillEra]);
 
   async function handleCopy() {
     if (!handover) return;
@@ -78,6 +87,21 @@ export function ExitHandoverView() {
           Generate a Cognee-powered handover asset pack for departing engineers.
         </p>
       </div>
+
+      {prefillEra ? (
+        <div className="rounded-lg border border-violet-500/40 bg-violet-500/10 p-4 text-sm text-violet-100">
+          <p className="font-medium">Pre-filled from ERA risk assessment</p>
+          {handover?.era_computed_at ? (
+            <p className="mt-1 text-xs text-violet-200/80">
+              ERA data computed at{" "}
+              {new Date(handover.era_computed_at).toLocaleString()}
+              {handover.era_risk_score != null
+                ? ` — risk score ${Math.round(handover.era_risk_score)}%`
+                : ""}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
         <div className="flex-1">
@@ -137,5 +161,22 @@ export function ExitHandoverView() {
         </pre>
       </div>
     </div>
+  );
+}
+
+function ExitHandoverFallback() {
+  return (
+    <div className="flex h-64 items-center justify-center text-zinc-400">
+      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+      Loading exit handover…
+    </div>
+  );
+}
+
+export function ExitHandoverView() {
+  return (
+    <Suspense fallback={<ExitHandoverFallback />}>
+      <ExitHandoverContent />
+    </Suspense>
   );
 }

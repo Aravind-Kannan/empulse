@@ -14,19 +14,28 @@ export function EraDimensionBar({
   value,
   partial = false,
   className = "",
-}: EraDimensionBarProps) {
+  showValue = false,
+}: EraDimensionBarProps & { showValue?: boolean }) {
   const width = Math.max(0, Math.min(100, value));
+  const rounded = Math.round(value);
   return (
     <div
-      className={`h-2 w-full min-w-[2.5rem] rounded-full bg-zinc-800 ${className}`}
-      title={`${ERA_DIMENSION_COLORS[dimension].label}: ${Math.round(value)}%${partial ? " (partial data)" : ""}`}
+      className={`flex min-w-[2.5rem] flex-col gap-0.5 ${className}`}
+      title={`${ERA_DIMENSION_COLORS[dimension].label}: ${rounded}%${partial ? " (partial data)" : ""}`}
     >
-      <div
-        className={`h-full rounded-full ${ERA_DIMENSION_COLORS[dimension].bar} ${
-          partial ? "border border-dashed border-zinc-500" : ""
-        }`}
-        style={{ width: `${width}%` }}
-      />
+      <div className="h-2 w-full rounded-full bg-zinc-800">
+        <div
+          className={`h-full rounded-full ${ERA_DIMENSION_COLORS[dimension].bar} ${
+            partial ? "border border-dashed border-zinc-500" : ""
+          }`}
+          style={{ width: `${Math.max(width, value > 0 ? 4 : 0)}%` }}
+        />
+      </div>
+      {showValue && (
+        <span className="text-center text-[10px] tabular-nums text-zinc-500">
+          {rounded}%
+        </span>
+      )}
     </div>
   );
 }

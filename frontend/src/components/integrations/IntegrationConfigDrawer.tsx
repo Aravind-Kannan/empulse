@@ -789,7 +789,7 @@ export function IntegrationConfigDrawer({
             >
               <input
                 type="email"
-                value={config.jira.authEmail ?? config.jira.accountEmail ?? ""}
+                value={config.jira.authEmail ?? ""}
                 onChange={(e) =>
                   updateConfig("jira", { authEmail: e.target.value })
                 }

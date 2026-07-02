@@ -220,6 +220,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   );
   const [syncActionError, setSyncActionError] = useState<string | null>(null);
   const hadActiveSyncJobs = useRef(false);
+  const seenCompletedJobIds = useRef(new Set<string>());
+  const syncJobsInitialized = useRef(false);
 
   const refreshSyncJobs = useCallback(async () => {
     if (!tenantId) {
@@ -293,6 +295,30 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     }
     hadActiveSyncJobs.current = hasActiveSyncJobs;
   }, [hasActiveSyncJobs, refreshOperationalState]);
+
+  useEffect(() => {
+    if (!syncJobsInitialized.current) {
+      for (const job of syncJobs) {
+        if (job.status === "completed") {
+          seenCompletedJobIds.current.add(job.job_id);
+        }
+      }
+      syncJobsInitialized.current = true;
+      return;
+    }
+
+    let newlyCompleted = false;
+    for (const job of syncJobs) {
+      if (job.status !== "completed" || seenCompletedJobIds.current.has(job.job_id)) {
+        continue;
+      }
+      seenCompletedJobIds.current.add(job.job_id);
+      newlyCompleted = true;
+    }
+    if (newlyCompleted) {
+      void refreshOperationalState();
+    }
+  }, [syncJobs, refreshOperationalState]);
 
   const persist = useCallback(
     (next: IntegrationConfigMap) => {

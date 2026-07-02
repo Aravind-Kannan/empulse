@@ -15,9 +15,14 @@ export interface TeamEvidenceItem extends EraEvidenceItem {
 
 export function buildTeamEvidenceFeed(
   employees: EraEmployeeMetrics[],
+  teamEvidence: EraEvidenceItem[] = [],
   limit = 10,
 ): TeamEvidenceItem[] {
-  const flat: TeamEvidenceItem[] = [];
+  const flat: TeamEvidenceItem[] = teamEvidence.map((item) => ({
+    ...item,
+    employee_id: "_team",
+    employee_name: "Team",
+  }));
   for (const employee of employees) {
     for (const item of employee.evidence ?? []) {
       flat.push({
@@ -128,6 +133,23 @@ const INTEGRATION_LABELS: Record<IntegrationId, string> = {
   slack: "Slack",
   notion: "Notion",
 };
+
+const ERA_WARNING_MESSAGES: Record<string, string> = {
+  github_not_synced:
+    "GitHub is connected but not synced — Knowledge and Structural scores use org chart only.",
+  github_stale: "GitHub sync is stale — dimension scores may be outdated.",
+  jira_not_synced:
+    "Jira is connected but not synced — Operational scores may be incomplete.",
+  jira_stale: "Jira sync is stale — Operational scores may be outdated.",
+  partial_identity:
+    "Some activity could not be mapped to employees — scores may be understated.",
+  era_dimensions_partial:
+    "Sync GitHub, Jira, and Notion for full K/O/D/S/B dimension coverage.",
+};
+
+export function formatEraWarning(code: string): string {
+  return ERA_WARNING_MESSAGES[code] ?? code.replaceAll("_", " ");
+}
 
 export function formatProviderSyncAge(iso: string | null | undefined): string {
   if (!iso) return "never";

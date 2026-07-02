@@ -87,6 +87,26 @@ def test_apply_jira_telemetry_unassigned_p1_boost(db, tenant):
     assert boost == 2
 
 
+def test_count_team_open_p1_issues(db, tenant):
+    from app.services.integration_telemetry import count_team_open_p1_issues
+
+    _seed(db, tenant.id)
+    issues = load_fixture_issues()
+    apply_jira_telemetry(db, tenant.id, issues)
+    assert count_team_open_p1_issues() > 0
+
+
+def test_unassigned_p1_by_component_matches_telemetry_rules(db, tenant):
+    from app.services.integration_telemetry import get_unassigned_p1_by_component
+
+    _seed(db, tenant.id)
+    issues = load_fixture_issues()
+    apply_jira_telemetry(db, tenant.id, issues)
+    grouped = get_unassigned_p1_by_component()
+    assert "comp-payments" in grouped
+    assert len(grouped["comp-payments"]) >= 1
+
+
 def test_apply_jira_telemetry_open_tasks_for_assignee(db, tenant):
     _seed(db, tenant.id)
     issues = load_fixture_issues()

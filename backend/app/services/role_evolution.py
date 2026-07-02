@@ -100,6 +100,7 @@ async def update_employee_with_role_evolution(
     if not employee:
         raise ValueError(f"Employee '{employee_id}' not found.")
 
+    was_active = employee.active
     old_role = employee.role
     role_changed = payload.role is not None and payload.role.strip() != old_role
 
@@ -111,6 +112,8 @@ async def update_employee_with_role_evolution(
         employee.email = str(payload.email)
     if payload.tenure_years is not None:
         employee.tenure_years = payload.tenure_years
+    if payload.active is not None:
+        employee.active = payload.active
     if "team_name" in payload.model_fields_set:
         employee.team_name = payload.team_name.strip() if payload.team_name else None
 
@@ -155,6 +158,12 @@ async def update_employee_with_role_evolution(
 
     if payload.assignments is not None:
         _apply_assignments_update(db, employee_id, tenant.id, payload.assignments)
+
+    if was_active and "active" in payload.model_fields_set and payload.active is False:
+        from app.services.github_orphans import snapshot_departure_orphan_baseline
+
+        snapshot_departure_orphan_baseline(db, tenant.id, employee_id)
+
     db.commit()
 
     direct_report_count = (

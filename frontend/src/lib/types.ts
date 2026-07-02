@@ -158,7 +158,7 @@ export type EraDimensionKey =
   | "structural"
   | "burnout";
 
-export type IdentityCoverageLevel = "confirmed" | "high" | "missing";
+export type IdentityCoverageLevel = "confirmed" | "high" | "medium" | "missing";
 
 export type IntegrationId = "github" | "jira" | "slack" | "notion";
 
@@ -187,6 +187,72 @@ export interface EraEvidenceItem {
   sources: EraEvidenceSource[];
   synthetic?: boolean;
   mitigation_status?: "open" | "in_progress" | "done" | "dismissed";
+  suggested_mitigation?: string | null;
+  mitigation_assignee_id?: string | null;
+  mitigation_due_date?: string | null;
+  mitigation_notes?: string | null;
+}
+
+export interface EraMitigationItem {
+  evidence_id: string;
+  title: string;
+  priority: string;
+  link?: string | null;
+  suggested_mitigation?: string | null;
+  mitigation_status: "open" | "in_progress" | "done" | "dismissed";
+  mitigation_assignee_id?: string | null;
+  mitigation_due_date?: string | null;
+  mitigation_notes?: string | null;
+}
+
+export interface EraAlertItem {
+  id: number;
+  rule_id: string;
+  severity: string;
+  title: string;
+  description: string;
+  employee_id?: string | null;
+  component_id?: string | null;
+  evidence_id?: string | null;
+  created_at: string;
+  acknowledged_at?: string | null;
+  acknowledged_by?: string | null;
+}
+
+export interface EraAlertsResponse {
+  computed_at: string;
+  alerts: EraAlertItem[];
+  unacknowledged_count: number;
+}
+
+export interface EraTeamReviewItem {
+  id: number;
+  reviewed_at: string;
+  reviewer_user_id?: string | null;
+  notes?: string | null;
+  snapshot_avg_risk: number;
+  delta_since_last?: number | null;
+}
+
+export interface EraTeamReviewsResponse {
+  computed_at: string;
+  reviews: EraTeamReviewItem[];
+}
+
+export interface EraReviewCadenceResponse {
+  computed_at: string;
+  last_reviewed_at?: string | null;
+  days_since_last_review?: number | null;
+  review_overdue: boolean;
+  review_cadence_days: number;
+  snapshot_avg_risk?: number | null;
+}
+
+export interface EraSettings {
+  slack_webhook_url: string;
+  slack_webhook_enabled: boolean;
+  unmapped_threshold: number;
+  review_cadence_days: number;
 }
 
 export interface EraAffectedComponent {
@@ -219,6 +285,13 @@ export interface EraTeamSummary {
   top_risk_driver: EraDimensionKey;
   estimated_recovery_weeks: EraRecoveryEstimate;
   data_health_pct: number;
+  org_health_score?: number;
+  orphan_file_count?: number;
+  orphan_delta_90d?: number;
+  org_health_caution?: boolean;
+  critical_hotspot_count?: number;
+  last_risk_review_at?: string | null;
+  unacknowledged_alert_count?: number;
 }
 
 export interface EraEmployeeMetrics {
@@ -244,11 +317,14 @@ export interface EraEmployeeMetrics {
   trend_7d?: number | null;
   excluded?: boolean;
   exclusion_reason?: string | null;
+  identity_warning?: boolean;
 }
 
 export interface EraRiskHistoryPoint {
   snapshot_date: string;
   risk_factor_score: number;
+  org_health_score?: number | null;
+  orphan_file_count?: number | null;
 }
 
 export interface EraManagerRollupReport {
@@ -279,6 +355,7 @@ export interface EraAnalyticsResponse {
   unmapped_activity: EraUnmappedActivityCount[];
   sync_freshness: Partial<Record<IntegrationId, string | null>>;
   team_risk_history_30d?: EraRiskHistoryPoint[];
+  team_evidence?: EraEvidenceItem[];
 }
 
 export interface EraEmployeeDetailResponse {
@@ -292,6 +369,8 @@ export interface EraEmployeeDetailResponse {
   warnings: string[];
   blast_radius_narrative?: string | null;
   risk_history_30d?: EraRiskHistoryPoint[];
+  mitigations?: EraMitigationItem[];
+  open_mitigations_count?: number;
 }
 
 export interface EraBackupCandidate {
@@ -476,6 +555,10 @@ export interface HandoverResponse {
   employee_name: string;
   markdown: string;
   filename: string;
+  era_risk_score?: number | null;
+  era_sections_included?: string[];
+  era_computed_at?: string | null;
+  prefill_from_era?: boolean;
 }
 
 export interface DashboardMetrics {

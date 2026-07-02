@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, GitBranch, Network, Plug, Settings2, Users } from "lucide-react";
+import { ChevronRight, GitBranch, Network, Plug, Settings2, Users, Bell } from "lucide-react";
 
 import { TenantSwitcher } from "@/components/settings/TenantSwitcher";
 
@@ -26,6 +26,13 @@ const settingsSections = [
     description:
       "Map GitHub handles, Jira emails, Slack IDs, and Notion users to employee records.",
     icon: Users,
+  },
+  {
+    href: "/settings/era-alerts",
+    title: "ERA Alerts",
+    description:
+      "Team-channel Slack webhooks, review cadence, and alert thresholds.",
+    icon: Bell,
   },
   {
     href: "/settings/graph-debugger",

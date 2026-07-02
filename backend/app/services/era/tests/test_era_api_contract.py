@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -19,9 +17,7 @@ def client():
 
 
 def test_get_era_metrics_returns_team_summary_envelope(db, tenant):
-    with patch("app.services.era_analytics.get_settings") as mock_settings:
-        mock_settings.return_value.era_v2_scoring = True
-        response = get_era_metrics(db, tenant)
+    response = get_era_metrics(db, tenant)
 
     assert response.computed_at is not None
     assert response.team_summary is not None
@@ -39,9 +35,7 @@ def test_demo_mode_when_acme_fallback(db, tenant):
 
 
 def test_v2_employee_has_dimensions_and_evidence(db, tenant):
-    with patch("app.services.era_analytics.get_settings") as mock_settings:
-        mock_settings.return_value.era_v2_scoring = True
-        response = get_era_metrics(db, tenant)
+    response = get_era_metrics(db, tenant)
 
     assert response.demo_mode is True
     sample = next(item for item in response.employees if item.dimensions)
@@ -52,9 +46,7 @@ def test_v2_employee_has_dimensions_and_evidence(db, tenant):
 
 
 def test_employee_detail_endpoint_returns_full_evidence(client, db, tenant):
-    with patch("app.services.era_analytics.get_settings") as mock_settings:
-        mock_settings.return_value.era_v2_scoring = True
-        list_response = get_era_metrics(db, tenant)
+    list_response = get_era_metrics(db, tenant)
     employee_id = list_response.employees[0].employee_id
 
     http_response = client.get(f"/api/analytics/era/{employee_id}")
@@ -88,9 +80,7 @@ def test_v2_metrics_with_persisted_employees(db, tenant):
         name="Persisted Engineer",
         email="persisted@acme.com",
     )
-    with patch("app.services.era_analytics.get_settings") as mock_settings:
-        mock_settings.return_value.era_v2_scoring = True
-        response = get_era_metrics(db, tenant)
+    response = get_era_metrics(db, tenant)
 
     assert response.demo_mode is False
     assert len(response.employees) == 1

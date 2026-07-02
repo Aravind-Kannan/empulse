@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     github_client_id: str = ""
     github_client_secret: str = ""
 
-    era_v2_scoring: bool = False
+    era_v2_scoring: bool = True
 
     model_config = SettingsConfigDict(
         env_file=str(BACKEND_ROOT / ".env"),

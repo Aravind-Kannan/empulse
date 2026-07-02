@@ -26,6 +26,7 @@ class Employee(Base):
         String(64), ForeignKey("employees.id"), nullable=True
     )
     team_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="employees")
     manager: Mapped["Employee | None"] = relationship(
@@ -278,6 +279,37 @@ class NotionDocSnapshot(Base):
     )
 
 
+class EraEvidenceMitigation(Base):
+    __tablename__ = "era_evidence_mitigations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "employee_id",
+            "evidence_id",
+            name="uq_era_evidence_mitigation",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    employee_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("employees.id"), nullable=False, index=True
+    )
+    evidence_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    mitigation_status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    suggested_mitigation: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    mitigation_assignee_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("employees.id"), nullable=True
+    )
+    mitigation_due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    mitigation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 class EraRiskSnapshot(Base):
     __tablename__ = "era_risk_snapshots"
     __table_args__ = (
@@ -304,6 +336,92 @@ class EraRiskSnapshot(Base):
     computed_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow
     )
+
+
+class EraAlert(Base):
+    __tablename__ = "era_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    rule_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    employee_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("employees.id"), nullable=True
+    )
+    component_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("components.id"), nullable=True
+    )
+    evidence_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, index=True
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    webhook_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EraTeamHealthSnapshot(Base):
+    __tablename__ = "era_team_health_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "snapshot_date",
+            name="uq_era_team_health_snapshot",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    org_health_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    orphan_file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    orphan_delta_90d: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+
+class EraDepartureOrphanBaseline(Base):
+    __tablename__ = "era_departure_orphan_baselines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    employee_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("employees.id"), nullable=False, index=True
+    )
+    component_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("components.id"), nullable=False, index=True
+    )
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    doa_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    snapshotted_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, index=True
+    )
+
+
+class EraTeamReview(Base):
+    __tablename__ = "era_team_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, index=True
+    )
+    reviewer_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_avg_risk: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    delta_since_last: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class TenantIntegrationConfig(Base):

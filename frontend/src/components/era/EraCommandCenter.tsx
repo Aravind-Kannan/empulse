@@ -9,6 +9,7 @@ import { fetchEraMetrics } from "@/lib/api";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import type { EraAnalyticsResponse, EraEmployeeMetrics } from "@/lib/types";
 
+import { EraAlertsBanner } from "./EraAlertsBanner";
 import { EraCommandHeader } from "./EraCommandHeader";
 import { EraDetailDrawer } from "./EraDetailDrawer";
 import { EraEmployeePreview } from "./EraEmployeePreview";
@@ -19,6 +20,7 @@ import { EraTeamComposition } from "./EraTeamComposition";
 import {
   buildTeamEvidenceFeed,
   connectedIntegrationCount,
+  formatEraWarning,
   totalUnmappedCount,
 } from "./era-utils";
 
@@ -117,8 +119,8 @@ export function EraCommandCenter() {
   }, [activeEmployees, selectedId]);
 
   const teamEvidence = useMemo(
-    () => buildTeamEvidenceFeed(activeEmployees, 12),
-    [activeEmployees],
+    () => buildTeamEvidenceFeed(activeEmployees, data?.team_evidence ?? [], 12),
+    [activeEmployees, data?.team_evidence],
   );
 
   if (!mounted || loading) {
@@ -137,6 +139,9 @@ export function EraCommandCenter() {
             top_risk_driver: "knowledge",
             estimated_recovery_weeks: { min: 0, max: 0 },
             data_health_pct: 0,
+            org_health_score: 0,
+            orphan_file_count: 0,
+            orphan_delta_90d: 0,
           }}
           integrationCount={0}
           loading
@@ -212,11 +217,13 @@ export function EraCommandCenter() {
               key={warning}
               className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
             >
-              {warning}
+              {formatEraWarning(warning)}
             </div>
           ))}
         </div>
       )}
+
+      <EraAlertsBanner onUpdated={() => void load(true)} />
 
       <EraCommandHeader
         recovery={data.team_summary.estimated_recovery_weeks}

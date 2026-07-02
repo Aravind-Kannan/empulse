@@ -150,9 +150,28 @@ def apply_schema_patches(engine: Engine) -> None:
                     )
                 )
 
+        if inspector.has_table("employees"):
+            employee_columns = _column_names(inspector, "employees")
+            if "active" not in employee_columns:
+                logger.info("Adding active column to employees")
+                conn.execute(
+                    text(
+                        "ALTER TABLE employees "
+                        "ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE"
+                    )
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_employees_active ON employees (active)")
+                )
+
     from app.models.operational import (
         DoaFileSnapshot,
+        EraAlert,
+        EraDepartureOrphanBaseline,
+        EraEvidenceMitigation,
         EraRiskSnapshot,
+        EraTeamHealthSnapshot,
+        EraTeamReview,
         FileRiskSnapshot,
         GitHubOwnershipSnapshot,
         NotionDocSnapshot,
@@ -166,4 +185,9 @@ def apply_schema_patches(engine: Engine) -> None:
     FileRiskSnapshot.__table__.create(bind=engine, checkfirst=True)
     NotionDocSnapshot.__table__.create(bind=engine, checkfirst=True)
     EraRiskSnapshot.__table__.create(bind=engine, checkfirst=True)
+    EraEvidenceMitigation.__table__.create(bind=engine, checkfirst=True)
+    EraAlert.__table__.create(bind=engine, checkfirst=True)
+    EraTeamReview.__table__.create(bind=engine, checkfirst=True)
+    EraTeamHealthSnapshot.__table__.create(bind=engine, checkfirst=True)
+    EraDepartureOrphanBaseline.__table__.create(bind=engine, checkfirst=True)
     TenantIntegrationConfig.__table__.create(bind=engine, checkfirst=True)

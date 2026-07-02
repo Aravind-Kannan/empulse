@@ -255,9 +255,7 @@ def test_detail_api_includes_backup_candidates(client, db, tenant):
                 file_change.component_id = "comp-payments"
     apply_github_telemetry(db, tenant.id, activities)
 
-    with patch("app.services.era_analytics.get_settings") as mock_settings:
-        mock_settings.return_value.era_v2_scoring = True
-        detail = get_era_employee_detail(db, tenant, "emp-primary", limit=20, offset=0)
+    detail = get_era_employee_detail(db, tenant, "emp-primary", limit=20, offset=0)
 
     assert detail is not None
     assert isinstance(detail.backup_candidates, list)
@@ -265,23 +263,19 @@ def test_detail_api_includes_backup_candidates(client, db, tenant):
 
 
 def test_list_endpoint_does_not_call_cognee_intelligence(db, tenant):
-    with patch("app.services.era_analytics.get_settings") as mock_settings:
-        mock_settings.return_value.era_v2_scoring = True
-        with patch(
-            "app.services.era_analytics.build_employee_detail_intelligence"
-        ) as intelligence_mock:
-            get_era_metrics(db, tenant)
+    with patch(
+        "app.services.era_analytics.build_employee_detail_intelligence"
+    ) as intelligence_mock:
+        get_era_metrics(db, tenant)
     intelligence_mock.assert_not_called()
 
 
 def test_detail_api_cognee_degraded_still_200(db, tenant):
     _seed_backup_fixtures(db, tenant.id)
-    with patch("app.services.era_analytics.get_settings") as mock_settings:
-        mock_settings.return_value.era_v2_scoring = True
-        with patch(
-            "app.services.cognee_era_intelligence.fetch_blast_radius_narrative",
-            new=AsyncMock(side_effect=CogneeUnavailable("down")),
-        ):
-            detail = get_era_employee_detail(db, tenant, "emp-primary", limit=20, offset=0)
+    with patch(
+        "app.services.cognee_era_intelligence.fetch_blast_radius_narrative",
+        new=AsyncMock(side_effect=CogneeUnavailable("down")),
+    ):
+        detail = get_era_employee_detail(db, tenant, "emp-primary", limit=20, offset=0)
     assert detail is not None
     assert "cognee_degraded" in detail.warnings

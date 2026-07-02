@@ -148,7 +148,7 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
 };
 
 function jiraAuthEmail(config: JiraConfig): string {
-  return (config.authEmail ?? config.accountEmail ?? "").trim();
+  return config.authEmail.trim();
 }
 
 const JIRA_SITE_RE =

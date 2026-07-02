@@ -63,6 +63,11 @@ export function EraDetailHero({
                   Departure watchlist
                 </span>
               )}
+              {employee.identity_warning && (
+                <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-200">
+                  Identity: fuzzy match
+                </span>
+              )}
             </div>
           </div>
         </div>

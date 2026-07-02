@@ -247,6 +247,7 @@ export function EraRiskHeatmap({
                         dimension={key}
                         value={dimensionValue(employee, key)}
                         partial={isDimensionPartial(employee, key)}
+                        showValue
                       />
                     </td>
                   ))}
@@ -299,6 +300,7 @@ export function EraRiskHeatmap({
                     dimension={key}
                     value={dimensionValue(employee, key)}
                     partial={isDimensionPartial(employee, key)}
+                    showValue
                   />
                 ))}
               </div>

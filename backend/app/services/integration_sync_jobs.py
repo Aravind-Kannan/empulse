@@ -203,6 +203,15 @@ async def _execute_integration_sync_job(job_id: uuid.UUID, tenant_id: uuid.UUID)
             progress_message="Sync complete.",
             result=dict(result),
         )
+
+        from app.services.era_snapshots import refresh_era_after_integration_sync
+
+        try:
+            refresh_era_after_integration_sync(db, tenant_id)
+        except Exception:
+            logger.exception(
+                "ERA refresh failed after integration sync job %s", job_id
+            )
     except Exception as exc:
         logger.exception("Integration sync job %s failed", job_id)
         try:

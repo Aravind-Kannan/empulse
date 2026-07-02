@@ -76,6 +76,50 @@ def build_jira_evidence_items(
     return items
 
 
+def build_team_unassigned_p1_evidence_items(
+    db,
+    tenant_id,
+    *,
+    limit: int = 5,
+) -> list[dict]:
+    """Team-level unassigned P1 evidence for ERA feeds (Step 17)."""
+    from app.models.operational import Component
+    from app.services.integration_telemetry import get_unassigned_p1_by_component, has_jira_sync
+
+    if not has_jira_sync():
+        return []
+
+    component_names = {
+        row.id: row.name
+        for row in db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    }
+    items: list[dict] = []
+    for component_id, issues in get_unassigned_p1_by_component().items():
+        if not issues:
+            continue
+        component_name = component_names.get(component_id, component_id)
+        sample_url = next((issue.issue_url for issue in issues if issue.issue_url), None)
+        items.append(
+            _evidence_item(
+                employee_id="team",
+                suffix=f"unassigned-p1-{component_id}",
+                dimension="operational",
+                severity="high",
+                title=f"Unassigned P1 on {component_name}",
+                description=(
+                    f"{len(issues)} unassigned high-priority bug(s) on {component_name} "
+                    "— triage ownership in Jira."
+                ),
+                impact_points=min(45.0, 20.0 + len(issues) * 8.0),
+                url=sample_url,
+            )
+        )
+        if len(items) >= limit:
+            break
+    items.sort(key=lambda row: row["impact_points"], reverse=True)
+    return items
+
+
 def merge_jira_evidence(
     employee_id: str,
     employee_name: str,

@@ -6,6 +6,12 @@ import type {
   EraHotspotsResponse,
   EraReviewNetworkResponse,
   EraManagerRollupResponse,
+  EraMitigationItem,
+  EraAlertItem,
+  EraAlertsResponse,
+  EraReviewCadenceResponse,
+  EraSettings,
+  EraTeamReviewItem,
   EraTeamRiskyChangesResponse,
   GlobalSyncResult,
   HandoverResponse,
@@ -238,6 +244,91 @@ export async function fetchEraMetrics(): Promise<EraAnalyticsResponse> {
   return response.json();
 }
 
+export async function fetchEraAlerts(
+  options?: { unacknowledged?: boolean },
+): Promise<EraAlertsResponse> {
+  const params = new URLSearchParams();
+  if (options?.unacknowledged) {
+    params.set("unacknowledged", "true");
+  }
+  const query = params.toString();
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/era/alerts${query ? `?${query}` : ""}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load ERA alerts (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function acknowledgeEraAlert(
+  alertId: number,
+  body?: { acknowledged_by?: string | null },
+): Promise<EraAlertItem> {
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/era/alerts/${alertId}/acknowledge`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to acknowledge alert (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchEraReviewCadence(): Promise<EraReviewCadenceResponse> {
+  const response = await apiFetch(`${API_BASE}/api/analytics/era/review-cadence`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load ERA review cadence (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function recordEraTeamReview(body?: {
+  notes?: string | null;
+  reviewer_user_id?: string | null;
+}): Promise<EraTeamReviewItem> {
+  const response = await apiFetch(`${API_BASE}/api/analytics/era/reviews`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to record ERA review (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchEraSettings(): Promise<EraSettings> {
+  const response = await apiFetch(`${API_BASE}/api/analytics/era/settings`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load ERA settings (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function updateEraSettings(
+  patch: Partial<EraSettings>,
+): Promise<EraSettings> {
+  const response = await apiFetch(`${API_BASE}/api/analytics/era/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update ERA settings (${response.status})`);
+  }
+  return response.json();
+}
+
 export async function fetchEraEmployeeHotspots(
   employeeId: string,
 ): Promise<EraHotspotsResponse> {
@@ -288,6 +379,35 @@ export async function fetchEraEmployeeDetail(
     throw new Error(`Failed to load ERA employee detail (${response.status})`);
   }
 
+  return response.json();
+}
+
+export async function patchEraEvidenceMitigation(
+  evidenceId: string,
+  body: {
+    employee_id: string;
+    mitigation_status: EraMitigationItem["mitigation_status"];
+    assignee_id?: string | null;
+    due_date?: string | null;
+    notes?: string | null;
+  },
+): Promise<{
+  evidence_id: string;
+  employee_id: string;
+  mitigation_status: string;
+  updated_at: string;
+}> {
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/era/evidence/${encodeURIComponent(evidenceId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to update mitigation (${response.status})`);
+  }
   return response.json();
 }
 
@@ -462,9 +582,16 @@ export async function fetchExitEmployees(): Promise<EmployeeOption[]> {
   return response.json();
 }
 
-export async function fetchHandover(employeeId: string): Promise<HandoverResponse> {
+export async function fetchHandover(
+  employeeId: string,
+  options?: { prefillEra?: boolean },
+): Promise<HandoverResponse> {
+  const params = new URLSearchParams({ id: employeeId });
+  if (options?.prefillEra) {
+    params.set("prefill", "era");
+  }
   const response = await apiFetch(
-    `${API_BASE}/api/exit/handover?id=${encodeURIComponent(employeeId)}`,
+    `${API_BASE}/api/exit/handover?${params.toString()}`,
     { cache: "no-store" },
   );
   if (!response.ok) {
@@ -973,9 +1100,7 @@ function memberSyncRequestBody(
     github_personal_access_token:
       integrationConfig.github.personalAccessToken.trim() || null,
     jira_site_url: integrationConfig.jira.siteUrl.trim() || null,
-    jira_auth_email:
-      (integrationConfig.jira.authEmail ?? integrationConfig.jira.accountEmail ?? "")
-        .trim() || null,
+    jira_auth_email: integrationConfig.jira.authEmail.trim() || null,
     jira_api_token: integrationConfig.jira.apiToken.trim() || null,
     jira_project_keys: integrationConfig.jira.projectKeys.trim() || null,
   };

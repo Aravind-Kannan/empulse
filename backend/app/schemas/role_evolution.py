@@ -22,6 +22,7 @@ class EmployeeUpdateRequest(BaseModel):
     tenure_years: float | None = Field(default=None, ge=0)
     manager_id: str | None = None
     team_name: str | None = None
+    active: bool | None = None
     assignments: EmployeeAssignmentsUpdate | None = None
 
 

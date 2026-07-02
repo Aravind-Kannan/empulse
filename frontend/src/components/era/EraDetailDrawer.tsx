@@ -10,6 +10,8 @@ import type { EraAnalyticsResponse, EraEmployeeDetailResponse } from "@/lib/type
 import { EraAffectedComponentsGraph } from "./EraAffectedComponentsGraph";
 import { EraBackupCandidates } from "./EraBackupCandidates";
 import { EraHotspotSummary } from "./EraHotspotSummary";
+import { EraReviewNetwork } from "./EraReviewNetwork";
+import { EraMitigationChecklist } from "./EraMitigationChecklist";
 import { EraDetailFooter } from "./EraDetailFooter";
 import { EraDetailHero } from "./EraDetailHero";
 import { EraDetailHistoryChart } from "./EraDetailHistoryChart";
@@ -71,30 +73,26 @@ export function EraDetailDrawer({
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadDetail = useCallback(() => {
     setLoading(true);
     setError(null);
-
-    fetchEraEmployeeDetail(employeeId, { limit: 100 })
+    return fetchEraEmployeeDetail(employeeId, { limit: 100 })
       .then((response) => {
-        if (!cancelled) setDetail(response);
+        setDetail(response);
       })
       .catch((err) => {
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load employee detail",
-          );
-        }
+        setError(
+          err instanceof Error ? err.message : "Failed to load employee detail",
+        );
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [employeeId]);
+
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -243,14 +241,17 @@ export function EraDetailDrawer({
                     employeeId={detail.employee.employee_id}
                     employeeName={detail.employee.name}
                   />
+                  <EraReviewNetwork
+                    employeeId={detail.employee.employee_id}
+                    employeeName={detail.employee.name}
+                  />
                   <EraBackupCandidates candidates={detail.backup_candidates ?? []} />
 
-                  <section className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/20 p-5">
-                    <h3 className="text-sm font-medium text-zinc-200">Mitigations</h3>
-                    <p className="mt-2 text-sm text-zinc-500">
-                      Mitigation checklist and status tracking ship in Step 12.
-                    </p>
-                  </section>
+                  <EraMitigationChecklist
+                    employeeId={detail.employee.employee_id}
+                    items={detail.mitigations ?? []}
+                    onUpdated={() => void loadDetail()}
+                  />
                 </>
               )}
             </div>

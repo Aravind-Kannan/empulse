@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.config import get_settings
 from app.models.operational import Assignment, Component, Employee
 from app.schemas.era import (
     EraAffectedComponent,
@@ -23,6 +22,15 @@ from app.schemas.era import (
 )
 from app.schemas.org import ACME_ORG_CHART
 from app.services.cognee_era_intelligence import build_employee_detail_intelligence
+from app.services.era.evidence_ids import normalize_evidence_ids
+from app.services.era_mitigations import (
+    apply_mitigation_overlays,
+    attach_suggested_mitigations,
+    count_open_mitigations,
+    ensure_mitigation_records,
+    evaluate_mitigation_rules,
+    update_evidence_mitigation,
+)
 from app.services.era_snapshots import (
     apply_trends_to_employees,
     get_employee_risk_history,
@@ -170,9 +178,69 @@ def _evidence_dicts_to_models(items: list[dict]) -> list[EraEvidenceItem]:
                 EraEvidenceSource(**source) for source in item.get("sources", [])
             ],
             synthetic=item.get("synthetic", False),
+            mitigation_status=item.get("mitigation_status"),
+            suggested_mitigation=item.get("suggested_mitigation"),
+            mitigation_assignee_id=item.get("mitigation_assignee_id"),
+            mitigation_due_date=item.get("mitigation_due_date"),
+            mitigation_notes=item.get("mitigation_notes"),
         )
         for item in items
     ]
+
+
+def _finalize_evidence_with_mitigations(
+    db: Session,
+    tenant,
+    employee: Employee,
+    metric: EraEmployeeMetrics,
+    evidence: list[dict],
+    *,
+    backup_candidate_count: int,
+) -> tuple[list[dict], list]:
+    items = attach_suggested_mitigations(normalize_evidence_ids(evidence))
+    checklist = evaluate_mitigation_rules(
+        metric,
+        db=db,
+        tenant_id=tenant.id,
+        employee=employee,
+        backup_candidate_count=backup_candidate_count,
+    )
+    ensure_mitigation_records(db, tenant.id, employee.id, checklist, items)
+    return apply_mitigation_overlays(db, tenant.id, employee.id, items, checklist)
+
+
+def patch_era_evidence_mitigation(
+    db: Session,
+    tenant,
+    evidence_id: str,
+    *,
+    employee_id: str,
+    mitigation_status: str,
+    assignee_id: str | None = None,
+    due_date=None,
+    notes: str | None = None,
+):
+    employee = (
+        db.query(Employee)
+        .filter(Employee.tenant_id == tenant.id, Employee.id == employee_id)
+        .one_or_none()
+    )
+    if employee is None:
+        return None
+    try:
+        row = update_evidence_mitigation(
+            db,
+            tenant.id,
+            employee_id,
+            evidence_id,
+            mitigation_status=mitigation_status,
+            assignee_id=assignee_id,
+            due_date=due_date,
+            notes=notes,
+        )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    return row
 
 
 def _evidence_models_to_dicts(items: list[EraEvidenceItem]) -> list[dict]:
@@ -186,6 +254,11 @@ def _evidence_models_to_dicts(items: list[EraEvidenceItem]) -> list[dict]:
             "impact_points": item.impact_points,
             "sources": [source.model_dump() for source in item.sources],
             "synthetic": item.synthetic,
+            "mitigation_status": item.mitigation_status,
+            "suggested_mitigation": item.suggested_mitigation,
+            "mitigation_assignee_id": item.mitigation_assignee_id,
+            "mitigation_due_date": item.mitigation_due_date,
+            "mitigation_notes": item.mitigation_notes,
         }
         for item in items
     ]
@@ -279,6 +352,7 @@ def _score_result_to_metrics(
         excluded=score_result.excluded,
         exclusion_reason=score_result.exclusion_reason,
         trend_7d=None,
+        identity_warning=any(level == "medium" for level in coverage.values()),
     )
 
 
@@ -302,6 +376,7 @@ def _enrich_v1_metric(
             "affected_components": affected,
             "identity_coverage": coverage,
             "data_completeness_pct": compute_data_completeness_pct(coverage),
+            "identity_warning": any(level == "medium" for level in coverage.values()),
         }
     )
 
@@ -313,10 +388,59 @@ def _wrap_response(
     *,
     demo_mode: bool,
 ) -> EraAnalyticsResponse:
+    from app.services.era.org_health import compute_org_health
+    from app.services.era_snapshots import team_avg_trend_7d
+    from app.services.github_file_risk import count_critical_files
+    from app.services.github_orphans import (
+        build_orphan_evidence_items,
+        count_orphan_files,
+        orphan_delta_90d,
+    )
+    from app.services.integration_telemetry import count_team_open_p1_issues
+    from app.services.jira_evidence import build_team_unassigned_p1_evidence_items
+    from app.models.operational import EraAlert, EraTeamReview
+
     employees_with_trends = apply_trends_to_employees(db, tenant.id, employees)
     team_summary = build_team_summary(employees_with_trends)
     avg_trend = team_avg_trend_7d(db, tenant.id, team_summary.avg_risk_score)
-    team_summary = team_summary.model_copy(update={"avg_risk_trend_7d": avg_trend})
+    health = compute_org_health(db, tenant.id)
+    orphan_count = count_orphan_files(db, tenant.id)
+    latest_review = (
+        db.query(EraTeamReview)
+        .filter(EraTeamReview.tenant_id == tenant.id)
+        .order_by(EraTeamReview.reviewed_at.desc())
+        .first()
+    )
+    unacknowledged_alert_count = (
+        db.query(EraAlert)
+        .filter(
+            EraAlert.tenant_id == tenant.id,
+            EraAlert.acknowledged_at.is_(None),
+        )
+        .count()
+    )
+    team_summary = team_summary.model_copy(
+        update={
+            "avg_risk_trend_7d": avg_trend,
+            "org_health_score": health.score,
+            "orphan_file_count": orphan_count,
+            "orphan_delta_90d": orphan_delta_90d(db, tenant.id),
+            "org_health_caution": health.caution_small_team,
+            "open_p1_count": count_team_open_p1_issues(),
+            "critical_hotspot_count": count_critical_files(db, tenant.id),
+            "last_risk_review_at": (
+                latest_review.reviewed_at if latest_review is not None else None
+            ),
+            "unacknowledged_alert_count": unacknowledged_alert_count,
+        }
+    )
+    team_evidence_raw = (
+        build_orphan_evidence_items(db, tenant.id, limit=10)
+        + build_team_unassigned_p1_evidence_items(db, tenant.id, limit=10)
+    )
+    team_evidence = _evidence_dicts_to_models(
+        normalize_evidence_ids(team_evidence_raw),
+    )
     return EraAnalyticsResponse(
         computed_at=datetime.now(UTC),
         demo_mode=demo_mode,
@@ -326,6 +450,7 @@ def _wrap_response(
         unmapped_activity=build_unmapped_activity(db, tenant.id),
         sync_freshness=build_sync_freshness(),
         team_risk_history_30d=get_team_risk_history(db, tenant.id, days=30),
+        team_evidence=team_evidence,
     )
 
 
@@ -389,6 +514,7 @@ def _compute_v2_metrics(
             slack_connected=slack_connected,
             limit=5,
         )
+        merged_evidence = normalize_evidence_ids(merged_evidence)
         score_result.evidence = merged_evidence
         score_result.evidence_total_count = len(score_result.all_evidence)
         coverage = build_identity_coverage(
@@ -558,13 +684,10 @@ def _fallback_acme_metrics_v2() -> list[EraEmployeeMetrics]:
 
 
 def _fallback_acme_metrics() -> list[EraEmployeeMetrics]:
-    if get_settings().era_v2_scoring:
-        return _fallback_acme_metrics_v2()
-    return _fallback_acme_metrics_v1()
+    return _fallback_acme_metrics_v2()
 
 
 def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
-    use_v2 = get_settings().era_v2_scoring
     hydrate_integration_telemetry(db, tenant.id)
     github_connected = has_github_sync()
     jira_connected = _jira_connected(db, tenant.id)
@@ -572,7 +695,7 @@ def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
     slack_connected = _slack_connected(db, tenant.id)
     employees = (
         db.query(Employee)
-        .filter(Employee.tenant_id == tenant.id)
+        .filter(Employee.tenant_id == tenant.id, Employee.active.is_(True))
         .options(joinedload(Employee.assignments).joinedload(Assignment.component))
         .all()
     )
@@ -580,50 +703,6 @@ def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
     if not employees:
         metrics = _fallback_acme_metrics()
         return _wrap_response(db, tenant, metrics, demo_mode=True)
-
-    if not use_v2:
-        total_components = total_component_count(
-            db.query(Component).filter(Component.tenant_id == tenant.id).all()
-        )
-        metrics: list[EraEmployeeMetrics] = []
-        for employee in employees:
-            if is_leadership_role(employee.role):
-                continue
-            open_tasks = sum(
-                assignment.component.open_tasks_count for assignment in employee.assignments
-            )
-            unresolved_issues = sum(
-                assignment.component.unresolved_incidents
-                for assignment in employee.assignments
-            )
-            jira_boost = get_jira_backlog_boost(employee.id)
-            codebase_share_pct = calculate_graph_contribution_share(
-                employee_id=employee.id,
-                assignments=employee.assignments,
-                total_components=total_components,
-                jira_backlog_boost=jira_boost,
-            )
-            metric = _metrics_from_counts(
-                employee_id=employee.id,
-                name=employee.name,
-                role=employee.role,
-                email=employee.email,
-                unresolved_issues=unresolved_issues,
-                open_tasks=open_tasks,
-                codebase_share_pct=codebase_share_pct,
-                jira_backlog_boost=jira_boost,
-            )
-            metrics.append(
-                _enrich_v1_metric(
-                    db,
-                    tenant,
-                    employee,
-                    metric,
-                    github_connected=github_connected,
-                )
-            )
-        metrics.sort(key=lambda item: -item.risk_factor_score)
-        return _wrap_response(db, tenant, metrics, demo_mode=False)
 
     total_components = total_component_count(
         db.query(Component).filter(Component.tenant_id == tenant.id).all()
@@ -649,9 +728,11 @@ def get_era_employee_detail(
     limit: int = 20,
     offset: int = 0,
 ) -> EraEmployeeDetailResponse | None:
-    use_v2 = get_settings().era_v2_scoring
     hydrate_integration_telemetry(db, tenant.id)
     github_connected = has_github_sync()
+    jira_connected = _jira_connected(db, tenant.id)
+    notion_connected = _notion_connected(db, tenant.id)
+    slack_connected = _slack_connected(db, tenant.id)
     employee = (
         db.query(Employee)
         .filter(
@@ -713,6 +794,7 @@ def get_era_employee_detail(
     backup_candidates: list = []
     detail_warnings: list[str] = []
     blast_radius_narrative: str | None = None
+    mitigations = []
     total_components = total_component_count(
         db.query(Component).filter(Component.tenant_id == tenant.id).all()
     )
@@ -730,131 +812,96 @@ def get_era_employee_detail(
         jira_backlog_boost=jira_boost,
     )
 
-    github_connected = has_github_sync()
-    jira_connected = _jira_connected(db, tenant.id)
-    notion_connected = _notion_connected(db, tenant.id)
-    slack_connected = _slack_connected(db, tenant.id)
-
-    if use_v2:
-        signals = build_signals_for_employee(
-            employee,
-            all_employees=all_employees,
-            total_components=total_components,
-            codebase_share_pct=codebase_share_pct,
-            jira_backlog_boost=jira_boost,
-            github_connected=github_connected,
-            jira_connected=jira_connected,
-            notion_connected=notion_connected,
-            slack_connected=slack_connected,
-        )
-        peer_signals = []
-        for peer in all_employees:
-            if is_leadership_role(peer.role) or peer.id == employee.id:
-                continue
-            peer_signals.append(
-                build_signals_for_employee(
-                    peer,
-                    all_employees=all_employees,
+    signals = build_signals_for_employee(
+        employee,
+        all_employees=all_employees,
+        total_components=total_components,
+        codebase_share_pct=codebase_share_pct,
+        jira_backlog_boost=jira_boost,
+        github_connected=github_connected,
+        jira_connected=jira_connected,
+        notion_connected=notion_connected,
+        slack_connected=slack_connected,
+    )
+    peer_signals = []
+    for peer in all_employees:
+        if is_leadership_role(peer.role) or peer.id == employee.id:
+            continue
+        peer_signals.append(
+            build_signals_for_employee(
+                peer,
+                all_employees=all_employees,
+                total_components=total_components,
+                codebase_share_pct=calculate_graph_contribution_share(
+                    employee_id=peer.id,
+                    assignments=peer.assignments,
                     total_components=total_components,
-                    codebase_share_pct=calculate_graph_contribution_share(
-                        employee_id=peer.id,
-                        assignments=peer.assignments,
-                        total_components=total_components,
-                        jira_backlog_boost=get_jira_backlog_boost(peer.id),
-                    ),
                     jira_backlog_boost=get_jira_backlog_boost(peer.id),
-                    github_connected=github_connected,
-                    jira_connected=jira_connected,
-                    notion_connected=notion_connected,
-                    slack_connected=slack_connected,
-                )
+                ),
+                jira_backlog_boost=get_jira_backlog_boost(peer.id),
+                github_connected=github_connected,
+                jira_connected=jira_connected,
+                notion_connected=notion_connected,
+                slack_connected=slack_connected,
             )
-        tenant_stats = build_tenant_percentiles([signals, *peer_signals])
-        score_result = score_employee(signals, tenant_stats, evidence_limit=1000)
-        component_names = {
-            assignment.component.id: assignment.component.name
-            for assignment in employee.assignments
-        }
-        merged = _merge_integration_evidence(
-            db,
-            tenant.id,
-            signals.employee_id,
-            signals.name,
-            score_result.all_evidence,
-            component_names=component_names,
-            github_connected=github_connected,
-            jira_connected=jira_connected,
-            notion_connected=notion_connected,
-            slack_connected=slack_connected,
-            limit=1000,
         )
-        score_result.all_evidence = merged
-        score_result.evidence = merged[:5]
-        score_result.evidence_total_count = len(merged)
-        coverage = build_identity_coverage(
-            db, tenant.id, employee.id, github_connected=github_connected
-        )
-        affected = build_affected_components(employee, github_connected=github_connected)
-        metric = _score_result_to_metrics(
-            signals,
-            score_result,
-            identity_coverage=coverage,
-            affected_components=affected,
-        )
-        intelligence = build_employee_detail_intelligence(
-            db,
-            tenant.id,
-            employee,
-            merged,
-            affected,
-            jira_connected=jira_connected,
-            notion_connected=notion_connected,
-            recovery_estimate=metric.recovery_estimate_weeks,
-        )
-        merged = intelligence.enriched_evidence
-        if intelligence.recovery_estimate:
-            metric.recovery_estimate_weeks = intelligence.recovery_estimate
-        backup_candidates = intelligence.backup_candidates
-        detail_warnings = intelligence.warnings
-        blast_radius_narrative = intelligence.blast_radius_narrative
-        all_evidence = _evidence_dicts_to_models(merged)
-    else:
-        open_tasks = sum(a.component.open_tasks_count for a in employee.assignments)
-        unresolved = sum(a.component.unresolved_incidents for a in employee.assignments)
-        metric = _enrich_v1_metric(
-            db,
-            tenant,
-            employee,
-            _metrics_from_counts(
-                employee_id=employee.id,
-                name=employee.name,
-                role=employee.role,
-                email=employee.email,
-                unresolved_issues=unresolved,
-                open_tasks=open_tasks,
-                codebase_share_pct=codebase_share_pct,
-                jira_backlog_boost=jira_boost,
-            ),
-            github_connected=github_connected,
-        )
-        all_evidence = list(metric.evidence)
-        affected = build_affected_components(employee, github_connected=github_connected)
-        intelligence = build_employee_detail_intelligence(
-            db,
-            tenant.id,
-            employee,
-            _evidence_models_to_dicts(all_evidence),
-            affected,
-            jira_connected=jira_connected,
-            notion_connected=notion_connected,
-            recovery_estimate=metric.recovery_estimate_weeks,
-        )
-        if intelligence.recovery_estimate:
-            metric.recovery_estimate_weeks = intelligence.recovery_estimate
-        backup_candidates = intelligence.backup_candidates
-        detail_warnings = intelligence.warnings
-        blast_radius_narrative = intelligence.blast_radius_narrative
-        all_evidence = _evidence_dicts_to_models(intelligence.enriched_evidence)
+    tenant_stats = build_tenant_percentiles([signals, *peer_signals])
+    score_result = score_employee(signals, tenant_stats, evidence_limit=1000)
+    component_names = {
+        assignment.component.id: assignment.component.name
+        for assignment in employee.assignments
+    }
+    merged = _merge_integration_evidence(
+        db,
+        tenant.id,
+        signals.employee_id,
+        signals.name,
+        score_result.all_evidence,
+        component_names=component_names,
+        github_connected=github_connected,
+        jira_connected=jira_connected,
+        notion_connected=notion_connected,
+        slack_connected=slack_connected,
+        limit=1000,
+    )
+    score_result.all_evidence = merged
+    score_result.evidence = merged[:5]
+    score_result.evidence_total_count = len(merged)
+    coverage = build_identity_coverage(
+        db, tenant.id, employee.id, github_connected=github_connected
+    )
+    affected = build_affected_components(employee, github_connected=github_connected)
+    metric = _score_result_to_metrics(
+        signals,
+        score_result,
+        identity_coverage=coverage,
+        affected_components=affected,
+    )
+    intelligence = build_employee_detail_intelligence(
+        db,
+        tenant.id,
+        employee,
+        merged,
+        affected,
+        jira_connected=jira_connected,
+        notion_connected=notion_connected,
+        recovery_estimate=metric.recovery_estimate_weeks,
+    )
+    merged = intelligence.enriched_evidence
+    if intelligence.recovery_estimate:
+        metric.recovery_estimate_weeks = intelligence.recovery_estimate
+    backup_candidates = intelligence.backup_candidates
+    detail_warnings = intelligence.warnings
+    blast_radius_narrative = intelligence.blast_radius_narrative
+    merged, mitigations = _finalize_evidence_with_mitigations(
+        db,
+        tenant,
+        employee,
+        metric,
+        merged,
+        backup_candidate_count=len(backup_candidates),
+    )
+    all_evidence = _evidence_dicts_to_models(merged)
 
     page = all_evidence[offset : offset + limit]
     risk_history = get_employee_risk_history(db, tenant.id, employee_id, days=30)
@@ -870,6 +917,8 @@ def get_era_employee_detail(
         warnings=detail_warnings,
         blast_radius_narrative=blast_radius_narrative,
         risk_history_30d=risk_history,
+        mitigations=mitigations,
+        open_mitigations_count=count_open_mitigations(mitigations),
     )
 
 

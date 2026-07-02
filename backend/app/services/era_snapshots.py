@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -10,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models.operational import Employee, EraRiskSnapshot
+from app.models.operational import Employee, EraRiskSnapshot, EraTeamHealthSnapshot
 from app.schemas.era import (
     EraEmployeeMetrics,
     EraManagerRollupReport,
@@ -18,6 +19,8 @@ from app.schemas.era import (
     EraRiskHistoryPoint,
 )
 from app.services.role_utils import is_leadership_role
+
+logger = logging.getLogger(__name__)
 
 SNAPSHOT_VERSION = 1
 RETENTION_DAYS = 365
@@ -95,6 +98,8 @@ def prune_old_snapshots(db: Session, tenant_id: uuid.UUID) -> int:
 def snapshot_era_metrics(db: Session, tenant) -> int:
     """Persist today's ERA scores for each active employee (idempotent upsert)."""
     from app.services.era_analytics import get_era_metrics
+    from app.services.era.org_health import compute_org_health
+    from app.services.github_orphans import count_orphan_files, orphan_delta_90d
 
     response = get_era_metrics(db, tenant)
     snapshot_date = _utc_today()
@@ -111,9 +116,90 @@ def snapshot_era_metrics(db: Session, tenant) -> int:
             computed_at=computed_at,
         )
         count += 1
+
+    health = compute_org_health(db, tenant.id)
+    orphan_count = count_orphan_files(db, tenant.id)
+    orphan_delta = orphan_delta_90d(db, tenant.id)
+    _upsert_team_health_snapshot(
+        db,
+        tenant_id=tenant.id,
+        snapshot_date=snapshot_date,
+        org_health_score=health.score,
+        orphan_file_count=orphan_count,
+        orphan_delta_90d=orphan_delta,
+        computed_at=computed_at,
+    )
+
     prune_old_snapshots(db, tenant.id)
+    prune_old_team_health_snapshots(db, tenant.id)
     db.commit()
     return count
+
+
+def refresh_era_after_integration_sync(db: Session, tenant_id: uuid.UUID) -> None:
+    """Persist ERA snapshots and evaluate alerts after integration sync completes."""
+    from app.models.tenant import Tenant
+    from app.services.era_alerts import sync_era_alerts
+    from app.services.era_analytics import get_era_metrics
+
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).one_or_none()
+    if tenant is None:
+        logger.warning("ERA post-sync refresh skipped: tenant %s not found", tenant_id)
+        return
+
+    try:
+        snapshot_era_metrics(db, tenant)
+    except Exception:
+        logger.exception("ERA snapshot failed after integration sync (tenant=%s)", tenant_id)
+
+    try:
+        demo_mode = get_era_metrics(db, tenant).demo_mode
+        sync_era_alerts(db, tenant, demo_mode=demo_mode)
+    except Exception:
+        logger.exception("ERA alert sync failed after integration sync (tenant=%s)", tenant_id)
+
+
+def _upsert_team_health_snapshot(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    snapshot_date: date,
+    org_health_score: float,
+    orphan_file_count: int,
+    orphan_delta_90d: int,
+    computed_at: datetime,
+) -> None:
+    values = {
+        "tenant_id": tenant_id,
+        "snapshot_date": snapshot_date,
+        "org_health_score": org_health_score,
+        "orphan_file_count": orphan_file_count,
+        "orphan_delta_90d": orphan_delta_90d,
+        "computed_at": computed_at,
+    }
+    stmt = insert(EraTeamHealthSnapshot).values(**values)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_era_team_health_snapshot",
+        set_={
+            "org_health_score": values["org_health_score"],
+            "orphan_file_count": values["orphan_file_count"],
+            "orphan_delta_90d": values["orphan_delta_90d"],
+            "computed_at": values["computed_at"],
+        },
+    )
+    db.execute(stmt)
+
+
+def prune_old_team_health_snapshots(db: Session, tenant_id: uuid.UUID) -> int:
+    cutoff = _utc_today() - timedelta(days=RETENTION_DAYS)
+    return (
+        db.query(EraTeamHealthSnapshot)
+        .filter(
+            EraTeamHealthSnapshot.tenant_id == tenant_id,
+            EraTeamHealthSnapshot.snapshot_date < cutoff,
+        )
+        .delete(synchronize_session=False)
+    )
 
 
 def _scores_by_employee(
@@ -205,7 +291,7 @@ def get_team_risk_history(
     days: int = 30,
 ) -> list[EraRiskHistoryPoint]:
     cutoff = _utc_today() - timedelta(days=days - 1)
-    rows = (
+    risk_rows = (
         db.query(
             EraRiskSnapshot.snapshot_date,
             func.avg(EraRiskSnapshot.risk_factor_score).label("avg_score"),
@@ -218,13 +304,28 @@ def get_team_risk_history(
         .order_by(EraRiskSnapshot.snapshot_date.asc())
         .all()
     )
-    return [
-        EraRiskHistoryPoint(
-            snapshot_date=row.snapshot_date.isoformat(),
-            risk_factor_score=round(float(row.avg_score), 1),
+    health_rows = (
+        db.query(EraTeamHealthSnapshot)
+        .filter(
+            EraTeamHealthSnapshot.tenant_id == tenant_id,
+            EraTeamHealthSnapshot.snapshot_date >= cutoff,
         )
-        for row in rows
-    ]
+        .order_by(EraTeamHealthSnapshot.snapshot_date.asc())
+        .all()
+    )
+    health_by_date = {row.snapshot_date: row for row in health_rows}
+    points: list[EraRiskHistoryPoint] = []
+    for row in risk_rows:
+        health = health_by_date.get(row.snapshot_date)
+        points.append(
+            EraRiskHistoryPoint(
+                snapshot_date=row.snapshot_date.isoformat(),
+                risk_factor_score=round(float(row.avg_score), 1),
+                org_health_score=health.org_health_score if health else None,
+                orphan_file_count=health.orphan_file_count if health else None,
+            )
+        )
+    return points
 
 
 def manager_team_rollup(

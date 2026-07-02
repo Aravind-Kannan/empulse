@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
 EraDimensionKey = str  # knowledge | operational | documentation | structural | burnout
 EraRiskLevel = str  # low | medium | high
 ComponentCriticality = str  # tier1_revenue | tier2_core | tier3_support
-IdentityCoverageLevel = str  # confirmed | high | missing
+IdentityCoverageLevel = str  # confirmed | high | medium | missing
 IntegrationId = str  # github | jira | slack | notion
 
 
@@ -34,6 +34,41 @@ class EraEvidenceItem(BaseModel):
     sources: list[EraEvidenceSource] = Field(default_factory=list)
     synthetic: bool = False
     mitigation_status: str | None = None
+    suggested_mitigation: str | None = None
+    mitigation_assignee_id: str | None = None
+    mitigation_due_date: str | None = None
+    mitigation_notes: str | None = None
+
+
+class EraMitigationItem(BaseModel):
+    evidence_id: str
+    title: str
+    priority: str = "medium"
+    link: str | None = None
+    suggested_mitigation: str | None = None
+    mitigation_status: str = "open"
+    mitigation_assignee_id: str | None = None
+    mitigation_due_date: str | None = None
+    mitigation_notes: str | None = None
+
+
+class EraEvidenceMitigationPatchRequest(BaseModel):
+    employee_id: str
+    mitigation_status: str
+    assignee_id: str | None = None
+    due_date: date | None = None
+    notes: str | None = None
+
+
+class EraEvidenceMitigationPatchResponse(BaseModel):
+    evidence_id: str
+    employee_id: str
+    mitigation_status: str
+    suggested_mitigation: str | None = None
+    mitigation_assignee_id: str | None = None
+    mitigation_due_date: str | None = None
+    mitigation_notes: str | None = None
+    updated_at: datetime
 
 
 class EraAffectedComponent(BaseModel):
@@ -78,6 +113,13 @@ class EraTeamSummary(BaseModel):
     top_risk_driver: EraDimensionKey = "knowledge"
     estimated_recovery_weeks: EraRecoveryEstimate
     data_health_pct: float = Field(ge=0, le=100)
+    org_health_score: float = Field(default=0.0, ge=0, le=100)
+    orphan_file_count: int = Field(default=0, ge=0)
+    orphan_delta_90d: int = Field(default=0)
+    org_health_caution: bool = False
+    critical_hotspot_count: int = Field(default=0, ge=0)
+    last_risk_review_at: datetime | None = None
+    unacknowledged_alert_count: int = Field(default=0, ge=0)
 
 
 class EraEmployeeMetrics(BaseModel):
@@ -103,6 +145,7 @@ class EraEmployeeMetrics(BaseModel):
     trend_7d: float | None = None
     excluded: bool = False
     exclusion_reason: str | None = None
+    identity_warning: bool = False
 
 
 class EraAnalyticsResponse(BaseModel):
@@ -114,11 +157,14 @@ class EraAnalyticsResponse(BaseModel):
     unmapped_activity: list[EraUnmappedActivityCount] = Field(default_factory=list)
     sync_freshness: dict[str, str | None] = Field(default_factory=dict)
     team_risk_history_30d: list["EraRiskHistoryPoint"] = Field(default_factory=list)
+    team_evidence: list[EraEvidenceItem] = Field(default_factory=list)
 
 
 class EraRiskHistoryPoint(BaseModel):
     snapshot_date: str
     risk_factor_score: float = Field(ge=0, le=100)
+    org_health_score: float | None = Field(default=None, ge=0, le=100)
+    orphan_file_count: int | None = Field(default=None, ge=0)
 
 
 class EraManagerRollupReport(BaseModel):
@@ -151,6 +197,8 @@ class EraEmployeeDetailResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     blast_radius_narrative: str | None = None
     risk_history_30d: list[EraRiskHistoryPoint] = Field(default_factory=list)
+    mitigations: list[EraMitigationItem] = Field(default_factory=list)
+    open_mitigations_count: int = Field(default=0, ge=0)
 
 
 class EraReviewNetworkEdge(BaseModel):
@@ -202,3 +250,69 @@ class EraTeamRiskyChangesResponse(BaseModel):
     computed_at: datetime
     window_days: int = Field(ge=1)
     items: list[EraRiskyChangeItem] = Field(default_factory=list)
+
+
+class EraAlertItem(BaseModel):
+    id: int
+    rule_id: str
+    severity: str
+    title: str
+    description: str
+    employee_id: str | None = None
+    component_id: str | None = None
+    evidence_id: str | None = None
+    created_at: datetime
+    acknowledged_at: datetime | None = None
+    acknowledged_by: str | None = None
+
+
+class EraAlertsResponse(BaseModel):
+    computed_at: datetime
+    alerts: list[EraAlertItem] = Field(default_factory=list)
+    unacknowledged_count: int = Field(default=0, ge=0)
+
+
+class EraAlertAcknowledgeRequest(BaseModel):
+    acknowledged_by: str | None = None
+
+
+class EraTeamReviewItem(BaseModel):
+    id: int
+    reviewed_at: datetime
+    reviewer_user_id: str | None = None
+    notes: str | None = None
+    snapshot_avg_risk: float = Field(ge=0, le=100)
+    delta_since_last: float | None = None
+
+
+class EraTeamReviewsResponse(BaseModel):
+    computed_at: datetime
+    reviews: list[EraTeamReviewItem] = Field(default_factory=list)
+
+
+class EraTeamReviewCreateRequest(BaseModel):
+    notes: str | None = None
+    reviewer_user_id: str | None = None
+
+
+class EraReviewCadenceResponse(BaseModel):
+    computed_at: datetime
+    last_reviewed_at: datetime | None = None
+    days_since_last_review: int | None = None
+    review_overdue: bool = False
+    review_cadence_days: int = Field(default=30, ge=1)
+    snapshot_avg_risk: float | None = Field(default=None, ge=0, le=100)
+
+
+class EraSettingsResponse(BaseModel):
+    slack_webhook_url: str = ""
+    slack_webhook_enabled: bool = False
+    unmapped_threshold: int = Field(default=5, ge=1)
+    review_cadence_days: int = Field(default=30, ge=1)
+
+
+class EraSettingsUpdateRequest(BaseModel):
+    slack_webhook_url: str | None = None
+    slack_webhook_enabled: bool | None = None
+    unmapped_threshold: int | None = Field(default=None, ge=1)
+    review_cadence_days: int | None = Field(default=None, ge=1)

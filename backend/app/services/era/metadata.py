@@ -18,6 +18,7 @@ from app.services.era.types import DIMENSION_KEYS
 from app.services.identity_mapping import PROVIDERS
 from app.services.integration_config_store import get_github_config, get_jira_config
 from app.services.integration_telemetry import (
+    count_team_open_p1_issues,
     get_github_ownership,
     get_sync_freshness,
     has_github_sync,
@@ -49,9 +50,10 @@ def build_identity_coverage(
     for provider in PROVIDERS:
         if provider in saved:
             confidence = saved[provider]
-            coverage[provider] = (
-                confidence if confidence in {"confirmed", "high"} else "confirmed"
-            )
+            if confidence in {"confirmed", "high", "medium"}:
+                coverage[provider] = confidence
+            else:
+                coverage[provider] = "missing"
         elif provider == "github" and github_connected:
             coverage[provider] = "high"
         else:
@@ -63,7 +65,9 @@ def compute_data_completeness_pct(identity_coverage: dict[str, str]) -> float:
     if not identity_coverage:
         return 0.0
     connected = sum(
-        1 for level in identity_coverage.values() if level in {"confirmed", "high"}
+        1
+        for level in identity_coverage.values()
+        if level in {"confirmed", "high", "medium"}
     )
     return round((connected / len(PROVIDERS)) * 100, 1)
 
@@ -111,6 +115,10 @@ def build_team_summary(employees: list[EraEmployeeMetrics]) -> EraTeamSummary:
             top_risk_driver="knowledge",
             estimated_recovery_weeks=EraRecoveryEstimate(min=1, max=1),
             data_health_pct=0.0,
+            org_health_score=0.0,
+            orphan_file_count=0,
+            orphan_delta_90d=0,
+            org_health_caution=False,
         )
 
     avg_risk = sum(employee.risk_factor_score for employee in active) / len(active)
@@ -125,12 +133,7 @@ def build_team_summary(employees: list[EraEmployeeMetrics]) -> EraTeamSummary:
             if component.spof
         }
     )
-    open_p1 = sum(
-        1
-        for employee in active
-        for component in employee.affected_components
-        if component.criticality == "tier1_revenue"
-    )
+    open_p1 = count_team_open_p1_issues()
     undocumented = sum(employee.undocumented_solved_incidents for employee in active)
     data_health = sum(employee.data_completeness_pct for employee in active) / len(
         active
@@ -228,6 +231,9 @@ def build_warnings(
     unmapped = build_unmapped_activity(db, tenant_id)
     if any(row.count > 0 for row in unmapped):
         warnings.append("partial_identity")
+
+    if not demo_mode and get_github_config(db, tenant_id) and not has_github_sync():
+        warnings.append("era_dimensions_partial")
 
     if not demo_mode:
         employee_count = (
