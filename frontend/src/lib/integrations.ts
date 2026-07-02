@@ -120,6 +120,10 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
   jira: { siteUrl: "", authEmail: "", projectKeys: "", apiToken: "" },
 };
 
+function jiraAuthEmail(config: JiraConfig): string {
+  return (config.authEmail ?? config.accountEmail ?? "").trim();
+}
+
 const JIRA_SITE_RE =
   /^https?:\/\/[a-zA-Z0-9][-a-zA-Z0-9]*\.atlassian\.net\/?$/i;
 const PROJECT_KEY_RE = /^[A-Z][A-Z0-9]{0,9}$/;
@@ -169,7 +173,7 @@ export function validateJiraConfigDraft(config: JiraConfig): string | null {
   if (!JIRA_SITE_RE.test(siteUrl)) {
     return "Enter a valid Atlassian Cloud URL, e.g. https://acme.atlassian.net";
   }
-  const email = config.authEmail.trim();
+  const email = jiraAuthEmail(config);
   if (!email) {
     return "Atlassian account email is required for API authentication.";
   }
@@ -216,7 +220,7 @@ export function isIntegrationConnected(
     case "jira":
       return Boolean(
         config.jira.siteUrl.trim() &&
-          config.jira.authEmail.trim() &&
+          jiraAuthEmail(config.jira) &&
           config.jira.apiToken.trim() &&
           config.jira.validated,
       );
@@ -244,7 +248,7 @@ export function isIntegrationDraft(
     case "jira":
       return Boolean(
         config.jira.siteUrl.trim() &&
-          config.jira.authEmail.trim() &&
+          jiraAuthEmail(config.jira) &&
           config.jira.apiToken.trim(),
       );
   }

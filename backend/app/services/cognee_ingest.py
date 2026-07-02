@@ -7,7 +7,17 @@ from sqlalchemy.orm import Session
 from cognee.infrastructure.engine import DataPoint
 from cognee.infrastructure.engine.models.Edge import Edge
 
-from app.models.operational import Assignment, Component, Employee
+from app.models.operational import (
+    Assignment,
+    Component,
+    DoaFileSnapshot,
+    Employee,
+    EmployeeIdentity,
+    FileRiskSnapshot,
+    GitHubOwnershipSnapshot,
+    NotionDocSnapshot,
+    RoleHistory,
+)
 from app.schemas.org import OrgChartIngestRequest
 from app.services.employee_ids import scope_org_chart_to_tenant
 from app.services.role_utils import is_leadership_role
@@ -38,46 +48,158 @@ class GraphComponent(DataPoint):
     metadata: dict = {"index_fields": ["name", "description"]}
 
 
+def _delete_employee_dependents(
+    db: Session,
+    tenant_id: uuid.UUID,
+    employee_id: str,
+) -> None:
+    db.query(Assignment).filter(
+        Assignment.tenant_id == tenant_id,
+        Assignment.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(EmployeeIdentity).filter(
+        EmployeeIdentity.tenant_id == tenant_id,
+        EmployeeIdentity.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(RoleHistory).filter(
+        RoleHistory.tenant_id == tenant_id,
+        RoleHistory.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(GitHubOwnershipSnapshot).filter(
+        GitHubOwnershipSnapshot.tenant_id == tenant_id,
+        GitHubOwnershipSnapshot.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(DoaFileSnapshot).filter(
+        DoaFileSnapshot.tenant_id == tenant_id,
+        DoaFileSnapshot.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(FileRiskSnapshot).filter(
+        FileRiskSnapshot.tenant_id == tenant_id,
+        FileRiskSnapshot.primary_owner_employee_id == employee_id,
+    ).update(
+        {FileRiskSnapshot.primary_owner_employee_id: None},
+        synchronize_session=False,
+    )
+    db.query(NotionDocSnapshot).filter(
+        NotionDocSnapshot.tenant_id == tenant_id,
+        NotionDocSnapshot.owner_employee_id == employee_id,
+    ).update(
+        {NotionDocSnapshot.owner_employee_id: None},
+        synchronize_session=False,
+    )
+
+
+def _delete_component_dependents(
+    db: Session,
+    tenant_id: uuid.UUID,
+    component_id: str,
+) -> None:
+    db.query(Assignment).filter(
+        Assignment.tenant_id == tenant_id,
+        Assignment.component_id == component_id,
+    ).delete(synchronize_session=False)
+    db.query(GitHubOwnershipSnapshot).filter(
+        GitHubOwnershipSnapshot.tenant_id == tenant_id,
+        GitHubOwnershipSnapshot.component_id == component_id,
+    ).delete(synchronize_session=False)
+    db.query(DoaFileSnapshot).filter(
+        DoaFileSnapshot.tenant_id == tenant_id,
+        DoaFileSnapshot.component_id == component_id,
+    ).delete(synchronize_session=False)
+    db.query(FileRiskSnapshot).filter(
+        FileRiskSnapshot.tenant_id == tenant_id,
+        FileRiskSnapshot.component_id == component_id,
+    ).delete(synchronize_session=False)
+    db.query(NotionDocSnapshot).filter(
+        NotionDocSnapshot.tenant_id == tenant_id,
+        NotionDocSnapshot.component_id == component_id,
+    ).update(
+        {NotionDocSnapshot.component_id: None},
+        synchronize_session=False,
+    )
+
+
 def persist_org_chart(
     db: Session,
     payload: OrgChartIngestRequest,
     tenant_id: uuid.UUID,
 ) -> OrgChartIngestRequest:
     payload = scope_org_chart_to_tenant(payload, tenant_id)
-    db.query(Assignment).filter(Assignment.tenant_id == tenant_id).delete()
+
+    new_employee_ids = {employee.id for employee in payload.employees}
+    new_component_ids = {component.id for component in payload.components}
+
+    existing_employees = (
+        db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
+    )
+    existing_components = (
+        db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    )
+
+    for employee in existing_employees:
+        if employee.id in new_employee_ids:
+            continue
+        _delete_employee_dependents(db, tenant_id, employee.id)
+        db.delete(employee)
+
+    for component in existing_components:
+        if component.id in new_component_ids:
+            continue
+        _delete_component_dependents(db, tenant_id, component.id)
+        db.delete(component)
+
     db.flush()
     db.query(Employee).filter(Employee.tenant_id == tenant_id).update(
         {Employee.manager_id: None}, synchronize_session=False
     )
-    db.query(Employee).filter(Employee.tenant_id == tenant_id).delete()
-    db.query(Component).filter(Component.tenant_id == tenant_id).delete()
     db.flush()
 
     for component in payload.components:
-        db.add(
-            Component(
-                id=component.id,
-                tenant_id=tenant_id,
-                name=component.name,
-                description=component.description,
-                open_tasks_count=component.open_tasks_count,
-                unresolved_incidents=component.unresolved_incidents,
+        row = db.get(Component, component.id)
+        if row is None:
+            db.add(
+                Component(
+                    id=component.id,
+                    tenant_id=tenant_id,
+                    name=component.name,
+                    description=component.description,
+                    open_tasks_count=component.open_tasks_count,
+                    unresolved_incidents=component.unresolved_incidents,
+                )
             )
-        )
+            continue
+        row.name = component.name
+        row.description = component.description
+        row.open_tasks_count = component.open_tasks_count
+        row.unresolved_incidents = component.unresolved_incidents
 
     for employee in payload.employees:
-        db.add(
-            Employee(
-                id=employee.id,
-                tenant_id=tenant_id,
-                name=employee.name,
-                role=employee.role,
-                email=employee.email,
-                tenure_years=employee.tenure_years,
-                manager_id=employee.manager_id,
-                team_name=employee.team_name,
+        row = db.get(Employee, employee.id)
+        if row is None:
+            db.add(
+                Employee(
+                    id=employee.id,
+                    tenant_id=tenant_id,
+                    name=employee.name,
+                    role=employee.role,
+                    email=employee.email,
+                    tenure_years=employee.tenure_years,
+                    manager_id=employee.manager_id,
+                    team_name=employee.team_name,
+                )
             )
-        )
+            continue
+        row.name = employee.name
+        row.role = employee.role
+        row.email = employee.email
+        row.tenure_years = employee.tenure_years
+        row.manager_id = employee.manager_id
+        row.team_name = employee.team_name
+
+    db.flush()
+    db.query(Assignment).filter(Assignment.tenant_id == tenant_id).delete(
+        synchronize_session=False
+    )
 
     for assignment in payload.assignments:
         db.add(

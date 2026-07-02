@@ -8,6 +8,7 @@ import { getInitials } from "./era-utils";
 
 interface EraDetailHeroProps {
   employee: EraEmployeeMetrics;
+  blastRadiusNarrative?: string | null;
 }
 
 function riskRingStroke(level: EraEmployeeMetrics["risk_level"]): string {
@@ -16,7 +17,10 @@ function riskRingStroke(level: EraEmployeeMetrics["risk_level"]): string {
   return "#34d399";
 }
 
-export function EraDetailHero({ employee }: EraDetailHeroProps) {
+export function EraDetailHero({
+  employee,
+  blastRadiusNarrative,
+}: EraDetailHeroProps) {
   const score = Math.round(employee.risk_factor_score);
   const ringRadius = 40;
   const circumference = 2 * Math.PI * ringRadius;
@@ -94,15 +98,10 @@ export function EraDetailHero({ employee }: EraDetailHeroProps) {
         </div>
       </div>
 
-      {recovery && componentNames.length > 0 && (
+      {(blastRadiusNarrative || (recovery && componentNames.length > 0)) && (
         <p className="mt-4 text-sm leading-relaxed text-zinc-400">
-          If {employee.name.split(" ")[0]} leaves,{" "}
-          <span className="text-zinc-200">{componentNames.join(" + ")}</span>{" "}
-          recovery estimated{" "}
-          <span className="text-zinc-200">
-            {recovery.min}–{recovery.max} weeks
-          </span>
-          .
+          {blastRadiusNarrative ??
+            `If ${employee.name.split(" ")[0]} leaves, ${componentNames.join(" + ")} recovery estimated ${recovery?.min}–${recovery?.max} weeks.`}
         </p>
       )}
     </section>

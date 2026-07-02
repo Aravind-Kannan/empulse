@@ -20,12 +20,13 @@ from app.services.github_client import (
 )
 from app.services.github_path_mapper import apply_path_mapping
 from app.services.github_types import GitHubPullRequestActivity
+from app.services.integration_config_store import record_integration_sync
 from app.services.integration_telemetry import (
     HIGH_PRIORITIES,
     apply_github_telemetry,
     apply_jira_telemetry,
     apply_notion_telemetry,
-    apply_slack_telemetry,
+    apply_slack_telemetry_with_cache,
     get_github_ownership,
     get_telemetry_snapshot,
     mark_sync_completed,
@@ -392,7 +393,6 @@ def analyze_jira_payload(
             f"{issue.issue_key} ({issue.issue_type}, {issue.priority}, "
             f"{issue.status}) assigned to {assignee_name}, "
             f"blocking component {component_name}."
-            + (f" {description}" if description else "")
         )
 
     return "\n".join(narrative_lines), data_points, edge_count
@@ -753,11 +753,16 @@ async def process_external_app_sync(
             notion_snapshot,
         )
     elif normalized == "slack" and slack_snapshot is not None:
-        telemetry["slack_incidents"] = apply_slack_telemetry(slack_snapshot)
+        telemetry["slack_incidents"] = apply_slack_telemetry_with_cache(
+            db,
+            tenant_id,
+            slack_snapshot,
+        )
 
     db.commit()
 
     mark_sync_completed(normalized)
+    record_integration_sync(db, tenant_id, normalized)
 
     result: dict[str, int | str] = {
         "source": normalized,

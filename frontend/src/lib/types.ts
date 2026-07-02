@@ -209,6 +209,7 @@ export interface EraUnmappedActivityCount {
 
 export interface EraTeamSummary {
   avg_risk_score: number;
+  avg_risk_trend_7d?: number | null;
   high_risk_count: number;
   medium_risk_count: number;
   low_risk_count: number;
@@ -245,6 +246,30 @@ export interface EraEmployeeMetrics {
   exclusion_reason?: string | null;
 }
 
+export interface EraRiskHistoryPoint {
+  snapshot_date: string;
+  risk_factor_score: number;
+}
+
+export interface EraManagerRollupReport {
+  employee_id: string;
+  name: string;
+  role: string;
+  risk_factor_score: number;
+  risk_level: string;
+  trend_7d?: number | null;
+}
+
+export interface EraManagerRollupResponse {
+  computed_at: string;
+  manager_id: string;
+  manager_name: string;
+  team_avg_risk: number;
+  high_risk_report_count: number;
+  manager_exposure_bonus: number;
+  reports: EraManagerRollupReport[];
+}
+
 export interface EraAnalyticsResponse {
   computed_at: string;
   demo_mode: boolean;
@@ -253,6 +278,7 @@ export interface EraAnalyticsResponse {
   employees: EraEmployeeMetrics[];
   unmapped_activity: EraUnmappedActivityCount[];
   sync_freshness: Partial<Record<IntegrationId, string | null>>;
+  team_risk_history_30d?: EraRiskHistoryPoint[];
 }
 
 export interface EraEmployeeDetailResponse {
@@ -262,6 +288,22 @@ export interface EraEmployeeDetailResponse {
   evidence_total_count: number;
   limit: number;
   offset: number;
+  backup_candidates: EraBackupCandidate[];
+  warnings: string[];
+  blast_radius_narrative?: string | null;
+  risk_history_30d?: EraRiskHistoryPoint[];
+}
+
+export interface EraBackupCandidate {
+  employee_id: string;
+  name: string;
+  component_id: string;
+  component_name: string;
+  ownership_pct: number;
+  review_count: number;
+  recent_commits: number;
+  score: number;
+  label: "ramping" | "secondary" | string;
 }
 
 export interface EraReviewNetworkEdge {

@@ -12,7 +12,14 @@ from sqlalchemy.orm import Session
 from app.models.operational import Assignment, Component, Employee, GitHubOwnershipSnapshot
 from app.services.github_types import GitHubPullRequestActivity
 from app.services.identity_resolver import resolve_author_employee_id
+from app.services.integration_config_store import (
+    INTEGRATION_SOURCES,
+    get_integration_last_synced,
+    get_telemetry_cache,
+    save_telemetry_cache,
+)
 from app.services.jira_types import JiraEmployeeSignals, JiraIssueActivity
+from app.services.slack_types import SlackEmployeeSignals
 
 _jira_backlog_by_employee: dict[str, int] = {}
 _jira_employee_signals: dict[str, JiraEmployeeSignals] = {}
@@ -207,6 +214,26 @@ def apply_jira_telemetry(
     _jira_issues_cache = list(issues)
     _jira_synced = True
     db.flush()
+    save_telemetry_cache(
+        db,
+        tenant_id,
+        "jira",
+        {
+            "backlog_by_employee": dict(backlog),
+            "employee_signals": {
+                employee_id: {
+                    "employee_id": row.employee_id,
+                    "open_tasks": row.open_tasks,
+                    "open_p1_p2": row.open_p1_p2,
+                    "jira_backlog_boost": row.jira_backlog_boost,
+                    "epic_owner_count": row.epic_owner_count,
+                    "sprint_points": row.sprint_points,
+                    "sample_issue_urls": list(row.sample_issue_urls),
+                }
+                for employee_id, row in signals.items()
+            },
+        },
+    )
     return dict(backlog)
 
 
@@ -724,6 +751,146 @@ def hydrate_notion_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
     return True
 
 
+def _restore_jira_cache(cache: dict[str, object]) -> bool:
+    global _jira_synced, _jira_backlog_by_employee, _jira_employee_signals
+
+    raw_signals = cache.get("employee_signals")
+    if not isinstance(raw_signals, dict) or not raw_signals:
+        return False
+
+    backlog_raw = cache.get("backlog_by_employee")
+    backlog = (
+        {str(key): int(value) for key, value in backlog_raw.items()}
+        if isinstance(backlog_raw, dict)
+        else {}
+    )
+    signals: dict[str, JiraEmployeeSignals] = {}
+    for employee_id, payload in raw_signals.items():
+        if not isinstance(payload, dict):
+            continue
+        signals[str(employee_id)] = JiraEmployeeSignals(
+            employee_id=str(payload.get("employee_id", employee_id)),
+            open_tasks=int(payload.get("open_tasks", 0)),
+            open_p1_p2=int(payload.get("open_p1_p2", 0)),
+            jira_backlog_boost=int(payload.get("jira_backlog_boost", 0)),
+            epic_owner_count=int(payload.get("epic_owner_count", 0)),
+            sprint_points=float(payload.get("sprint_points", 0.0)),
+            sample_issue_urls=list(payload.get("sample_issue_urls") or []),
+        )
+
+    _jira_backlog_by_employee.clear()
+    _jira_backlog_by_employee.update(backlog)
+    _jira_employee_signals.clear()
+    _jira_employee_signals.update(signals)
+    _jira_synced = True
+    return True
+
+
+def hydrate_jira_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
+    if _jira_synced:
+        return True
+    cache = get_telemetry_cache(db, tenant_id, "jira")
+    if cache and _restore_jira_cache(cache):
+        return True
+    return False
+
+
+def _restore_slack_cache(cache: dict[str, object]) -> bool:
+    global _slack_synced, _slack_employee_signals, _slack_escalation_warnings
+
+    raw_signals = cache.get("employee_signals")
+    if not isinstance(raw_signals, dict) or not raw_signals:
+        return False
+
+    signals: dict[str, SlackEmployeeSignals] = {}
+    for employee_id, payload in raw_signals.items():
+        if not isinstance(payload, dict):
+            continue
+        signals[str(employee_id)] = SlackEmployeeSignals(
+            employee_id=str(payload.get("employee_id", employee_id)),
+            undocumented_solved_incidents=int(
+                payload.get("undocumented_solved_incidents", 0)
+            ),
+            on_call_incidents_30d=int(payload.get("on_call_incidents_30d", 0)),
+            incident_escalation_threads=int(
+                payload.get("incident_escalation_threads", 0)
+            ),
+            on_call_off_hours_messages=int(
+                payload.get("on_call_off_hours_messages", 0)
+            ),
+            sole_responder_thread_count=int(
+                payload.get("sole_responder_thread_count", 0)
+            ),
+        )
+
+    warnings_raw = cache.get("escalation_warnings")
+    warnings = warnings_raw if isinstance(warnings_raw, list) else []
+
+    _slack_employee_signals.clear()
+    _slack_employee_signals.update(signals)
+    _slack_escalation_warnings.clear()
+    _slack_escalation_warnings.extend(warnings)
+    _slack_synced = True
+    return True
+
+
+def hydrate_slack_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
+    if _slack_synced:
+        return True
+    cache = get_telemetry_cache(db, tenant_id, "slack")
+    if cache and _restore_slack_cache(cache):
+        return True
+    return False
+
+
+def hydrate_sync_freshness_from_db(db: Session, tenant_id: uuid.UUID) -> None:
+    from sqlalchemy import func
+
+    from app.models.operational import DoaFileSnapshot, NotionDocSnapshot
+
+    for source in INTEGRATION_SOURCES:
+        last_synced = get_integration_last_synced(db, tenant_id, source)
+        if last_synced:
+            _sync_timestamps[source] = last_synced
+
+    if not _sync_timestamps.get("notion"):
+        notion_ts = (
+            db.query(func.max(NotionDocSnapshot.computed_at))
+            .filter(NotionDocSnapshot.tenant_id == tenant_id)
+            .scalar()
+        )
+        if notion_ts is not None:
+            if notion_ts.tzinfo is None:
+                notion_ts = notion_ts.replace(tzinfo=UTC)
+            _sync_timestamps["notion"] = notion_ts.isoformat()
+
+    if not _sync_timestamps.get("github"):
+        github_ts = (
+            db.query(func.max(GitHubOwnershipSnapshot.computed_at))
+            .filter(GitHubOwnershipSnapshot.tenant_id == tenant_id)
+            .scalar()
+        )
+        if github_ts is None:
+            github_ts = (
+                db.query(func.max(DoaFileSnapshot.computed_at))
+                .filter(DoaFileSnapshot.tenant_id == tenant_id)
+                .scalar()
+            )
+        if github_ts is not None:
+            if github_ts.tzinfo is None:
+                github_ts = github_ts.replace(tzinfo=UTC)
+            _sync_timestamps["github"] = github_ts.isoformat()
+
+
+def hydrate_integration_telemetry(db: Session, tenant_id: uuid.UUID) -> None:
+    """Reload integration telemetry and sync timestamps after a backend restart."""
+    hydrate_sync_freshness_from_db(db, tenant_id)
+    hydrate_github_telemetry_from_db(db, tenant_id)
+    hydrate_notion_telemetry_from_db(db, tenant_id)
+    hydrate_jira_telemetry_from_db(db, tenant_id)
+    hydrate_slack_telemetry_from_db(db, tenant_id)
+
+
 def has_slack_sync() -> bool:
     return _slack_synced
 
@@ -752,6 +919,34 @@ def apply_slack_telemetry(snapshot) -> dict[str, object]:
         "employees_tracked": len(snapshot.employee_signals),
         "escalation_warnings": len(snapshot.escalation_warnings),
     }
+
+
+def apply_slack_telemetry_with_cache(
+    db: Session,
+    tenant_id: uuid.UUID,
+    snapshot,
+) -> dict[str, object]:
+    result = apply_slack_telemetry(snapshot)
+    save_telemetry_cache(
+        db,
+        tenant_id,
+        "slack",
+        {
+            "employee_signals": {
+                employee_id: {
+                    "employee_id": row.employee_id,
+                    "undocumented_solved_incidents": row.undocumented_solved_incidents,
+                    "on_call_incidents_30d": row.on_call_incidents_30d,
+                    "incident_escalation_threads": row.incident_escalation_threads,
+                    "on_call_off_hours_messages": row.on_call_off_hours_messages,
+                    "sole_responder_thread_count": row.sole_responder_thread_count,
+                }
+                for employee_id, row in snapshot.employee_signals.items()
+            },
+            "escalation_warnings": list(snapshot.escalation_warnings),
+        },
+    )
+    return result
 
 
 def get_telemetry_snapshot() -> dict[str, object]:

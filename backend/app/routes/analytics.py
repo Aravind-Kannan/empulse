@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.era import EraAnalyticsResponse, EraEmployeeDetailResponse
 from app.schemas.era import (
+    EraManagerRollupResponse,
     EraReviewNetworkResponse,
     EraTeamRiskyChangesResponse,
 )
@@ -15,6 +16,7 @@ from app.schemas.kra import (
 )
 from app.services.era_analytics import (
     get_era_employee_detail,
+    get_era_manager_rollup,
     get_era_metrics,
     get_era_review_network,
     get_era_team_risky_changes,
@@ -36,6 +38,18 @@ def era_analytics(
     db: Session = Depends(get_db),
 ) -> EraAnalyticsResponse:
     return get_era_metrics(db, tenant)
+
+
+@router.get("/era/rollup", response_model=EraManagerRollupResponse)
+def era_manager_rollup(
+    manager_id: str,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EraManagerRollupResponse:
+    payload = get_era_manager_rollup(db, tenant, manager_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Manager '{manager_id}' not found.")
+    return payload
 
 
 @router.get("/era/{employee_id}/review-network", response_model=EraReviewNetworkResponse)

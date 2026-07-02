@@ -356,3 +356,53 @@ def is_source_configured(db: Session, tenant_id: uuid.UUID, source: str) -> bool
             stored.get("integration_token", "").strip() and stored.get("validated")
         )
     return False
+
+
+def record_integration_sync(
+    db: Session,
+    tenant_id: uuid.UUID,
+    source: str,
+) -> None:
+    """Persist last sync time so ERA survives backend restarts."""
+    upsert_source_config(
+        db,
+        tenant_id,
+        source,
+        {"last_synced_at": datetime.now(UTC).isoformat()},
+        merge_secrets=True,
+    )
+
+
+def get_integration_last_synced(
+    db: Session,
+    tenant_id: uuid.UUID,
+    source: str,
+) -> str | None:
+    stored = get_source_config(db, tenant_id, source)
+    value = stored.get("last_synced_at")
+    return str(value) if value else None
+
+
+def save_telemetry_cache(
+    db: Session,
+    tenant_id: uuid.UUID,
+    source: str,
+    cache: dict[str, Any],
+) -> None:
+    upsert_source_config(
+        db,
+        tenant_id,
+        source,
+        {"telemetry_cache": cache},
+        merge_secrets=True,
+    )
+
+
+def get_telemetry_cache(
+    db: Session,
+    tenant_id: uuid.UUID,
+    source: str,
+) -> dict[str, Any] | None:
+    stored = get_source_config(db, tenant_id, source)
+    cache = stored.get("telemetry_cache")
+    return cache if isinstance(cache, dict) else None

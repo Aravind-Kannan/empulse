@@ -101,6 +101,7 @@ def build_team_summary(employees: list[EraEmployeeMetrics]) -> EraTeamSummary:
     if not active:
         return EraTeamSummary(
             avg_risk_score=0.0,
+            avg_risk_trend_7d=None,
             high_risk_count=0,
             medium_risk_count=0,
             low_risk_count=0,

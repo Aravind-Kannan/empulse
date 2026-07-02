@@ -1,12 +1,14 @@
 import Link from "next/link";
 
-import type { EraTeamSummary } from "@/lib/types";
+import type { EraRiskHistoryPoint, EraTeamSummary } from "@/lib/types";
 
 import { ERA_DIMENSION_COLORS } from "./era-colors";
+import { EraRiskSparkline, EraTrendChip } from "./EraRiskSparkline";
 
 interface EraKpiStripProps {
   summary: EraTeamSummary;
   integrationCount: number;
+  teamHistory?: EraRiskHistoryPoint[];
   loading?: boolean;
 }
 
@@ -23,6 +25,7 @@ function SkeletonCard() {
 export function EraKpiStrip({
   summary,
   integrationCount,
+  teamHistory = [],
   loading = false,
 }: EraKpiStripProps) {
   if (loading) {
@@ -41,12 +44,18 @@ export function EraKpiStrip({
     <div className="flex gap-3 overflow-x-auto pb-1">
       <div className="min-w-[9.5rem] flex-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
         <p className="text-xs uppercase tracking-wide text-zinc-500">Team risk</p>
-        <p className="mt-1 text-2xl font-semibold text-zinc-100">
-          {summary.avg_risk_score}%
-        </p>
-        <p className={`mt-1 text-xs ${driver.text}`}>
-          Top driver: {driver.label}
-        </p>
+        <div className="mt-1 flex items-center gap-2">
+          <p className="text-2xl font-semibold text-zinc-100">
+            {summary.avg_risk_score}%
+          </p>
+          <EraTrendChip trend={summary.avg_risk_trend_7d} />
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <p className={`text-xs ${driver.text}`}>
+            Top driver: {driver.label}
+          </p>
+          <EraRiskSparkline history={teamHistory} width={72} height={24} />
+        </div>
       </div>
 
       <div

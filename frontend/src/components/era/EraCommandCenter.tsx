@@ -231,6 +231,7 @@ export function EraCommandCenter() {
       <EraKpiStrip
         summary={data.team_summary}
         integrationCount={integrationCount}
+        teamHistory={data.team_risk_history_30d ?? []}
       />
 
       <EraRiskHeatmap
@@ -254,6 +255,7 @@ export function EraCommandCenter() {
         <EraTeamComposition
           employees={employees}
           topRiskDriver={data.team_summary.top_risk_driver}
+          teamHistory={data.team_risk_history_30d ?? []}
         />
       </div>
 

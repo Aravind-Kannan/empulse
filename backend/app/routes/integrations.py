@@ -513,6 +513,13 @@ async def sync_all_configured(
             detail=f"Global Cognee sync failed: {exc}",
         ) from exc
 
+    from app.services.era_snapshots import snapshot_era_metrics
+
+    try:
+        snapshot_era_metrics(db, tenant)
+    except Exception:
+        pass
+
     sync_results = [IntegrationSyncResponse(**result) for result in results]
     return GlobalSyncResponse(
         results=sync_results,

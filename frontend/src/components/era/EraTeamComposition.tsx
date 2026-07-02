@@ -1,19 +1,22 @@
 import Link from "next/link";
 
-import type { EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
+import type { EraDimensionKey, EraEmployeeMetrics, EraRiskHistoryPoint } from "@/lib/types";
 
 import { DIMENSION_KEYS, ERA_DIMENSION_COLORS } from "./era-colors";
 import { EraDimensionDonut } from "./EraDimensionDonut";
+import { EraRiskSparkline } from "./EraRiskSparkline";
 import { dimensionValue } from "./era-utils";
 
 interface EraTeamCompositionProps {
   employees: EraEmployeeMetrics[];
   topRiskDriver: EraDimensionKey;
+  teamHistory?: EraRiskHistoryPoint[];
 }
 
 export function EraTeamComposition({
   employees,
   topRiskDriver,
+  teamHistory = [],
 }: EraTeamCompositionProps) {
   const active = employees.filter((employee) => !employee.excluded);
   const totals = DIMENSION_KEYS.reduce(
@@ -55,8 +58,13 @@ export function EraTeamComposition({
         </div>
       )}
 
-      <div className="mt-4 rounded-lg border border-dashed border-zinc-700 bg-zinc-950/40 p-3 text-xs text-zinc-500">
-        Avg risk trend (30d) — available in Step 11
+      <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Avg risk trend (30d)
+          </p>
+          <EraRiskSparkline history={teamHistory} width={120} height={32} />
+        </div>
       </div>
 
       <div className="mt-4">

@@ -5,6 +5,7 @@ import type {
   EraEmployeeDetailResponse,
   EraHotspotsResponse,
   EraReviewNetworkResponse,
+  EraManagerRollupResponse,
   EraTeamRiskyChangesResponse,
   GlobalSyncResult,
   HandoverResponse,
@@ -283,6 +284,20 @@ export async function fetchEraEmployeeDetail(
     throw new Error(`Failed to load ERA employee detail (${response.status})`);
   }
 
+  return response.json();
+}
+
+export async function fetchEraManagerRollup(
+  managerId: string,
+): Promise<EraManagerRollupResponse> {
+  const params = new URLSearchParams({ manager_id: managerId });
+  const response = await apiFetch(
+    `${API_BASE}/api/analytics/era/rollup?${params.toString()}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load manager rollup (${response.status})`);
+  }
   return response.json();
 }
 
@@ -922,7 +937,9 @@ function memberSyncRequestBody(
     github_personal_access_token:
       integrationConfig.github.personalAccessToken.trim() || null,
     jira_site_url: integrationConfig.jira.siteUrl.trim() || null,
-    jira_auth_email: integrationConfig.jira.authEmail.trim() || null,
+    jira_auth_email:
+      (integrationConfig.jira.authEmail ?? integrationConfig.jira.accountEmail ?? "")
+        .trim() || null,
     jira_api_token: integrationConfig.jira.apiToken.trim() || null,
     jira_project_keys: integrationConfig.jira.projectKeys.trim() || null,
   };

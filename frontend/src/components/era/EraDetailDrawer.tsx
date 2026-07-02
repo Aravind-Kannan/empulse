@@ -12,6 +12,7 @@ import { EraBackupCandidates } from "./EraBackupCandidates";
 import { EraHotspotSummary } from "./EraHotspotSummary";
 import { EraDetailFooter } from "./EraDetailFooter";
 import { EraDetailHero } from "./EraDetailHero";
+import { EraDetailHistoryChart } from "./EraDetailHistoryChart";
 import { EraDimensionGrid } from "./EraDimensionGrid";
 import { EraDimensionRadar } from "./EraDimensionRadar";
 import { EraEvidenceList } from "./EraEvidenceList";
@@ -204,8 +205,15 @@ export function EraDetailDrawer({
                 </div>
               ) : (
                 <>
-                  <EraDetailHero employee={detail.employee} />
+                  <EraDetailHero
+                    employee={detail.employee}
+                    blastRadiusNarrative={detail.blast_radius_narrative}
+                  />
                   <EraDimensionGrid employee={detail.employee} />
+                  <EraDetailHistoryChart
+                    history={detail.risk_history_30d ?? []}
+                    employeeName={detail.employee.name}
+                  />
 
                   <div className="grid gap-4 lg:grid-cols-2">
                     <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
@@ -235,7 +243,7 @@ export function EraDetailDrawer({
                     employeeId={detail.employee.employee_id}
                     employeeName={detail.employee.name}
                   />
-                  <EraBackupCandidates />
+                  <EraBackupCandidates candidates={detail.backup_candidates ?? []} />
 
                   <section className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/20 p-5">
                     <h3 className="text-sm font-medium text-zinc-200">Mitigations</h3>

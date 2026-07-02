@@ -152,6 +152,7 @@ def apply_schema_patches(engine: Engine) -> None:
 
     from app.models.operational import (
         DoaFileSnapshot,
+        EraRiskSnapshot,
         FileRiskSnapshot,
         GitHubOwnershipSnapshot,
         NotionDocSnapshot,
@@ -164,4 +165,5 @@ def apply_schema_patches(engine: Engine) -> None:
     DoaFileSnapshot.__table__.create(bind=engine, checkfirst=True)
     FileRiskSnapshot.__table__.create(bind=engine, checkfirst=True)
     NotionDocSnapshot.__table__.create(bind=engine, checkfirst=True)
+    EraRiskSnapshot.__table__.create(bind=engine, checkfirst=True)
     TenantIntegrationConfig.__table__.create(bind=engine, checkfirst=True)

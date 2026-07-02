@@ -22,6 +22,14 @@ from app.schemas.era import (
     EraTeamRiskyChangesResponse,
 )
 from app.schemas.org import ACME_ORG_CHART
+from app.services.cognee_era_intelligence import build_employee_detail_intelligence
+from app.services.era_snapshots import (
+    apply_trends_to_employees,
+    get_employee_risk_history,
+    get_team_risk_history,
+    manager_team_rollup,
+    team_avg_trend_7d,
+)
 from app.services.cognee_era_metrics import (
     calculate_graph_contribution_share,
     total_component_count,
@@ -58,6 +66,7 @@ from app.services.integration_telemetry import (
     has_notion_sync,
     has_slack_sync,
     has_review_network,
+    hydrate_integration_telemetry,
     hydrate_github_telemetry_from_db,
     hydrate_notion_telemetry_from_db,
 )
@@ -162,6 +171,22 @@ def _evidence_dicts_to_models(items: list[dict]) -> list[EraEvidenceItem]:
             ],
             synthetic=item.get("synthetic", False),
         )
+        for item in items
+    ]
+
+
+def _evidence_models_to_dicts(items: list[EraEvidenceItem]) -> list[dict]:
+    return [
+        {
+            "id": item.id,
+            "dimension": item.dimension,
+            "severity": item.severity,
+            "title": item.title,
+            "description": item.description,
+            "impact_points": item.impact_points,
+            "sources": [source.model_dump() for source in item.sources],
+            "synthetic": item.synthetic,
+        }
         for item in items
     ]
 
@@ -288,14 +313,19 @@ def _wrap_response(
     *,
     demo_mode: bool,
 ) -> EraAnalyticsResponse:
+    employees_with_trends = apply_trends_to_employees(db, tenant.id, employees)
+    team_summary = build_team_summary(employees_with_trends)
+    avg_trend = team_avg_trend_7d(db, tenant.id, team_summary.avg_risk_score)
+    team_summary = team_summary.model_copy(update={"avg_risk_trend_7d": avg_trend})
     return EraAnalyticsResponse(
         computed_at=datetime.now(UTC),
         demo_mode=demo_mode,
         warnings=build_warnings(db, tenant.id, demo_mode=demo_mode),
-        team_summary=build_team_summary(employees),
-        employees=employees,
+        team_summary=team_summary,
+        employees=employees_with_trends,
         unmapped_activity=build_unmapped_activity(db, tenant.id),
         sync_freshness=build_sync_freshness(),
+        team_risk_history_30d=get_team_risk_history(db, tenant.id, days=30),
     )
 
 
@@ -535,8 +565,7 @@ def _fallback_acme_metrics() -> list[EraEmployeeMetrics]:
 
 def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
     use_v2 = get_settings().era_v2_scoring
-    hydrate_github_telemetry_from_db(db, tenant.id)
-    hydrate_notion_telemetry_from_db(db, tenant.id)
+    hydrate_integration_telemetry(db, tenant.id)
     github_connected = has_github_sync()
     jira_connected = _jira_connected(db, tenant.id)
     notion_connected = _notion_connected(db, tenant.id)
@@ -621,8 +650,7 @@ def get_era_employee_detail(
     offset: int = 0,
 ) -> EraEmployeeDetailResponse | None:
     use_v2 = get_settings().era_v2_scoring
-    hydrate_github_telemetry_from_db(db, tenant.id)
-    hydrate_notion_telemetry_from_db(db, tenant.id)
+    hydrate_integration_telemetry(db, tenant.id)
     github_connected = has_github_sync()
     employee = (
         db.query(Employee)
@@ -649,6 +677,8 @@ def get_era_employee_detail(
             evidence_total_count=fallback.evidence_total_count or len(evidence),
             limit=limit,
             offset=offset,
+            backup_candidates=[],
+            warnings=[],
         )
 
     if employee is None:
@@ -676,8 +706,13 @@ def get_era_employee_detail(
             evidence_total_count=0,
             limit=limit,
             offset=offset,
+            backup_candidates=[],
+            warnings=[],
         )
 
+    backup_candidates: list = []
+    detail_warnings: list[str] = []
+    blast_radius_narrative: str | None = None
     total_components = total_component_count(
         db.query(Component).filter(Component.tenant_id == tenant.id).all()
     )
@@ -766,7 +801,23 @@ def get_era_employee_detail(
             identity_coverage=coverage,
             affected_components=affected,
         )
-        all_evidence = _evidence_dicts_to_models(score_result.all_evidence)
+        intelligence = build_employee_detail_intelligence(
+            db,
+            tenant.id,
+            employee,
+            merged,
+            affected,
+            jira_connected=jira_connected,
+            notion_connected=notion_connected,
+            recovery_estimate=metric.recovery_estimate_weeks,
+        )
+        merged = intelligence.enriched_evidence
+        if intelligence.recovery_estimate:
+            metric.recovery_estimate_weeks = intelligence.recovery_estimate
+        backup_candidates = intelligence.backup_candidates
+        detail_warnings = intelligence.warnings
+        blast_radius_narrative = intelligence.blast_radius_narrative
+        all_evidence = _evidence_dicts_to_models(merged)
     else:
         open_tasks = sum(a.component.open_tasks_count for a in employee.assignments)
         unresolved = sum(a.component.unresolved_incidents for a in employee.assignments)
@@ -787,8 +838,27 @@ def get_era_employee_detail(
             github_connected=github_connected,
         )
         all_evidence = list(metric.evidence)
+        affected = build_affected_components(employee, github_connected=github_connected)
+        intelligence = build_employee_detail_intelligence(
+            db,
+            tenant.id,
+            employee,
+            _evidence_models_to_dicts(all_evidence),
+            affected,
+            jira_connected=jira_connected,
+            notion_connected=notion_connected,
+            recovery_estimate=metric.recovery_estimate_weeks,
+        )
+        if intelligence.recovery_estimate:
+            metric.recovery_estimate_weeks = intelligence.recovery_estimate
+        backup_candidates = intelligence.backup_candidates
+        detail_warnings = intelligence.warnings
+        blast_radius_narrative = intelligence.blast_radius_narrative
+        all_evidence = _evidence_dicts_to_models(intelligence.enriched_evidence)
 
     page = all_evidence[offset : offset + limit]
+    risk_history = get_employee_risk_history(db, tenant.id, employee_id, days=30)
+    [metric] = apply_trends_to_employees(db, tenant.id, [metric])
     return EraEmployeeDetailResponse(
         computed_at=datetime.now(UTC),
         employee=metric,
@@ -796,7 +866,15 @@ def get_era_employee_detail(
         evidence_total_count=len(all_evidence),
         limit=limit,
         offset=offset,
+        backup_candidates=backup_candidates,
+        warnings=detail_warnings,
+        blast_radius_narrative=blast_radius_narrative,
+        risk_history_30d=risk_history,
     )
+
+
+def get_era_manager_rollup(db: Session, tenant, manager_id: str):
+    return manager_team_rollup(db, tenant, manager_id)
 
 
 def _parse_since_days(since: str | None, default: int = 90) -> int:

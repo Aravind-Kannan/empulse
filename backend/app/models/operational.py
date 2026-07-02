@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -273,6 +273,34 @@ class NotionDocSnapshot(Base):
     is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expertise_tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+
+class EraRiskSnapshot(Base):
+    __tablename__ = "era_risk_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "employee_id",
+            "snapshot_date",
+            name="uq_era_risk_snapshot",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    employee_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("employees.id"), nullable=False, index=True
+    )
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    risk_factor_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    risk_level: Mapped[str] = mapped_column(String(16), nullable=False, default="low")
+    dimensions_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     computed_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow
     )

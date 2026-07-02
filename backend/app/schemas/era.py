@@ -44,6 +44,18 @@ class EraAffectedComponent(BaseModel):
     ownership_pct: float | None = None
 
 
+class EraBackupCandidate(BaseModel):
+    employee_id: str
+    name: str
+    component_id: str
+    component_name: str
+    ownership_pct: float = Field(ge=0, le=100)
+    review_count: int = Field(ge=0)
+    recent_commits: int = Field(ge=0)
+    score: float = Field(ge=0)
+    label: str  # ramping | secondary
+
+
 class EraRecoveryEstimate(BaseModel):
     min: int = Field(ge=1)
     max: int = Field(ge=1)
@@ -56,6 +68,7 @@ class EraUnmappedActivityCount(BaseModel):
 
 class EraTeamSummary(BaseModel):
     avg_risk_score: float = Field(ge=0, le=100)
+    avg_risk_trend_7d: float | None = None
     high_risk_count: int = Field(ge=0)
     medium_risk_count: int = Field(ge=0)
     low_risk_count: int = Field(ge=0)
@@ -100,6 +113,31 @@ class EraAnalyticsResponse(BaseModel):
     employees: list[EraEmployeeMetrics]
     unmapped_activity: list[EraUnmappedActivityCount] = Field(default_factory=list)
     sync_freshness: dict[str, str | None] = Field(default_factory=dict)
+    team_risk_history_30d: list["EraRiskHistoryPoint"] = Field(default_factory=list)
+
+
+class EraRiskHistoryPoint(BaseModel):
+    snapshot_date: str
+    risk_factor_score: float = Field(ge=0, le=100)
+
+
+class EraManagerRollupReport(BaseModel):
+    employee_id: str
+    name: str
+    role: str
+    risk_factor_score: float = Field(ge=0, le=100)
+    risk_level: str
+    trend_7d: float | None = None
+
+
+class EraManagerRollupResponse(BaseModel):
+    computed_at: datetime
+    manager_id: str
+    manager_name: str
+    team_avg_risk: float = Field(ge=0, le=100)
+    high_risk_report_count: int = Field(ge=0)
+    manager_exposure_bonus: int = Field(ge=0, le=15)
+    reports: list[EraManagerRollupReport] = Field(default_factory=list)
 
 
 class EraEmployeeDetailResponse(BaseModel):
@@ -109,6 +147,10 @@ class EraEmployeeDetailResponse(BaseModel):
     evidence_total_count: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+    backup_candidates: list[EraBackupCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    blast_radius_narrative: str | None = None
+    risk_history_30d: list[EraRiskHistoryPoint] = Field(default_factory=list)
 
 
 class EraReviewNetworkEdge(BaseModel):
