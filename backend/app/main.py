@@ -48,9 +48,14 @@ async def lifespan(_: FastAPI):
             recovered,
         )
 
-    from cognee.run_migrations import run_relational_migrations
+    from cognee.run_migrations import run_migrations
 
-    await run_relational_migrations()
+    migration_failures = await run_migrations()
+    if migration_failures:
+        logger.warning(
+            "Cognee startup migrations failed for: %s",
+            ", ".join(migration_failures),
+        )
 
     from app.database import SessionLocal
     from app.services.tenant_bootstrap import bootstrap_tenancy

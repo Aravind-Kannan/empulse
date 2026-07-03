@@ -1,3 +1,5 @@
+import importlib.resources as pkg_resources
+import logging
 import os
 import shutil
 import sqlite3
@@ -10,6 +12,8 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+logger = logging.getLogger(__name__)
 
 load_dotenv(BACKEND_ROOT / ".env")
 
@@ -161,13 +165,33 @@ def _cognee_metadata_is_healthy(db_path: Path) -> bool:
         return False
 
 
+def _cognee_metadata_template_path() -> Path | None:
+    """Packaged legacy SQLite seed, when shipped by the installed cognee wheel."""
+    candidates = [
+        Path(cognee.__file__).resolve().parent
+        / ".cognee_system"
+        / "databases"
+        / "cognee_db",
+    ]
+    try:
+        packaged = pkg_resources.files("cognee") / ".cognee_system" / "databases" / "cognee_db"
+        candidates.append(Path(str(packaged)))
+    except (ModuleNotFoundError, TypeError, ValueError):
+        pass
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def ensure_cognee_metadata_database(settings: Settings) -> None:
     """
-    Seed Cognee's SQLite metadata DB when missing or left in a broken state.
+    Prepare Cognee's SQLite metadata DB when missing or left in a broken state.
 
-    Fresh Alembic runs on an empty file can stall before core tables exist
-    (ab7e313804ae expects legacy ``acls``). Copy the packaged template, then
-    let ``run_relational_migrations()`` advance it to head.
+    When cognee ships a legacy template, copy it and let migrations advance it.
+    Otherwise leave the database absent — ``run_migrations()`` creates a fresh
+    schema via ``create_database()`` + Alembic stamp (cognee >= 1.2).
     """
     db_dir = Path(settings.cognee_system_root) / "databases"
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -179,16 +203,12 @@ def ensure_cognee_metadata_database(settings: Settings) -> None:
     if db_path.exists():
         db_path.unlink()
 
-    template = (
-        Path(cognee.__file__).resolve().parent
-        / ".cognee_system"
-        / "databases"
-        / "cognee_db"
-    )
-    if not template.is_file():
-        raise RuntimeError(
-            "Cognee metadata template missing. Reinstall cognee in the backend venv."
+    template = _cognee_metadata_template_path()
+    if template is None:
+        logger.info(
+            "Cognee metadata template not packaged; fresh schema will be created on startup migrations."
         )
+        return
 
     shutil.copy2(template, db_path)
 
