@@ -20,6 +20,7 @@ from app.services.github_repo_sync import (
 )
 from app.services.employee_ids import scope_component_id
 from app.services.component_management import consolidate_duplicate_components
+from app.services.github_component_display import format_github_component_name
 from app.services.integration_config_store import save_github_config, save_jira_config
 from app.services.jira_client import fetch_jira_project_components
 
@@ -462,7 +463,10 @@ def _single_repo_component_name(context: RepoTreeContext) -> str:
 
 
 def _partition_component_name(context: RepoTreeContext, partition: RepoPartition) -> str:
-    return _infer_project_name(context, partition) or partition.display_name
+    return format_github_component_name(
+        f"{context.owner}/{context.repo}",
+        partition.path_prefix,
+    )
 
 
 def _tree_context_for_repo(

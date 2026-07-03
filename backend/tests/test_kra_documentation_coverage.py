@@ -149,6 +149,12 @@ def test_three_active_two_covered_returns_sixty_seven_percent(db, tenant):
     assert result.coverage_pct == 67
     assert result.active_component_count == 3
     assert result.covered_count == 2
+    assert len(result.covered_components) == 2
+    assert {row.component_id for row in result.covered_components} == {
+        "comp-a",
+        "comp-b",
+    }
+    assert result.covered_components[0].notion_page_urls
     assert len(result.gap_components) == 1
     assert result.gap_components[0].component_id == "comp-c"
     assert result.gap_components[0].gap_reason == "missing"
@@ -288,7 +294,53 @@ def test_fresh_notion_source_counts_as_covered(db, tenant):
 
     assert result.coverage_pct == 100
     assert result.covered_count == 1
+    assert len(result.covered_components) == 1
+    assert result.covered_components[0].notion_page_urls == [
+        "https://notion.so/page-pay"
+    ]
+    assert result.covered_components[0].notion_sources == ["Payments Runbook"]
     assert result.gap_components == []
+
+
+def test_github_doc_pack_url_used_for_coverage_link(db, tenant):
+    _seed_component(db, tenant.id, component_id="comp-notion", name="empulse / notion-docs")
+    github_url = (
+        "https://github.com/org/empulse/blob/main/notion-docs/design/02-kra.md"
+    )
+    db.add(
+        NotionDocSnapshot(
+            tenant_id=tenant.id,
+            page_id="abc123",
+            title="KRA — Knowledge Risk Assessment",
+            page_url=github_url,
+            component_id="comp-notion",
+            page_kind="architecture",
+            last_edited_at=datetime.now(UTC) - timedelta(days=10),
+            is_stale=False,
+            is_archived=False,
+            computed_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+
+    with notion_ready(), patch(
+        "app.services.kra_metrics.has_github_sync",
+        return_value=True,
+    ), patch(
+        "app.services.kra_metrics.get_github_ownership",
+        return_value={"comp-notion": {"emp-1": 100.0}},
+    ), patch(
+        "app.services.kra_metrics.get_notion_component_sources",
+        return_value=["Notion: KRA — Knowledge Risk Assessment"],
+    ), patch(
+        "app.services.kra_metrics.get_github_activities",
+        return_value=[],
+    ):
+        result = compute_documentation_coverage(db, tenant.id)
+
+    covered = result.covered_components[0]
+    assert covered.notion_page_urls == [github_url]
+    assert covered.notion_sources == ["KRA — Knowledge Risk Assessment"]
 
 
 def test_recent_pr_makes_component_active(db, tenant):
@@ -321,5 +373,6 @@ def test_summary_endpoint_includes_documentation_coverage(client):
     assert "documentation_coverage" in payload
     doc = payload["documentation_coverage"]
     assert "coverage_pct" in doc
+    assert "covered_components" in doc
     assert "gap_components" in doc
     assert doc["data_completeness"]["notion"] in {"confirmed", "partial", "missing"}

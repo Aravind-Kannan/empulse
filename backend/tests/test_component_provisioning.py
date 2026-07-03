@@ -120,7 +120,7 @@ def test_provision_github_components_for_repo_monorepo(db, tenant):
     )
     assert len(components) == 2
     names = {component.name for component in components}
-    assert names == {"Backend", "Frontend"}
+    assert names == {"empulse / backend", "empulse / frontend"}
 
     refreshed = get_github_config(db, tenant.id)
     assert refreshed is not None

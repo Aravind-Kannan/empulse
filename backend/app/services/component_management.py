@@ -12,6 +12,7 @@ from app.models.operational import Assignment, Component, Employee, GitHubOwners
 from app.models.tenant import Tenant
 from app.services.cognee_ingest import ingest_org_chart_to_cognee
 from app.services.employee_ids import scope_component_id, tenant_prefix
+from app.services.github_component_display import github_provision_key
 from app.services.org_chart_read import load_org_chart
 
 logger = logging.getLogger(__name__)
@@ -24,15 +25,86 @@ def _tenant_scoped_prefix(tenant_id: uuid.UUID) -> str:
     return f"comp-{tenant_prefix(tenant_id)}-"
 
 
+def _assignment_counts(db: Session, tenant_id: uuid.UUID) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for component_id, in (
+        db.query(Assignment.component_id)
+        .filter(Assignment.tenant_id == tenant_id)
+        .all()
+    ):
+        counts[component_id] += 1
+    return counts
+
+
+def _pick_component_keeper(
+    group: list[Component],
+    *,
+    scoped_prefix: str,
+    assignment_counts: dict[str, int],
+) -> Component:
+    def rank(row: Component) -> tuple[int, int, int]:
+        return (
+            1 if row.id.startswith(scoped_prefix) else 0,
+            assignment_counts.get(row.id, 0),
+            len(row.id),
+        )
+
+    return max(group, key=rank)
+
+
+def _merge_component_duplicate(
+    db: Session,
+    tenant_id: uuid.UUID,
+    *,
+    keeper: Component,
+    duplicate: Component,
+) -> None:
+    keeper_assignments = {
+        row.employee_id
+        for row in db.query(Assignment)
+        .filter(
+            Assignment.tenant_id == tenant_id,
+            Assignment.component_id == keeper.id,
+        )
+        .all()
+    }
+    duplicate_assignments = (
+        db.query(Assignment)
+        .filter(
+            Assignment.tenant_id == tenant_id,
+            Assignment.component_id == duplicate.id,
+        )
+        .all()
+    )
+    for assignment in duplicate_assignments:
+        if assignment.employee_id in keeper_assignments:
+            db.delete(assignment)
+        else:
+            assignment.component_id = keeper.id
+            keeper_assignments.add(assignment.employee_id)
+
+    db.query(GitHubOwnershipSnapshot).filter(
+        GitHubOwnershipSnapshot.tenant_id == tenant_id,
+        GitHubOwnershipSnapshot.component_id == duplicate.id,
+    ).update(
+        {GitHubOwnershipSnapshot.component_id: keeper.id},
+        synchronize_session=False,
+    )
+    db.delete(duplicate)
+
+
 def consolidate_duplicate_components(db: Session, tenant_id: uuid.UUID) -> int:
-    """Merge unscoped duplicate components into tenant-scoped rows."""
+    """Merge duplicate auto-provisioned components (same name or same GitHub path)."""
     scoped_prefix = _tenant_scoped_prefix(tenant_id)
+    removed = 0
+
     rows = db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    assignment_counts = _assignment_counts(db, tenant_id)
+
     by_name: dict[str, list[Component]] = defaultdict(list)
     for row in rows:
         by_name[row.name].append(row)
 
-    removed = 0
     for group in by_name.values():
         if len(group) < 2:
             continue
@@ -40,23 +112,36 @@ def consolidate_duplicate_components(db: Session, tenant_id: uuid.UUID) -> int:
         unscoped = [row for row in group if not row.id.startswith(scoped_prefix)]
         if not scoped or not unscoped:
             continue
-        keeper = scoped[0]
+        keeper = _pick_component_keeper(
+            scoped, scoped_prefix=scoped_prefix, assignment_counts=assignment_counts
+        )
         for duplicate in unscoped:
-            db.query(Assignment).filter(
-                Assignment.tenant_id == tenant_id,
-                Assignment.component_id == duplicate.id,
-            ).update(
-                {Assignment.component_id: keeper.id},
-                synchronize_session=False,
+            _merge_component_duplicate(
+                db, tenant_id, keeper=keeper, duplicate=duplicate
             )
-            db.query(GitHubOwnershipSnapshot).filter(
-                GitHubOwnershipSnapshot.tenant_id == tenant_id,
-                GitHubOwnershipSnapshot.component_id == duplicate.id,
-            ).update(
-                {GitHubOwnershipSnapshot.component_id: keeper.id},
-                synchronize_session=False,
+            removed += 1
+
+    rows = db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    by_github_key: dict[str, list[Component]] = defaultdict(list)
+    for row in rows:
+        if not (row.description or "").startswith(AUTO_DESC_PREFIX):
+            continue
+        key = github_provision_key(row.description)
+        if key:
+            by_github_key[key].append(row)
+
+    for group in by_github_key.values():
+        if len(group) < 2:
+            continue
+        keeper = _pick_component_keeper(
+            group, scoped_prefix=scoped_prefix, assignment_counts=assignment_counts
+        )
+        for duplicate in group:
+            if duplicate.id == keeper.id:
+                continue
+            _merge_component_duplicate(
+                db, tenant_id, keeper=keeper, duplicate=duplicate
             )
-            db.delete(duplicate)
             removed += 1
 
     if removed:

@@ -15,6 +15,7 @@ from app.schemas.kra import (
     CriticalSpofComponent,
     CriticalSpofResult,
     DocumentationCoverageResult,
+    DocumentationCoveredComponent,
     DocumentationGapComponent,
     KraMetricCoverage,
     KraSummaryResponse,
@@ -29,12 +30,55 @@ from app.services.integration_telemetry import (
     hydrate_github_telemetry_from_db,
     hydrate_integration_telemetry,
     hydrate_notion_telemetry_from_db,
+    is_github_spof_component,
 )
 from app.services.integration_config_store import get_notion_config
 from app.services.notion_telemetry import utc_dt
 
 DOC_FRESHNESS_DAYS = 180
 GITHUB_ACTIVITY_DAYS = 90
+
+
+def _browser_doc_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    cleaned = url.strip()
+    if cleaned.startswith("http://") or cleaned.startswith("https://"):
+        return cleaned
+    return None
+
+
+def _strip_notion_source_prefix(label: str) -> str:
+    if label.lower().startswith("notion:"):
+        return label.split(":", 1)[1].strip() or label
+    return label
+
+
+def _component_doc_display(
+    linked_docs: list[NotionDocSnapshot],
+    telemetry_sources: list[str],
+) -> tuple[list[str], list[str]]:
+    """Return aligned doc labels and browser-openable URLs (freshest first)."""
+    if linked_docs:
+        ordered = sorted(
+            linked_docs,
+            key=lambda row: utc_dt(row.last_edited_at)
+            or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
+        labels: list[str] = []
+        urls: list[str] = []
+        for row in ordered:
+            url = _browser_doc_url(row.page_url)
+            if not url:
+                continue
+            labels.append(row.title)
+            urls.append(url)
+        if labels:
+            return labels, urls
+
+    labels = [_strip_notion_source_prefix(source) for source in telemetry_sources]
+    return labels, []
 
 
 _KRA_SUMMARY_CACHE_TTL_SECONDS = 300.0
@@ -91,14 +135,18 @@ def _is_critical_spof(
     owner_ids: set[str],
     bus_factors: dict[str, int],
     github_connected: bool,
+    github_ownership: dict[str, dict[str, float]],
 ) -> tuple[bool, bool]:
     if criticality != "tier1_revenue":
         return False, False
 
     github_verified = False
-    if github_connected and bus_factors.get(component_id, 99) <= 1:
-        github_verified = True
-        return True, github_verified
+    if github_connected:
+        contributors = github_ownership.get(component_id, {})
+        bus_factor = bus_factors.get(component_id)
+        if is_github_spof_component(contributors, bus_factor=bus_factor):
+            github_verified = bus_factor is not None and bus_factor <= 1
+            return True, github_verified
 
     if len(owner_ids) <= 1:
         return True, github_verified
@@ -114,6 +162,7 @@ def compute_critical_spof_count(
 
     github_connected = has_github_sync()
     bus_factors = get_all_bus_factors() if github_connected else {}
+    github_ownership = get_github_ownership() if github_connected else {}
     coverage = _coverage_for_github()
 
     employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
@@ -134,6 +183,7 @@ def compute_critical_spof_count(
             owner_ids=owner_ids,
             bus_factors=bus_factors,
             github_connected=github_connected,
+            github_ownership=github_ownership,
         )
         if not is_spof:
             continue
@@ -229,6 +279,7 @@ def _empty_documentation_coverage(coverage: KraMetricCoverage) -> DocumentationC
         coverage_pct=None,
         active_component_count=0,
         covered_count=0,
+        covered_components=[],
         gap_components=[],
         data_completeness=coverage,
     )
@@ -297,6 +348,7 @@ def compute_documentation_coverage(
 
     stale_cutoff = datetime.now(UTC) - timedelta(days=DOC_FRESHNESS_DAYS)
     covered_count = 0
+    covered_components: list[DocumentationCoveredComponent] = []
     gap_components: list[DocumentationGapComponent] = []
 
     for component in active_components:
@@ -305,7 +357,6 @@ def compute_documentation_coverage(
         documented = bool(telemetry_sources) or bool(linked_docs)
 
         last_edit: datetime | None = None
-        page_urls: list[str] = []
         if linked_docs:
             freshest = max(
                 linked_docs,
@@ -313,7 +364,13 @@ def compute_documentation_coverage(
                 or datetime.min.replace(tzinfo=UTC),
             )
             last_edit = utc_dt(freshest.last_edited_at)
-            page_urls = [row.page_url for row in linked_docs if row.page_url]
+
+        display_sources, page_urls = _component_doc_display(
+            linked_docs,
+            telemetry_sources,
+        )
+        if not display_sources and linked_docs:
+            display_sources = [row.title for row in linked_docs]
 
         is_fresh = False
         if documented and last_edit is not None:
@@ -323,11 +380,17 @@ def compute_documentation_coverage(
 
         if documented and is_fresh:
             covered_count += 1
+            covered_components.append(
+                DocumentationCoveredComponent(
+                    component_id=component.id,
+                    component_name=component.name,
+                    last_doc_edit=last_edit.isoformat() if last_edit else None,
+                    notion_sources=display_sources,
+                    notion_page_urls=page_urls,
+                )
+            )
             continue
 
-        display_sources = telemetry_sources or [
-            f"Notion: {row.title}" for row in linked_docs
-        ]
         gap_components.append(
             DocumentationGapComponent(
                 component_id=component.id,
@@ -343,11 +406,13 @@ def compute_documentation_coverage(
         )
 
     coverage_pct = round(100 * covered_count / len(active_components))
+    covered_components.sort(key=lambda row: row.component_name)
     gap_components.sort(key=lambda row: row.component_name)
     return DocumentationCoverageResult(
         coverage_pct=coverage_pct,
         active_component_count=len(active_components),
         covered_count=covered_count,
+        covered_components=covered_components,
         gap_components=gap_components,
         data_completeness=coverage,
     )

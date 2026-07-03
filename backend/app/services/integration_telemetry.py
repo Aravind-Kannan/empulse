@@ -52,6 +52,51 @@ _sync_timestamps: dict[str, str] = {}
 
 HIGH_PRIORITIES = frozenset({"Highest", "High", "Critical"})
 SPOF_OWNERSHIP_THRESHOLD = 85.0
+# Engineers at or above this share count as meaningful backup context.
+SPOF_BACKUP_CONTRIBUTOR_MIN = 20.0
+
+
+def is_github_spof_component(
+    contributors: dict[str, float],
+    *,
+    bus_factor: int | None = None,
+) -> bool:
+    """True when GitHub telemetry shows concentrated knowledge risk.
+
+    Bus factor ≤ 1 alone is not enough: blame-weighted DOA can mark one engineer
+    authoritative on most files while others maintain the same path with real
+    context (common on small teams). Require either dominant ownership (>85%) or
+    bus factor 1 with fewer than two meaningful contributors.
+    """
+    if not contributors:
+        return False
+    max_pct = max(contributors.values())
+    if max_pct > SPOF_OWNERSHIP_THRESHOLD:
+        return True
+    if bus_factor is None or bus_factor > 1:
+        return False
+    meaningful_count = sum(
+        1 for pct in contributors.values() if pct >= SPOF_BACKUP_CONTRIBUTOR_MIN
+    )
+    return meaningful_count < 2
+
+
+def spof_components_from_telemetry(
+    ownership: dict[str, dict[str, float]],
+    bus_factors: dict[str, int] | None = None,
+) -> set[str]:
+    """Derive GitHub SPOF component ids from ownership splits and bus factors."""
+    component_ids = set(ownership.keys())
+    if bus_factors:
+        component_ids |= set(bus_factors.keys())
+    return {
+        component_id
+        for component_id in component_ids
+        if is_github_spof_component(
+            ownership.get(component_id, {}),
+            bus_factor=(bus_factors or {}).get(component_id),
+        )
+    }
 
 
 def is_team_open_p1_issue(issue: JiraIssueActivity) -> bool:
@@ -466,8 +511,7 @@ def _compute_ownership_from_activities(
             for employee_id, loc in contributors.items()
         }
         if contributors:
-            max_pct = max(ownership[component_id].values())
-            if max_pct > SPOF_OWNERSHIP_THRESHOLD:
+            if is_github_spof_component(ownership[component_id]):
                 spof_components.add(component_id)
 
     for employee_id, ctx in employee_context.items():
@@ -541,10 +585,7 @@ def _load_ownership_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
     for row in rows:
         ownership[row.component_id][row.employee_id] = row.ownership_pct
 
-    spof_components: set[str] = set()
-    for component_id, contributors in ownership.items():
-        if contributors and max(contributors.values()) > SPOF_OWNERSHIP_THRESHOLD:
-            spof_components.add(component_id)
+    spof_components = spof_components_from_telemetry(ownership)
 
     _github_ownership.clear()
     _github_ownership.update(dict(ownership))
@@ -578,7 +619,6 @@ def _load_doa_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
 
     ownership: dict[str, dict[str, float]] = {}
     bus_factor: dict[str, int] = {}
-    spof_components: set[str] = set()
 
     for component_id, weights in contributor_weight.items():
         total = sum(weights.values()) or 1.0
@@ -586,10 +626,11 @@ def _load_doa_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
             employee_id: round((weight / total) * 100, 1)
             for employee_id, weight in weights.items()
         }
-        bf = compute_bus_factor(per_component_files.get(component_id, {}))
-        bus_factor[component_id] = bf
-        if bf <= 1:
-            spof_components.add(component_id)
+        bus_factor[component_id] = compute_bus_factor(
+            per_component_files.get(component_id, {})
+        )
+
+    spof_components = spof_components_from_telemetry(ownership, bus_factor)
 
     _github_ownership.clear()
     _github_ownership.update(ownership)
@@ -681,17 +722,10 @@ def apply_github_telemetry(
 
     if doa_result.ownership:
         ownership = doa_result.ownership
-        spof_components = {
-            component_id
-            for component_id, bf in doa_result.bus_factor_by_component.items()
-            if bf <= 1
-        }
-        if not spof_components:
-            spof_components = {
-                component_id
-                for component_id, contributors in ownership.items()
-                if contributors and max(contributors.values()) > SPOF_OWNERSHIP_THRESHOLD
-            }
+        spof_components = spof_components_from_telemetry(
+            ownership,
+            doa_result.bus_factor_by_component,
+        )
 
     _github_ownership.clear()
     _github_ownership.update(ownership)
@@ -762,17 +796,10 @@ def apply_github_blame_telemetry(
     _doa_decay_evidence = list(doa_result.decay_evidence)
 
     ownership = doa_result.ownership
-    spof_components = {
-        component_id
-        for component_id, bf in doa_result.bus_factor_by_component.items()
-        if bf <= 1
-    }
-    if not spof_components and ownership:
-        spof_components = {
-            component_id
-            for component_id, contributors in ownership.items()
-            if contributors and max(contributors.values()) > SPOF_OWNERSHIP_THRESHOLD
-        }
+    spof_components = spof_components_from_telemetry(
+        ownership,
+        doa_result.bus_factor_by_component,
+    )
 
     _github_ownership.clear()
     _github_ownership.update(ownership)

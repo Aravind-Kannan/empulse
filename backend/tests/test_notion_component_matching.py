@@ -6,50 +6,85 @@ from app.services.notion_client import match_component_for_document, parse_docum
 
 
 COMPONENT_NAMES = {
-    "comp-backend": "Aravind-Kannan/empulse / Backend",
-    "comp-design": "Aravind-Kannan/empulse / Design Docs",
-    "comp-frontend": "Aravind-Kannan/empulse / Frontend",
-    "comp-prompts": "Aravind-Kannan/empulse / Prompts",
+    "comp-backend": "empulse / backend",
+    "comp-design": "empulse / design-docs",
+    "comp-notion": "empulse / notion-docs",
+    "comp-frontend": "empulse / frontend",
+    "comp-prompts": "empulse / prompts",
 }
 
 PATH_MAP = {
     "backend/": "comp-backend",
     "design-docs/": "comp-design",
+    "notion-docs/": "comp-notion",
     "frontend/": "comp-frontend",
     "prompts/": "comp-prompts",
 }
 
 
-def test_path_prefix_links_notion_docs_design():
+COMPONENT_DESCRIPTIONS = {
+    "comp-backend": "AUTO:github:org/empulse:backend/",
+    "comp-design": "AUTO:github:org/empulse:design-docs/",
+    "comp-notion": "AUTO:github:org/empulse:notion-docs/",
+    "comp-frontend": "AUTO:github:org/empulse:frontend/",
+    "comp-prompts": "AUTO:github:org/empulse:prompts/",
+}
+
+
+def test_notion_docs_design_path_links_to_notion_component():
     component_id = match_component_for_document(
         "KRA — Knowledge Risk Assessment",
         path_hint="notion-docs/design/02-kra.md",
         component_names=COMPONENT_NAMES,
         path_component_map=PATH_MAP,
+        component_descriptions=COMPONENT_DESCRIPTIONS,
     )
-    assert component_id == "comp-design"
+    assert component_id == "comp-notion"
 
 
-def test_path_prefix_links_runbook_to_backend():
+def test_notion_docs_runbook_links_to_notion_component():
     component_id = match_component_for_document(
         "Integration sync",
         path_hint="notion-docs/runbooks/02-integration-sync.md",
         component_names=COMPONENT_NAMES,
         path_component_map=PATH_MAP,
+        component_descriptions=COMPONENT_DESCRIPTIONS,
     )
-    assert component_id == "comp-backend"
+    assert component_id == "comp-notion"
 
 
-def test_title_topic_links_kra_without_path():
+def test_design_docs_path_stays_on_design_component():
     component_id = match_component_for_document(
-        "KRA design notes",
+        "ERA Step 14 — DOA ownership",
+        path_hint="design-docs/era/step-14-doa-ownership.md",
         component_names=COMPONENT_NAMES,
         path_component_map=PATH_MAP,
+        component_descriptions=COMPONENT_DESCRIPTIONS,
     )
     assert component_id == "comp-design"
 
 
-def test_repo_pack_page_parsed_with_component():
+def test_title_without_path_matches_auto_tag_needles():
+    component_id = match_component_for_document(
+        "KRA design notes (notion docs)",
+        component_names=COMPONENT_NAMES,
+        path_component_map=PATH_MAP,
+        component_descriptions=COMPONENT_DESCRIPTIONS,
+    )
+    assert component_id == "comp-notion"
+
+
+def test_platform_overview_title_matches_notion_component_name():
+    component_id = match_component_for_document(
+        "Platform Overview — notion-docs pack",
+        component_names=COMPONENT_NAMES,
+        path_component_map=PATH_MAP,
+        component_descriptions=COMPONENT_DESCRIPTIONS,
+    )
+    assert component_id == "comp-notion"
+
+
+def test_repo_pack_page_parsed_with_notion_component():
     docs = parse_document_pages(
         [
             {
@@ -64,6 +99,7 @@ def test_repo_pack_page_parsed_with_component():
         ],
         component_names=COMPONENT_NAMES,
         path_component_map=PATH_MAP,
+        component_descriptions=COMPONENT_DESCRIPTIONS,
     )
     assert len(docs) == 1
-    assert docs[0]["component_id"] == "comp-design"
+    assert docs[0]["component_id"] == "comp-notion"

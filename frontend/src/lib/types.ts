@@ -494,6 +494,12 @@ export interface EraTeamRiskyChangesResponse {
 }
 
 
+export interface KraSpofReason {
+  kind: "single_owner" | "dominant_owner" | "low_bus_factor";
+  title: string;
+  detail: string;
+}
+
 export interface KraNode {
   id: string;
   label: string;
@@ -503,6 +509,8 @@ export interface KraNode {
   documentation_sources: string[];
   is_spof: boolean;
   github_verified_spof?: boolean;
+  bus_factor?: number | null;
+  spof_reasons?: KraSpofReason[];
 }
 
 export interface KraLink {
@@ -510,6 +518,7 @@ export interface KraLink {
   target: string;
   relationship: string;
   codebase_share_pct?: number | null;
+  ownership_source?: "github" | "org_chart" | null;
 }
 
 export interface KraAnalyticsResponse {
@@ -549,10 +558,19 @@ export interface DocumentationGapComponent {
   days_since_activity: number | null;
 }
 
+export interface DocumentationCoveredComponent {
+  component_id: string;
+  component_name: string;
+  last_doc_edit: string | null;
+  notion_sources: string[];
+  notion_page_urls: string[];
+}
+
 export interface DocumentationCoverageResult {
   coverage_pct: number | null;
   active_component_count: number;
   covered_count: number;
+  covered_components: DocumentationCoveredComponent[];
   gap_components: DocumentationGapComponent[];
   data_completeness: KraMetricCoverage;
 }
@@ -560,13 +578,6 @@ export interface DocumentationCoverageResult {
 export interface KraSummaryResponse {
   critical_spof: CriticalSpofResult;
   documentation_coverage: DocumentationCoverageResult;
-}
-
-export interface KraBackupAssignmentResponse {
-  component_id: string;
-  employee_id: string;
-  codebase_share_pct: number;
-  is_spof_resolved: boolean;
 }
 
 export type FileRiskQuadrant =

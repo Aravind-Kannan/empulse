@@ -587,6 +587,10 @@ async def process_external_app_sync(
             component_id: component.name
             for component_id, component in components_by_id.items()
         }
+        component_descriptions = {
+            component_id: component.description or ""
+            for component_id, component in components_by_id.items()
+        }
         github_config = get_github_config(db, tenant_id)
         path_component_map = dict(github_config.path_component_map or {}) if github_config else {}
         repo_doc_pages: list[dict] = []
@@ -611,6 +615,7 @@ async def process_external_app_sync(
                         repo_url,
                         component_names=component_names,
                         path_component_map=path_component_map,
+                        component_descriptions=component_descriptions,
                         branch=branch,
                     )
                 )
@@ -618,6 +623,7 @@ async def process_external_app_sync(
             repo_doc_pages = fetch_local_notion_doc_pack(
                 component_names=component_names,
                 path_component_map=path_component_map,
+                component_descriptions=component_descriptions,
             )
         if use_notion_fixture:
             pages, people_expertise = load_fixture_document_inventory()
@@ -628,6 +634,7 @@ async def process_external_app_sync(
                 config.database_ids or None,
                 component_names=component_names,
                 path_component_map=path_component_map,
+                component_descriptions=component_descriptions,
                 repo_doc_pages=repo_doc_pages,
             )
         employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()

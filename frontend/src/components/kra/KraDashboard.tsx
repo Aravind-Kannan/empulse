@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import Link from "next/link";
 
 import { fetchKraFileRisk, fetchKraGraph, fetchKraSummary, fetchOrgChart } from "@/lib/api";
+import { formatKraComponentLabel } from "@/lib/github-component-display";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import type {
   KraAnalyticsResponse,
@@ -24,7 +25,7 @@ export function KraDashboard() {
   const searchParams = useSearchParams();
   const highlightId = searchParams.get("highlight");
   const filterParam = searchParams.get("filter");
-  const { refreshMetrics, notifySpofResolved, operationalRevision } = useWorkspace();
+  const { operationalRevision } = useWorkspace();
   const [graph, setGraph] = useState<KraAnalyticsResponse | null>(null);
   const [summary, setSummary] = useState<KraSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -42,19 +43,6 @@ export function KraDashboard() {
   const [fileRiskLoading, setFileRiskLoading] = useState(false);
   const [matrixComponentId, setMatrixComponentId] = useState<string>("");
   const [orgChart, setOrgChart] = useState<OrgChartPayload | null>(null);
-
-  const loadGraph = useCallback(async () => {
-    const [graphData, summaryData] = await Promise.all([
-      fetchKraGraph(),
-      fetchKraSummary(),
-    ]);
-    setGraph(graphData);
-    setSummary(summaryData);
-    setSelectedComponent((prev) =>
-      prev ? graphData.nodes.find((n) => n.id === prev.id) ?? null : null,
-    );
-    await refreshMetrics();
-  }, [refreshMetrics]);
 
   useEffect(() => {
     setMounted(true);
@@ -262,12 +250,13 @@ export function KraDashboard() {
       />
 
       <KraDocGapPanel
+        covered={summary?.documentation_coverage?.covered_components ?? []}
         gaps={summary?.documentation_coverage?.gap_components ?? []}
         open={docGapPanelOpen}
         onClose={() => setDocGapPanelOpen(false)}
-        onSelectComponent={(gap) => {
+        onSelectComponent={(componentId) => {
           const node = graph.nodes.find(
-            (entry) => entry.id === gap.component_id && entry.type === "component",
+            (entry) => entry.id === componentId && entry.type === "component",
           );
           if (node) {
             setSelectedComponent(node);
@@ -305,7 +294,7 @@ export function KraDashboard() {
       {graph.nodes.length > 0 && (
       <div className="space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-sm font-medium text-zinc-200">File risk matrix</h2>
+          <h2 className="text-sm font-medium text-zinc-200">File ownership risk</h2>
           {componentNodes.length > 0 && (
             <select
               value={matrixComponentId}
@@ -314,7 +303,7 @@ export function KraDashboard() {
             >
               {componentNodes.map((node) => (
                 <option key={node.id} value={node.id}>
-                  {node.label}
+                  {formatKraComponentLabel(node)}
                 </option>
               ))}
             </select>
@@ -332,8 +321,8 @@ export function KraDashboard() {
             crossTrainingPriority={fileRisk?.cross_training_priority}
             title={
               fileRisk?.component_name
-                ? `File risk — ${fileRisk.component_name}`
-                : "File risk matrix"
+                ? `${fileRisk.component_name} — file ownership`
+                : "File ownership risk"
             }
           />
         )}
@@ -345,10 +334,6 @@ export function KraDashboard() {
           component={selectedComponent}
           graph={graph}
           onClose={() => setSelectedComponent(null)}
-          onAssigned={(spofResolved) => {
-            if (spofResolved) notifySpofResolved();
-            void loadGraph();
-          }}
         />
       )}
     </div>

@@ -24,8 +24,6 @@ from app.schemas.era import (
 from app.schemas.file_risk import EraHotspotsResponse, KraFileRiskResponse
 from app.schemas.kra import (
     KraAnalyticsResponse,
-    KraBackupAssignmentRequest,
-    KraBackupAssignmentResponse,
     KraSummaryResponse,
 )
 from app.services.era_analytics import (
@@ -47,11 +45,7 @@ from app.services.era_alerts import (
 )
 from app.services.era_settings_store import get_era_settings, save_era_settings
 from app.services.github_file_risk import get_employee_hotspots, get_kra_file_risk
-from app.services.kra_analytics import (
-    assign_backup_engineer,
-    get_kra_graph,
-    is_component_spof_resolved,
-)
+from app.services.kra_analytics import get_kra_graph
 from app.services.kra_metrics import get_kra_summary
 from app.tenancy import CurrentTenant
 
@@ -278,28 +272,3 @@ def kra_summary(
     db: Session = Depends(get_db),
 ) -> KraSummaryResponse:
     return get_kra_summary(db, tenant.id)
-
-
-@router.post("/kra/assign-backup", response_model=KraBackupAssignmentResponse)
-def kra_assign_backup(
-    payload: KraBackupAssignmentRequest,
-    tenant: CurrentTenant,
-    db: Session = Depends(get_db),
-) -> KraBackupAssignmentResponse:
-    try:
-        assign_backup_engineer(
-            db,
-            tenant=tenant,
-            component_id=payload.component_id,
-            employee_id=payload.employee_id,
-            codebase_share_pct=payload.codebase_share_pct,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    return KraBackupAssignmentResponse(
-        component_id=payload.component_id,
-        employee_id=payload.employee_id,
-        codebase_share_pct=payload.codebase_share_pct,
-        is_spof_resolved=is_component_spof_resolved(db, tenant, payload.component_id),
-    )

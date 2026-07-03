@@ -29,7 +29,6 @@ import type {
   InvestigationBaseMetadata,
   InvestigationDiagnostics,
   KraAnalyticsResponse,
-  KraBackupAssignmentResponse,
   KraFileRiskResponse,
   KraSummaryResponse,
   OrgChartIngestResponse,
@@ -535,29 +534,6 @@ export async function fetchKraSummary(): Promise<KraSummaryResponse> {
 
   if (!response.ok) {
     throw new Error(`Failed to load KRA summary (${response.status})`);
-  }
-
-  return response.json();
-}
-
-export async function assignKraBackup(payload: {
-  component_id: string;
-  employee_id: string;
-  codebase_share_pct?: number;
-}): Promise<KraBackupAssignmentResponse> {
-  const response = await apiFetch(`${API_BASE}/api/analytics/kra/assign-backup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => null);
-    const detail =
-      typeof errorBody?.detail === "string"
-        ? errorBody.detail
-        : `Backup assignment failed (${response.status})`;
-    throw new Error(detail);
   }
 
   return response.json();

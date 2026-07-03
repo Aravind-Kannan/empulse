@@ -397,46 +397,51 @@ def count_accessible_resources(token: str) -> tuple[int, int]:
 
 
 EXPERTISE_FIELD_HINTS = ("expertise", "skills", "specialt", "topic")
+from app.services.github_component_display import display_folder, parse_github_auto_tag
+
 DOC_FIELD_HINTS = ("runbook", "architecture", "playbook", "wiki", "doc", "handover")
 COMPONENT_FIELD_HINTS = ("component", "system", "service", "product", "area")
 OWNER_FIELD_HINTS = ("owner", "author", "maintainer", "doc owner")
 VERIFIED_FIELD_HINTS = ("last verified", "last_verified", "verified", "last reviewed")
 OWNERSHIP_TEMPLATE_HINTS = ("ownership transfer", "living runbook", "handover pack")
 
-# Design-doc titles → match partition suffix / path prefix when full component name won't hit.
-TITLE_TOPIC_HINTS: dict[str, tuple[str, ...]] = {
-    "kra": ("design docs", "design-docs", "design"),
-    "era": ("design docs", "design-docs", "design"),
-    "incident": ("design docs", "design-docs", "backend"),
-    "dashboard": ("design docs", "design-docs", "frontend"),
-    "integration": ("design docs", "design-docs", "backend"),
-    "onboarding": ("design docs", "design-docs", "frontend"),
-    "platform overview": ("design docs", "design-docs"),
-    "neo4j": ("backend", "design docs"),
-    "cognee": ("backend", "design docs"),
-    "local development": ("backend", "design docs"),
-    "troubleshooting": ("backend", "design docs"),
-    "runbook": ("backend", "design docs"),
-}
-
 
 def _extended_path_component_map(path_component_map: dict[str, str] | None) -> dict[str, str]:
+    """
+    Normalize tenant GitHub `path_component_map` prefixes from provisioning.
+
+    Nested repo paths (e.g. `notion-docs/design/foo.md`) resolve via longest-prefix
+    match — no repo-specific folder aliases.
+    """
     if not path_component_map:
         return {}
-    extended = dict(path_component_map)
-    design_id = path_component_map.get("design-docs/") or path_component_map.get("design-docs")
-    backend_id = path_component_map.get("backend/")
-    if design_id:
-        extended.setdefault("notion-docs/design/", design_id)
-        extended.setdefault("notion-docs/", design_id)
-    if backend_id:
-        extended.setdefault("notion-docs/runbooks/", backend_id)
+    extended: dict[str, str] = {}
+    for prefix, component_id in path_component_map.items():
+        cleaned = prefix.strip().strip("/")
+        if not cleaned:
+            continue
+        extended.setdefault(cleaned, component_id)
+        extended.setdefault(f"{cleaned}/", component_id)
     return extended
+
+
+def _auto_tag_match_needles(description: str | None) -> list[str]:
+    """Derive match needles from `AUTO:github:owner/repo:path/` component descriptions."""
+    parsed = parse_github_auto_tag(description)
+    if not parsed:
+        return []
+    folder = display_folder(parsed[1])
+    if not folder:
+        return []
+    needles = [folder, folder.replace("-", " "), folder.replace("/", " ")]
+    needles.extend(part for part in folder.split("/") if part)
+    return needles
 
 
 def _component_match_entries(
     component_names: dict[str, str],
     path_component_map: dict[str, str] | None = None,
+    component_descriptions: dict[str, str] | None = None,
 ) -> list[tuple[int, str, str]]:
     """Return (priority, needle, component_id) sorted highest priority first."""
     entries: list[tuple[int, str, str]] = []
@@ -451,6 +456,11 @@ def _component_match_entries(
             if suffix:
                 suffix_to_ids.setdefault(suffix, []).append(component_id)
                 entries.append((len(suffix) + 200, suffix, component_id))
+
+        for needle in _auto_tag_match_needles(
+            (component_descriptions or {}).get(component_id)
+        ):
+            entries.append((len(needle) + 210, needle.lower(), component_id))
 
     for suffix, ids in suffix_to_ids.items():
         slug = re.sub(r"[^a-z0-9]+", "-", suffix).strip("-")
@@ -476,6 +486,7 @@ def match_component_for_document(
     path_hint: str = "",
     component_names: dict[str, str],
     path_component_map: dict[str, str] | None = None,
+    component_descriptions: dict[str, str] | None = None,
 ) -> str | None:
     """Resolve a Notion page or repo doc path to an org component id."""
     haystack = f"{path_hint} {title}".lower().replace("_", " ").replace("-", " ")
@@ -497,17 +508,10 @@ def match_component_for_document(
     for priority, needle, component_id in _component_match_entries(
         component_names,
         path_component_map,
+        component_descriptions,
     ):
         if needle and needle in haystack:
             return component_id
-
-    for topic, hints in TITLE_TOPIC_HINTS.items():
-        if topic not in haystack:
-            continue
-        for hint in hints:
-            for component_id, name in component_names.items():
-                if hint in name.lower():
-                    return component_id
 
     return None
 
@@ -570,6 +574,7 @@ def parse_document_pages(
     *,
     component_names: dict[str, str],
     path_component_map: dict[str, str] | None = None,
+    component_descriptions: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Normalize wiki pages and database rows into doc inventory dicts."""
     docs: list[dict[str, Any]] = []
@@ -602,6 +607,7 @@ def parse_document_pages(
                 path_hint=path_hint,
                 component_names=component_names,
                 path_component_map=path_component_map,
+                component_descriptions=component_descriptions,
             )
 
         owner_prop = _find_property(props, *OWNER_FIELD_HINTS)
@@ -621,7 +627,9 @@ def parse_document_pages(
             {
                 "page_id": page_id,
                 "title": title,
-                "page_url": _page_url(page_id),
+                "page_url": str(
+                    page.get("page_url") or page.get("url") or _page_url(page_id)
+                ),
                 "last_edited_at": page.get("last_edited_time"),
                 "component_id": component_id,
                 "owner_emails": owner_emails,
@@ -644,6 +652,7 @@ def fetch_notion_document_inventory(
     *,
     component_names: dict[str, str],
     path_component_map: dict[str, str] | None = None,
+    component_descriptions: dict[str, str] | None = None,
     repo_doc_pages: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
@@ -677,6 +686,7 @@ def fetch_notion_document_inventory(
         search_pages + db_rows + list(repo_doc_pages or []),
         component_names=component_names,
         path_component_map=path_component_map,
+        component_descriptions=component_descriptions,
     )
     expertise = parse_people_expertise_rows(db_rows)
     return docs, expertise

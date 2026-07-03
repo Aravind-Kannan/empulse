@@ -5,6 +5,7 @@ import Link from "next/link";
 import type {
   CriticalSpofResult,
   DocumentationCoverageResult,
+  DocumentationCoveredComponent,
   DocumentationGapComponent,
 } from "@/lib/types";
 
@@ -151,7 +152,9 @@ function DocCoverageCard({
   const partial = coverage.data_completeness.is_partial;
   const pct = coverage.coverage_pct;
   const gapCount = coverage.gap_components.length;
-  const canShowGaps = !notionMissing && !notionPartial && pct !== null && gapCount > 0;
+  const coveredCount = coverage.covered_components.length;
+  const canOpenPanel =
+    !notionMissing && !notionPartial && pct !== null && coveredCount + gapCount > 0;
 
   if (notionMissing) {
     return (
@@ -205,19 +208,19 @@ function DocCoverageCard({
           ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/40"
           : "border-red-500/30 bg-red-500/5 hover:border-red-500/40";
 
-  const Wrapper = canShowGaps ? "button" : "div";
+  const Wrapper = canOpenPanel ? "button" : "div";
 
   return (
     <Wrapper
-      {...(canShowGaps
+      {...(canOpenPanel
         ? {
             type: "button" as const,
             onClick: onToggleGapPanel,
           }
         : {})}
       className={`min-w-[14rem] flex-1 rounded-xl border p-4 text-left transition ${
-        canShowGaps ? "hover:bg-zinc-900/60" : ""
-      } ${gapPanelOpen && canShowGaps ? "border-sky-500/40 bg-sky-500/5" : toneClass}`}
+        canOpenPanel ? "hover:bg-zinc-900/60" : ""
+      } ${gapPanelOpen && canOpenPanel ? "border-sky-500/40 bg-sky-500/5" : toneClass}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -249,11 +252,11 @@ function DocCoverageCard({
       </div>
       <p className="mt-1 text-xs text-zinc-500">
         {headline}
-        {canShowGaps && (
+        {canOpenPanel && (
           <>
             {" · "}
             <span className={gapPanelOpen ? "text-sky-300" : "text-zinc-400"}>
-              {gapPanelOpen ? "Hide gaps" : "View gaps"}
+              {gapPanelOpen ? "Hide details" : "View coverage"}
             </span>
           </>
         )}
@@ -263,13 +266,95 @@ function DocCoverageCard({
 }
 
 interface KraDocGapPanelProps {
+  covered: DocumentationCoveredComponent[];
   gaps: DocumentationGapComponent[];
   open: boolean;
   onClose: () => void;
-  onSelectComponent: (gap: DocumentationGapComponent) => void;
+  onSelectComponent: (componentId: string) => void;
+}
+
+function formatDocAge(lastEdit: string | null): string | null {
+  if (!lastEdit) return null;
+  const days = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(lastEdit).getTime()) / 86400000),
+  );
+  return `${days}d ago`;
+}
+
+function resolveDocLink(
+  sources: string[],
+  urls: string[],
+): { label: string; url: string | null } {
+  const url = urls.find((entry) => entry.startsWith("http")) ?? null;
+  const rawLabel = sources[0]?.replace(/^Notion:\s*/i, "").trim() ?? "";
+  const label = rawLabel || "Documentation";
+  return { label, url };
+}
+
+function DocCoverageRow({
+  componentId,
+  componentName,
+  statusLabel,
+  statusClass,
+  sources,
+  urls,
+  onSelectComponent,
+  showStatus = true,
+  showDocumentation = true,
+}: {
+  componentId: string;
+  componentName: string;
+  statusLabel?: string;
+  statusClass?: string;
+  sources: string[];
+  urls: string[];
+  onSelectComponent: (componentId: string) => void;
+  showStatus?: boolean;
+  showDocumentation?: boolean;
+}) {
+  const doc = showDocumentation ? resolveDocLink(sources, urls) : null;
+
+  return (
+    <tr className="border-b border-zinc-800/60 hover:bg-zinc-900/40">
+      <td className="py-3 pr-3 align-top">
+        <button
+          type="button"
+          onClick={() => onSelectComponent(componentId)}
+          className="font-medium text-zinc-200 hover:text-sky-300"
+        >
+          {componentName}
+        </button>
+      </td>
+      {showStatus && (
+        <td className={`py-3 pr-3 align-top ${statusClass ?? ""}`}>
+          {statusLabel}
+        </td>
+      )}
+      {showDocumentation && doc && (
+        <td className="py-3 align-top">
+          {doc.url ? (
+            <a
+              href={doc.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sky-400 hover:text-sky-300"
+            >
+              {doc.label}
+            </a>
+          ) : doc.label ? (
+            <span className="text-zinc-400">{doc.label}</span>
+          ) : (
+            <span className="text-zinc-600">—</span>
+          )}
+        </td>
+      )}
+    </tr>
+  );
 }
 
 export function KraDocGapPanel({
+  covered,
   gaps,
   open,
   onClose,
@@ -277,11 +362,13 @@ export function KraDocGapPanel({
 }: KraDocGapPanelProps) {
   if (!open) return null;
 
+  const totalCount = covered.length + gaps.length;
+
   return (
     <>
       <button
         type="button"
-        aria-label="Close gap panel"
+        aria-label="Close coverage panel"
         className="fixed inset-0 z-30 bg-black/40"
         onClick={onClose}
       />
@@ -289,10 +376,10 @@ export function KraDocGapPanel({
         <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-zinc-500">
-              Documentation gaps
+              Documentation coverage
             </p>
             <h2 className="text-lg font-semibold text-zinc-100">
-              Uncovered active systems
+              Active systems ({totalCount})
             </h2>
           </div>
           <button
@@ -303,70 +390,77 @@ export function KraDocGapPanel({
             Close
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          {gaps.length === 0 ? (
-            <p className="text-sm text-zinc-500">All active systems are covered.</p>
-          ) : (
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
-                  <th className="pb-2 pr-3 font-medium">Component</th>
-                  <th className="pb-2 pr-3 font-medium">Status</th>
-                  <th className="pb-2 font-medium">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {gaps.map((gap) => (
-                  <tr
-                    key={gap.component_id}
-                    className="border-b border-zinc-800/60 hover:bg-zinc-900/40"
-                  >
-                    <td className="py-3 pr-3">
-                      <button
-                        type="button"
-                        onClick={() => onSelectComponent(gap)}
-                        className="font-medium text-zinc-200 hover:text-sky-300"
-                      >
-                        {gap.component_name}
-                      </button>
-                    </td>
-                    <td className="py-3 pr-3 text-zinc-400">
-                      {gap.gap_reason === "missing" ? (
-                        "Missing runbook"
-                      ) : (
-                        <>
-                          Stale
-                          {gap.last_doc_edit
-                            ? ` (${Math.max(
-                                0,
-                                Math.floor(
-                                  (Date.now() -
-                                    new Date(gap.last_doc_edit).getTime()) /
-                                    86400000,
-                                ),
-                              )}d)`
-                            : ""}
-                        </>
-                      )}
-                    </td>
-                    <td className="py-3">
-                      {gap.gap_reason === "stale" && gap.notion_page_urls[0] ? (
-                        <a
-                          href={gap.notion_page_urls[0]}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-sky-400 hover:text-sky-300"
-                        >
-                          Open Notion
-                        </a>
-                      ) : (
-                        <span className="text-zinc-600">—</span>
-                      )}
-                    </td>
+        <div className="flex-1 overflow-y-auto p-4 space-y-8">
+          {covered.length > 0 && (
+            <section>
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-emerald-400/90">
+                Covered ({covered.length})
+              </h3>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
+                    <th className="pb-2 pr-3 font-medium">Component</th>
+                    <th className="pb-2 font-medium">Documentation</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {covered.map((item) => (
+                    <DocCoverageRow
+                      key={item.component_id}
+                      componentId={item.component_id}
+                      componentName={item.component_name}
+                      sources={item.notion_sources}
+                      urls={item.notion_page_urls}
+                      onSelectComponent={onSelectComponent}
+                      showStatus={false}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
+          {gaps.length > 0 && (
+            <section>
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-amber-400/90">
+                Uncovered ({gaps.length})
+              </h3>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
+                    <th className="pb-2 pr-3 font-medium">Component</th>
+                    <th className="pb-2 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {gaps.map((gap) => (
+                    <DocCoverageRow
+                      key={gap.component_id}
+                      componentId={gap.component_id}
+                      componentName={gap.component_name}
+                      statusLabel={
+                        gap.gap_reason === "missing"
+                          ? "Missing runbook"
+                          : `Stale${
+                              gap.last_doc_edit
+                                ? ` (${formatDocAge(gap.last_doc_edit) ?? ""})`
+                                : ""
+                            }`
+                      }
+                      statusClass="text-amber-300/90"
+                      sources={gap.notion_sources}
+                      urls={gap.notion_page_urls}
+                      onSelectComponent={onSelectComponent}
+                      showDocumentation={false}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
+          {totalCount === 0 && (
+            <p className="text-sm text-zinc-500">No active systems to score.</p>
           )}
         </div>
       </aside>

@@ -185,6 +185,7 @@ def fetch_github_notion_doc_pack(
     *,
     component_names: dict[str, str],
     path_component_map: dict[str, str] | None = None,
+    component_descriptions: dict[str, str] | None = None,
     branch: str = "main",
 ) -> list[dict[str, Any]]:
     """
@@ -237,6 +238,7 @@ def fetch_github_notion_doc_pack(
             path_hint=path,
             component_names=component_names,
             path_component_map=path_component_map,
+            component_descriptions=component_descriptions,
         )
         page_id = hashlib.sha256(f"github:{owner}/{repo}:{path}".encode()).hexdigest()[:32]
         docs.append(
@@ -262,6 +264,7 @@ def fetch_local_notion_doc_pack(
     *,
     component_names: dict[str, str],
     path_component_map: dict[str, str] | None = None,
+    component_descriptions: dict[str, str] | None = None,
     root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Read `notion-docs/**/*.md` from the Empulse repo checkout (dev fallback)."""
@@ -283,6 +286,7 @@ def fetch_local_notion_doc_pack(
             path_hint=rel,
             component_names=component_names,
             path_component_map=path_component_map,
+            component_descriptions=component_descriptions,
         )
         page_id = hashlib.sha256(f"local:{rel}".encode()).hexdigest()[:32]
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat()
