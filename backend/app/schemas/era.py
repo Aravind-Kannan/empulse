@@ -333,3 +333,30 @@ class EraSettingsUpdateRequest(BaseModel):
     slack_webhook_enabled: bool | None = None
     unmapped_threshold: int | None = Field(default=None, ge=1)
     review_cadence_days: int | None = Field(default=None, ge=1)
+
+
+class EraOpenP1IssueItem(BaseModel):
+    issue_key: str
+    summary: str
+    priority: str
+    status: str
+    project_key: str
+    issue_type: str
+    issue_url: str | None = None
+    updated_at: datetime | None = None
+    assignee_employee_id: str | None = None
+    assignee_name: str | None = None
+    assignee_unmapped: bool = False
+    component_id: str | None = None
+    component_name: str | None = None
+
+
+class EraOpenP1IssuesResponse(BaseModel):
+    computed_at: datetime
+    jira_synced: bool = False
+    total_count: int = Field(ge=0)
+    issues: list[EraOpenP1IssueItem] = Field(default_factory=list)
+    filters_note: str = (
+        "Bugs and incidents from the latest Jira sync with Critical, Highest, or High "
+        "priority that are not Done (same scope as the Open P1 KPI)."
+    )

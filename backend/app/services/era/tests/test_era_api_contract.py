@@ -136,3 +136,25 @@ def test_v2_metrics_with_persisted_employees(db, tenant):
     assert len(response.employees) == 1
     assert response.employees[0].identity_coverage
     assert response.employees[0].dimensions is not None
+
+
+def test_era_open_p1_issues_endpoint(db, tenant, client):
+    from app.services.integration_telemetry import apply_jira_telemetry
+    from app.services.jira_client import load_fixture_issues
+    from app.services.era_analytics import get_era_open_p1_issues
+
+    from tests.test_jira_telemetry import _seed
+
+    _seed(db, tenant.id)
+    apply_jira_telemetry(db, tenant.id, load_fixture_issues())
+
+    service = get_era_open_p1_issues(db, tenant)
+    response = client.get("/api/analytics/era/open-p1-issues")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_count"] == service.total_count
+    assert len(payload["issues"]) == service.total_count
+    if service.total_count:
+        issue = payload["issues"][0]
+        assert "issue_key" in issue
+        assert "priority" in issue

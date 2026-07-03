@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.operational import Assignment, Component, Employee
+from app.models.operational import Assignment, Component, Employee, EmployeeIdentity
 from app.schemas.era import (
     EraAffectedComponent,
     EraAnalyticsResponse,
@@ -18,6 +18,8 @@ from app.schemas.era import (
     EraRecoveryEstimate,
     EraReviewNetworkEdge,
     EraReviewNetworkMetrics,
+    EraOpenP1IssueItem,
+    EraOpenP1IssuesResponse,
     EraReviewNetworkResponse,
     EraRiskyChangeItem,
     EraTeamRiskyChangesResponse,
@@ -1050,4 +1052,64 @@ def get_era_team_risky_changes(
         computed_at=datetime.now(UTC),
         window_days=network.window_days if network else window_days,
         items=items,
+    )
+
+
+def get_era_open_p1_issues(db: Session, tenant) -> EraOpenP1IssuesResponse:
+    from app.services.integration_telemetry import has_jira_sync, list_team_open_p1_issues
+
+    raw_issues = list_team_open_p1_issues(db, tenant.id)
+    component_names = {
+        row.id: row.name
+        for row in db.query(Component).filter(Component.tenant_id == tenant.id).all()
+    }
+    employee_names = {
+        row.id: row.name
+        for row in db.query(Employee).filter(Employee.tenant_id == tenant.id).all()
+    }
+    jira_identities = {
+        row.provider_username_or_id: row.employee_id
+        for row in db.query(EmployeeIdentity).filter(
+            EmployeeIdentity.tenant_id == tenant.id,
+            EmployeeIdentity.provider == "jira",
+        ).all()
+    }
+
+    items: list[EraOpenP1IssueItem] = []
+    for issue in raw_issues:
+        assignee_employee_id: str | None = None
+        assignee_name: str | None = None
+        assignee_unmapped = False
+        if issue.assignee_provider_user_id:
+            assignee_employee_id = jira_identities.get(issue.assignee_provider_user_id)
+            if assignee_employee_id:
+                assignee_name = employee_names.get(assignee_employee_id)
+            else:
+                assignee_unmapped = True
+
+        items.append(
+            EraOpenP1IssueItem(
+                issue_key=issue.issue_key,
+                summary=issue.summary,
+                priority=issue.priority,
+                status=issue.status,
+                project_key=issue.project_key,
+                issue_type=issue.issue_type,
+                issue_url=issue.issue_url,
+                updated_at=issue.updated_at,
+                assignee_employee_id=assignee_employee_id,
+                assignee_name=assignee_name,
+                assignee_unmapped=assignee_unmapped,
+                component_id=issue.component_id,
+                component_name=component_names.get(issue.component_id)
+                if issue.component_id
+                else None,
+            )
+        )
+
+    return EraOpenP1IssuesResponse(
+        computed_at=datetime.now(UTC),
+        jira_synced=has_jira_sync(),
+        total_count=len(items),
+        issues=items,
     )

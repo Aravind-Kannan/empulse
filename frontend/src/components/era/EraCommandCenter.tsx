@@ -11,6 +11,7 @@ import type { EraAnalyticsResponse, EraDimensionKey, EraEmployeeMetrics } from "
 
 import { EraCommandHeader } from "./EraCommandHeader";
 import { EraNotificationsDrawer } from "./EraNotificationsDrawer";
+import { EraOpenP1Drawer } from "./EraOpenP1Drawer";
 import { EraDetailDrawer } from "./EraDetailDrawer";
 import { EraEmployeePreview } from "./EraEmployeePreview";
 import { EraEvidenceFeed } from "./EraEvidenceFeed";
@@ -37,6 +38,7 @@ export function EraCommandCenter() {
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [openP1DrawerOpen, setOpenP1DrawerOpen] = useState(false);
   const [alertsRefreshKey, setAlertsRefreshKey] = useState(0);
 
   const openDrawer = useCallback(
@@ -233,6 +235,7 @@ export function EraCommandCenter() {
         summary={data.team_summary}
         integrationCount={integrationCount}
         teamHistory={data.team_risk_history_30d ?? []}
+        onOpenP1Issues={() => setOpenP1DrawerOpen(true)}
       />
 
       <EraRiskHeatmap
@@ -271,6 +274,13 @@ export function EraCommandCenter() {
           openDrawer(employeeId);
         }}
       />
+
+      {openP1DrawerOpen && (
+        <EraOpenP1Drawer
+          open={openP1DrawerOpen}
+          onClose={() => setOpenP1DrawerOpen(false)}
+        />
+      )}
 
       {notificationsOpen && (
         <EraNotificationsDrawer

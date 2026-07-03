@@ -10,6 +10,7 @@ interface EraKpiStripProps {
   integrationCount: number;
   teamHistory?: EraRiskHistoryPoint[];
   loading?: boolean;
+  onOpenP1Issues?: () => void;
 }
 
 function SkeletonCard() {
@@ -27,11 +28,12 @@ export function EraKpiStrip({
   integrationCount,
   teamHistory = [],
   loading = false,
+  onOpenP1Issues,
 }: EraKpiStripProps) {
   if (loading) {
     return (
       <div className="flex gap-3 overflow-x-auto pb-1">
-        {Array.from({ length: 9 }).map((_, index) => (
+        {Array.from({ length: 6 }).map((_, index) => (
           <SkeletonCard key={index} />
         ))}
       </div>
@@ -87,46 +89,35 @@ export function EraKpiStrip({
         <p className="mt-1 text-xs text-fuchsia-400/80">components → KRA</p>
       </Link>
 
-      <div className="min-w-[9.5rem] flex-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <p className="text-xs uppercase tracking-wide text-zinc-500">Open P1</p>
-        <p className="mt-1 text-2xl font-semibold text-zinc-100">
-          {summary.open_p1_count}
-        </p>
-        <p className="mt-1 text-xs text-zinc-500">issues</p>
-      </div>
-
-      <Link
-        href="/kra"
-        className={`min-w-[9.5rem] flex-1 rounded-xl border p-4 transition hover:bg-zinc-900/60 ${
-          (summary.critical_hotspot_count ?? 0) > 0
-            ? "border-red-500/30 bg-red-500/5 hover:border-red-500/40"
-            : "border-zinc-800 bg-zinc-900/40 hover:border-orange-500/40"
-        }`}
-      >
-        <p className="text-xs uppercase tracking-wide text-zinc-500">
-          Critical hotspots
-        </p>
-        <p
-          className={`mt-1 text-2xl font-semibold ${
-            (summary.critical_hotspot_count ?? 0) > 0
-              ? "text-red-300"
-              : "text-zinc-100"
+      {onOpenP1Issues ? (
+        <button
+          type="button"
+          onClick={onOpenP1Issues}
+          className={`min-w-[9.5rem] flex-1 rounded-xl border p-4 text-left transition hover:bg-zinc-900/60 ${
+            summary.open_p1_count > 0
+              ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/40"
+              : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-700"
           }`}
         >
-          {summary.critical_hotspot_count ?? 0}
-        </p>
-        <p className="mt-1 text-xs text-zinc-500">files in matrix</p>
-      </Link>
-
-      <div className="min-w-[9.5rem] flex-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <p className="text-xs uppercase tracking-wide text-zinc-500">
-          Undocumented
-        </p>
-        <p className="mt-1 text-2xl font-semibold text-zinc-100">
-          {summary.undocumented_incident_count}
-        </p>
-        <p className="mt-1 text-xs text-zinc-500">incidents</p>
-      </div>
+          <p className="text-xs uppercase tracking-wide text-zinc-500">Open P1</p>
+          <p
+            className={`mt-1 text-2xl font-semibold ${
+              summary.open_p1_count > 0 ? "text-amber-200" : "text-zinc-100"
+            }`}
+          >
+            {summary.open_p1_count}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">issues · view list</p>
+        </button>
+      ) : (
+        <div className="min-w-[9.5rem] flex-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <p className="text-xs uppercase tracking-wide text-zinc-500">Open P1</p>
+          <p className="mt-1 text-2xl font-semibold text-zinc-100">
+            {summary.open_p1_count}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">issues</p>
+        </div>
+      )}
 
       <div
         className={`min-w-[9.5rem] flex-1 rounded-xl border p-4 ${
@@ -143,18 +134,6 @@ export function EraKpiStrip({
         </p>
         <p className="mt-1 text-xs text-zinc-500">
           {summary.org_health_caution ? "Small team — interpret with caution" : "team resilience"}
-        </p>
-      </div>
-
-      <div className="min-w-[9.5rem] flex-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <p className="text-xs uppercase tracking-wide text-zinc-500">Orphan files</p>
-        <p className="mt-1 text-2xl font-semibold text-zinc-100">
-          {summary.orphan_file_count ?? 0}
-        </p>
-        <p className="mt-1 text-xs text-zinc-500">
-          {(summary.orphan_delta_90d ?? 0) > 0
-            ? `+${summary.orphan_delta_90d} vs 90d ago`
-            : "no owner >75% DOA"}
         </p>
       </div>
 

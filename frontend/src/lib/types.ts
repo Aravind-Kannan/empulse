@@ -241,6 +241,30 @@ export interface EraAlertsResponse {
   unacknowledged_count: number;
 }
 
+export interface EraOpenP1IssueItem {
+  issue_key: string;
+  summary: string;
+  priority: string;
+  status: string;
+  project_key: string;
+  issue_type: string;
+  issue_url?: string | null;
+  updated_at?: string | null;
+  assignee_employee_id?: string | null;
+  assignee_name?: string | null;
+  assignee_unmapped: boolean;
+  component_id?: string | null;
+  component_name?: string | null;
+}
+
+export interface EraOpenP1IssuesResponse {
+  computed_at: string;
+  jira_synced: boolean;
+  total_count: number;
+  issues: EraOpenP1IssueItem[];
+  filters_note: string;
+}
+
 export interface EraTeamReviewItem {
   id: number;
   reviewed_at: string;

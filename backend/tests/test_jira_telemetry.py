@@ -88,12 +88,17 @@ def test_apply_jira_telemetry_unassigned_p1_boost(db, tenant):
 
 
 def test_count_team_open_p1_issues(db, tenant):
-    from app.services.integration_telemetry import count_team_open_p1_issues
+    from app.services.integration_telemetry import (
+        count_team_open_p1_issues,
+        list_team_open_p1_issues,
+    )
 
     _seed(db, tenant.id)
     issues = load_fixture_issues()
     apply_jira_telemetry(db, tenant.id, issues)
     assert count_team_open_p1_issues() > 0
+    listed = list_team_open_p1_issues()
+    assert len(listed) == count_team_open_p1_issues()
 
 
 def test_unassigned_p1_by_component_matches_telemetry_rules(db, tenant):

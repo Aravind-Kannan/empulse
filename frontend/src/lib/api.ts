@@ -9,6 +9,7 @@ import type {
   EraMitigationItem,
   EraAlertItem,
   EraAlertsResponse,
+  EraOpenP1IssuesResponse,
   EraReviewCadenceResponse,
   EraSettings,
   EraTeamReviewItem,
@@ -294,6 +295,16 @@ export async function fetchEraMetrics(): Promise<EraAnalyticsResponse> {
     throw new Error(`Failed to load ERA metrics (${response.status})`);
   }
 
+  return response.json();
+}
+
+export async function fetchEraOpenP1Issues(): Promise<EraOpenP1IssuesResponse> {
+  const response = await apiFetch(`${API_BASE}/api/analytics/era/open-p1-issues`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load open P1 issues (${response.status})`);
+  }
   return response.json();
 }
 

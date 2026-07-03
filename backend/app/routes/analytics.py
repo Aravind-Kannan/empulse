@@ -11,6 +11,7 @@ from app.schemas.era import (
     EraEvidenceMitigationPatchRequest,
     EraEvidenceMitigationPatchResponse,
     EraManagerRollupResponse,
+    EraOpenP1IssuesResponse,
     EraReviewCadenceResponse,
     EraReviewNetworkResponse,
     EraSettingsResponse,
@@ -31,6 +32,7 @@ from app.services.era_analytics import (
     get_era_employee_detail,
     get_era_manager_rollup,
     get_era_metrics,
+    get_era_open_p1_issues,
     get_era_review_network,
     get_era_team_risky_changes,
     patch_era_evidence_mitigation,
@@ -181,6 +183,14 @@ def patch_era_evidence_mitigation_route(
         mitigation_notes=row.mitigation_notes,
         updated_at=row.updated_at,
     )
+
+
+@router.get("/era/open-p1-issues", response_model=EraOpenP1IssuesResponse)
+def era_open_p1_issues(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> EraOpenP1IssuesResponse:
+    return get_era_open_p1_issues(db, tenant)
 
 
 @router.get("/era/rollup", response_model=EraManagerRollupResponse)

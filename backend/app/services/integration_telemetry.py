@@ -50,8 +50,15 @@ _slack_escalation_warnings: list[dict] = []
 _slack_threads_cache: list = []
 _sync_timestamps: dict[str, str] = {}
 
-HIGH_PRIORITIES = {"High", "Critical"}
+HIGH_PRIORITIES = frozenset({"Highest", "High", "Critical"})
 SPOF_OWNERSHIP_THRESHOLD = 85.0
+
+
+def is_team_open_p1_issue(issue: JiraIssueActivity) -> bool:
+    """Open bug/incident-style issue counted in ERA Open P1 KPI."""
+    if issue.is_done or issue.is_subtask:
+        return False
+    return issue.priority in HIGH_PRIORITIES
 
 
 def _parse_cache_datetime(value: object) -> datetime | None:
@@ -307,7 +314,7 @@ def apply_jira_telemetry(
 
         if assignee_id and not issue.is_subtask:
             employee_open_tasks[assignee_id] += 1
-            if issue.is_high_priority and issue.priority in priorities:
+            if is_team_open_p1_issue(issue):
                 employee_open_p1_p2[assignee_id] += 1
             if issue.issue_type.lower() == "epic":
                 employee_epics[assignee_id] += 1
@@ -319,7 +326,7 @@ def apply_jira_telemetry(
         if component_id:
             if assignee_id and not issue.is_subtask:
                 component_open_tasks[component_id] += 1
-            if issue.is_bug_or_incident and issue.is_high_priority and issue.priority in priorities:
+            if issue.is_bug_or_incident and is_team_open_p1_issue(issue):
                 component_unresolved[component_id] += 1
 
         is_unassigned_boost_candidate = (
@@ -798,21 +805,32 @@ def get_cached_jira_issues() -> list[JiraIssueActivity]:
     return list(_jira_issues_cache)
 
 
-def count_team_open_p1_issues(
-    *,
-    high_priorities: set[str] | None = None,
-) -> int:
-    """Count open high-priority Jira issues (P1/P2) across the team."""
+def count_team_open_p1_issues() -> int:
+    """Count open high-priority Jira issues across the team."""
     if not _jira_synced:
         return 0
-    priorities = high_priorities or HIGH_PRIORITIES
-    count = 0
-    for issue in _jira_issues_cache:
-        if issue.is_done or issue.is_subtask:
-            continue
-        if issue.is_high_priority and issue.priority in priorities:
-            count += 1
-    return count
+    return sum(1 for issue in _jira_issues_cache if is_team_open_p1_issue(issue))
+
+
+def list_team_open_p1_issues(
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
+) -> list[JiraIssueActivity]:
+    """List open high-priority issues from the Jira telemetry cache."""
+    if not _jira_synced and db is not None and tenant_id is not None:
+        hydrate_jira_telemetry_from_db(db, tenant_id)
+    if not _jira_synced:
+        return []
+    issues = [issue for issue in _jira_issues_cache if is_team_open_p1_issue(issue)]
+    issues.sort(
+        key=lambda row: (
+            {"Critical": 0, "Highest": 1, "High": 2}.get(row.priority, 9),
+            -(
+                (row.updated_at or datetime.min.replace(tzinfo=UTC)).timestamp()
+            ),
+        ),
+    )
+    return issues
 
 
 def get_unassigned_p1_by_component(
