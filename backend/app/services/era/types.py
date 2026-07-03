@@ -52,3 +52,4 @@ class EraScoreResult:
     partial_dimensions: dict[DimensionKey, bool] = field(default_factory=dict)
     evidence_total_count: int = 0
     all_evidence: list[dict] = field(default_factory=list)
+    dimension_summaries: dict[str, dict] = field(default_factory=dict)

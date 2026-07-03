@@ -9,6 +9,8 @@ from app.schemas.era import (
     EraAffectedComponent,
     EraAnalyticsResponse,
     EraDimensions,
+    EraDimensionFactorSummary,
+    EraDimensionSummary,
     EraEmployeeDetailResponse,
     EraEmployeeMetrics,
     EraEvidenceItem,
@@ -303,6 +305,25 @@ def _metrics_from_counts(
     )
 
 
+def _dimension_summaries_to_models(
+    raw: dict[str, dict] | None,
+) -> dict[str, EraDimensionSummary]:
+    if not raw:
+        return {}
+    return {
+        key: EraDimensionSummary(
+            score=summary.get("score", 0.0),
+            partial=summary.get("partial", False),
+            headline=summary.get("headline", ""),
+            top_factors=[
+                EraDimensionFactorSummary(**factor)
+                for factor in summary.get("top_factors", [])
+            ],
+        )
+        for key, summary in raw.items()
+    }
+
+
 def _score_result_to_metrics(
     signals,
     score_result,
@@ -342,6 +363,9 @@ def _score_result_to_metrics(
         risk_level=score_result.risk_level,
         jira_backlog_boost=signals.jira_backlog_boost,
         dimensions=dimensions,
+        dimension_summaries=_dimension_summaries_to_models(
+            score_result.dimension_summaries
+        ),
         evidence=evidence,
         evidence_total_count=score_result.evidence_total_count,
         affected_components=affected_components or [],

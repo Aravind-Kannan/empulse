@@ -14,6 +14,7 @@ from app.services.era.dimensions import (
     compute_operational,
     compute_structural,
 )
+from app.services.era.dimension_summaries import build_dimension_summaries
 from app.services.era.evidence import build_evidence_items
 from app.services.era.normalize import TenantPercentiles
 from app.services.era.signals import EmployeeSignals
@@ -92,4 +93,5 @@ def score_employee(
             dimensions["documentation"],
         ),
         partial_dimensions=partial_dimensions,
+        dimension_summaries=build_dimension_summaries(dimension_results),
     )

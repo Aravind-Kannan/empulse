@@ -4,7 +4,7 @@ import type { EraEmployeeMetrics } from "@/lib/types";
 
 import { EraDimensionRadar } from "./EraDimensionRadar";
 import { EraEvidenceCard } from "./EraEvidenceCard";
-import { dimensionValue } from "./era-utils";
+import { buildCompositeRiskSentence, dimensionValue } from "./era-utils";
 
 interface EraEmployeePreviewProps {
   employee: EraEmployeeMetrics | null;
@@ -75,6 +75,10 @@ export function EraEmployeePreview({
           <p className="text-xs text-zinc-500">{employee.role}</p>
         </div>
       </div>
+
+      <p className="mt-3 text-xs leading-relaxed text-zinc-400">
+        {buildCompositeRiskSentence(employee)}
+      </p>
 
       <div className="mt-4">
         <EraDimensionRadar dimensions={dimensions} size={160} />

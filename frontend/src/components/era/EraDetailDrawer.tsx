@@ -5,26 +5,33 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, X } from "lucide-react";
 
 import { fetchEraEmployeeDetail } from "@/lib/api";
-import type { EraAnalyticsResponse, EraEmployeeDetailResponse } from "@/lib/types";
+import type {
+  EraAnalyticsResponse,
+  EraDimensionKey,
+  EraEmployeeDetailResponse,
+} from "@/lib/types";
 
 import { EraAffectedComponentsGraph } from "./EraAffectedComponentsGraph";
 import { EraBackupCandidates } from "./EraBackupCandidates";
+import { EraDataQualityStrip } from "./EraDataQualityStrip";
 import { EraHotspotSummary } from "./EraHotspotSummary";
 import { EraReviewNetwork } from "./EraReviewNetwork";
 import { EraMitigationChecklist } from "./EraMitigationChecklist";
 import { EraDetailFooter } from "./EraDetailFooter";
 import { EraDetailHero } from "./EraDetailHero";
 import { EraDetailHistoryChart } from "./EraDetailHistoryChart";
+import { EraDimensionFactorWaterfall } from "./EraDimensionFactorWaterfall";
 import { EraDimensionGrid } from "./EraDimensionGrid";
 import { EraDimensionRadar } from "./EraDimensionRadar";
 import { EraEvidenceList } from "./EraEvidenceList";
 import { EraRiskChart } from "./EraRiskChart";
-import { dimensionValue } from "./era-utils";
+import { buildCompositeRiskSentence, dimensionValue } from "./era-utils";
 
 interface EraDetailDrawerProps {
   employeeId: string;
   syncFreshness: EraAnalyticsResponse["sync_freshness"];
   demoMode: boolean;
+  initialDimensionFilter?: EraDimensionKey | null;
   onClose: () => void;
 }
 
@@ -44,9 +51,13 @@ export function EraDetailDrawer({
   employeeId,
   syncFreshness,
   demoMode,
+  initialDimensionFilter = null,
   onClose,
 }: EraDetailDrawerProps) {
   const [detail, setDetail] = useState<EraEmployeeDetailResponse | null>(null);
+  const [selectedDimensions, setSelectedDimensions] = useState<EraDimensionKey[]>(
+    initialDimensionFilter ? [initialDimensionFilter] : [],
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -89,6 +100,23 @@ export function EraDetailDrawer({
         setLoading(false);
       });
   }, [employeeId]);
+
+  useEffect(() => {
+    setSelectedDimensions(initialDimensionFilter ? [initialDimensionFilter] : []);
+  }, [employeeId, initialDimensionFilter]);
+
+  function toggleDimension(key: EraDimensionKey) {
+    setSelectedDimensions((current) =>
+      current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [...current, key],
+    );
+  }
+
+  const filterLabel =
+    selectedDimensions.length > 0
+      ? ` (${selectedDimensions.length} selected)`
+      : "";
 
   useEffect(() => {
     void loadDetail();
@@ -207,7 +235,31 @@ export function EraDetailDrawer({
                     employee={detail.employee}
                     blastRadiusNarrative={detail.blast_radius_narrative}
                   />
-                  <EraDimensionGrid employee={detail.employee} />
+                  <p className="text-sm leading-relaxed text-zinc-400">
+                    {buildCompositeRiskSentence(detail.employee)}
+                  </p>
+                  <EraDataQualityStrip employee={detail.employee} />
+                  <EraDimensionGrid
+                    employee={detail.employee}
+                    selectedDimensions={selectedDimensions}
+                    onToggleDimension={toggleDimension}
+                  />
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+                    <h3 className="mb-3 text-sm font-medium text-zinc-200">
+                      Score drivers{filterLabel}
+                    </h3>
+                    <EraDimensionFactorWaterfall
+                      employee={detail.employee}
+                      dimensions={selectedDimensions}
+                    />
+                  </div>
+                  <EraEvidenceList
+                    items={detail.evidence}
+                    totalCount={detail.evidence_total_count}
+                    employeeName={detail.employee.name}
+                    filterDimensions={selectedDimensions}
+                    defaultCollapsed
+                  />
                   <EraDetailHistoryChart
                     history={detail.risk_history_30d ?? []}
                     employeeName={detail.employee.name}
@@ -231,11 +283,6 @@ export function EraDetailDrawer({
                     </div>
                   </div>
 
-                  <EraEvidenceList
-                    items={detail.evidence}
-                    totalCount={detail.evidence_total_count}
-                    employeeName={detail.employee.name}
-                  />
                   <EraAffectedComponentsGraph employee={detail.employee} />
                   <EraHotspotSummary
                     employeeId={detail.employee.employee_id}

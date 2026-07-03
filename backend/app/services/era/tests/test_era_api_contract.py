@@ -40,6 +40,9 @@ def test_v2_employee_has_dimensions_and_evidence(db, tenant):
     assert response.demo_mode is True
     sample = next(item for item in response.employees if item.dimensions)
     assert sample.dimensions is not None
+    assert sample.dimension_summaries
+    assert "knowledge" in sample.dimension_summaries
+    assert sample.dimension_summaries["knowledge"].headline
     assert sample.identity_coverage
     assert sample.data_completeness_pct > 0
     assert len(sample.evidence) <= 5

@@ -7,7 +7,7 @@ import { Loader2 } from "lucide-react";
 
 import { fetchEraMetrics } from "@/lib/api";
 import { useWorkspace } from "@/context/WorkspaceContext";
-import type { EraAnalyticsResponse, EraEmployeeMetrics } from "@/lib/types";
+import type { EraAnalyticsResponse, EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
 
 import { EraAlertsBanner } from "./EraAlertsBanner";
 import { EraCommandHeader } from "./EraCommandHeader";
@@ -31,14 +31,17 @@ export function EraCommandCenter() {
   const [data, setData] = useState<EraAnalyticsResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerEmployeeId, setDrawerEmployeeId] = useState<string | null>(null);
+  const [drawerDimensionFilter, setDrawerDimensionFilter] =
+    useState<EraDimensionKey | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
 
   const openDrawer = useCallback(
-    (employeeId: string) => {
+    (employeeId: string, dimension: EraDimensionKey | null = null) => {
       setDrawerEmployeeId(employeeId);
+      setDrawerDimensionFilter(dimension);
       setSelectedId(employeeId);
       const params = new URLSearchParams(searchParams.toString());
       params.set("employee", employeeId);
@@ -49,6 +52,7 @@ export function EraCommandCenter() {
 
   const closeDrawer = useCallback(() => {
     setDrawerEmployeeId(null);
+    setDrawerDimensionFilter(null);
     const params = new URLSearchParams(searchParams.toString());
     params.delete("employee");
     const query = params.toString();
@@ -248,6 +252,9 @@ export function EraCommandCenter() {
           setSelectedId(employeeId);
           openDrawer(employeeId);
         }}
+        onOpenDetailWithDimension={(employeeId, dimension) => {
+          openDrawer(employeeId, dimension);
+        }}
       />
 
       <div className="grid gap-6 xl:grid-cols-2">
@@ -280,6 +287,7 @@ export function EraCommandCenter() {
           employeeId={drawerEmployeeId}
           syncFreshness={data.sync_freshness}
           demoMode={data.demo_mode}
+          initialDimensionFilter={drawerDimensionFilter}
           onClose={closeDrawer}
         />
       )}

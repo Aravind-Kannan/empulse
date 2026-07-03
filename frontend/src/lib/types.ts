@@ -294,6 +294,22 @@ export interface EraTeamSummary {
   unacknowledged_alert_count?: number;
 }
 
+export interface EraDimensionFactorSummary {
+  key: string;
+  label: string;
+  value: number;
+  impact_points: number;
+  provider: string;
+  synthetic: boolean;
+}
+
+export interface EraDimensionSummary {
+  score: number;
+  partial: boolean;
+  headline: string;
+  top_factors: EraDimensionFactorSummary[];
+}
+
 export interface EraEmployeeMetrics {
   employee_id: string;
   name: string;
@@ -307,6 +323,7 @@ export interface EraEmployeeMetrics {
   risk_level: "low" | "medium" | "high";
   jira_backlog_boost?: number;
   dimensions?: EraDimensions | null;
+  dimension_summaries?: Partial<Record<EraDimensionKey, EraDimensionSummary>>;
   evidence?: EraEvidenceItem[];
   evidence_total_count?: number;
   affected_components?: EraAffectedComponent[];

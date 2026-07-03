@@ -1,12 +1,13 @@
 import type {
   EraAnalyticsResponse,
   EraDimensionKey,
+  EraDimensionSummary,
   EraEmployeeMetrics,
   EraEvidenceItem,
   IntegrationId,
 } from "@/lib/types";
 
-import { DIMENSION_KEYS } from "./era-colors";
+import { DIMENSION_KEYS, ERA_DIMENSION_COLORS } from "./era-colors";
 
 export interface TeamEvidenceItem extends EraEvidenceItem {
   employee_id: string;
@@ -82,7 +83,78 @@ export function isDimensionPartial(
   employee: EraEmployeeMetrics,
   key: EraDimensionKey,
 ): boolean {
-  return Boolean(employee.dimensions?.partial?.[key]);
+  return Boolean(
+    employee.dimension_summaries?.[key]?.partial
+      ?? employee.dimensions?.partial?.[key],
+  );
+}
+
+export function getDimensionSummary(
+  employee: EraEmployeeMetrics,
+  key: EraDimensionKey,
+): EraDimensionSummary | null {
+  return employee.dimension_summaries?.[key] ?? null;
+}
+
+export function dimensionHeadline(
+  employee: EraEmployeeMetrics,
+  key: EraDimensionKey,
+): string {
+  const summary = getDimensionSummary(employee, key);
+  if (summary?.headline) return summary.headline;
+  const evidence = topEvidenceForDimension(employee, key)[0];
+  if (evidence) return evidence.title;
+  if (isDimensionPartial(employee, key)) {
+    return "Partial data — connect more integrations";
+  }
+  if (dimensionValue(employee, key) <= 0) {
+    return "No significant signal";
+  }
+  return "Low contribution from available signals";
+}
+
+export function topEvidenceForDimension(
+  employee: EraEmployeeMetrics,
+  key: EraDimensionKey,
+  limit = 2,
+): EraEvidenceItem[] {
+  return (employee.evidence ?? [])
+    .filter((item) => item.dimension === key)
+    .sort((a, b) => b.impact_points - a.impact_points)
+    .slice(0, limit);
+}
+
+export function buildCompositeRiskSentence(
+  employee: EraEmployeeMetrics,
+): string {
+  const score = Math.round(employee.risk_factor_score);
+  const primary = primaryDimensionKey(employee);
+  const primaryLabel = ERA_DIMENSION_COLORS[primary].label;
+  const headline = dimensionHeadline(employee, primary);
+  const secondary = DIMENSION_KEYS.filter((key) => key !== primary)
+    .map((key) => ({ key, value: dimensionValue(employee, key) }))
+    .sort((a, b) => b.value - a.value)[0];
+  if (secondary && secondary.value >= 30 && secondary.value >= dimensionValue(employee, primary) * 0.6) {
+    const secondaryLabel = ERA_DIMENSION_COLORS[secondary.key].label;
+    const secondaryHeadline = dimensionHeadline(employee, secondary.key);
+    return `${score}% continuity risk — mainly ${primaryLabel} (${headline}) and ${secondaryLabel} (${secondaryHeadline}).`;
+  }
+  return `${score}% continuity risk — mainly ${primaryLabel}: ${headline}.`;
+}
+
+export function identityCoverageSummary(
+  employee: EraEmployeeMetrics,
+): { connected: number; total: number; missing: IntegrationId[] } {
+  const providers: IntegrationId[] = ["github", "jira", "slack", "notion"];
+  const coverage = employee.identity_coverage ?? {};
+  const missing = providers.filter(
+    (provider) => (coverage[provider] ?? "missing") === "missing",
+  );
+  return {
+    connected: providers.length - missing.length,
+    total: providers.length,
+    missing,
+  };
 }
 
 export function teamDimensionTotals(employees: EraEmployeeMetrics[]) {

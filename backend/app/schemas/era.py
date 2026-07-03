@@ -18,6 +18,22 @@ class EraDimensions(BaseModel):
     partial: dict[str, bool] = Field(default_factory=dict)
 
 
+class EraDimensionFactorSummary(BaseModel):
+    key: str
+    label: str
+    value: float
+    impact_points: float = Field(ge=0)
+    provider: str = "internal"
+    synthetic: bool = False
+
+
+class EraDimensionSummary(BaseModel):
+    score: float = Field(ge=0, le=100)
+    partial: bool = False
+    headline: str = ""
+    top_factors: list[EraDimensionFactorSummary] = Field(default_factory=list)
+
+
 class EraEvidenceSource(BaseModel):
     provider: str
     label: str
@@ -135,6 +151,7 @@ class EraEmployeeMetrics(BaseModel):
     risk_level: str
     jira_backlog_boost: int = Field(default=0, ge=0)
     dimensions: EraDimensions | None = None
+    dimension_summaries: dict[str, EraDimensionSummary] = Field(default_factory=dict)
     evidence: list[EraEvidenceItem] = Field(default_factory=list)
     evidence_total_count: int = Field(default=0, ge=0)
     affected_components: list[EraAffectedComponent] = Field(default_factory=list)

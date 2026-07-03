@@ -6,12 +6,8 @@ import { AlertTriangle, ChevronDown } from "lucide-react";
 import type { EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
 
 import { DIMENSION_KEYS, ERA_DIMENSION_COLORS } from "./era-colors";
-import { EraDimensionBar } from "./EraDimensionBar";
-import {
-  dimensionValue,
-  isDimensionPartial,
-  riskBarClass,
-} from "./era-utils";
+import { EraDimensionCell } from "./EraDimensionCell";
+import { dimensionValue, riskBarClass } from "./era-utils";
 
 type SortMode =
   | "highest_risk"
@@ -24,6 +20,10 @@ interface EraRiskHeatmapProps {
   employees: EraEmployeeMetrics[];
   selectedId: string | null;
   onSelect: (employeeId: string) => void;
+  onOpenDetailWithDimension?: (
+    employeeId: string,
+    dimension: EraDimensionKey,
+  ) => void;
   loading?: boolean;
 }
 
@@ -58,6 +58,7 @@ export function EraRiskHeatmap({
   employees,
   selectedId,
   onSelect,
+  onOpenDetailWithDimension,
   loading = false,
 }: EraRiskHeatmapProps) {
   const [sortMode, setSortMode] = useState<SortMode>("highest_risk");
@@ -196,15 +197,17 @@ export function EraRiskHeatmap({
         </div>
       )}
 
-      {/* Desktop table */}
       <div className="hidden overflow-x-auto md:block">
-        <table className="w-full text-left text-sm">
+        <table className="w-full min-w-[56rem] text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-800 text-[11px] uppercase tracking-wide text-zinc-500">
+            <tr className="border-b border-zinc-800 text-[11px] tracking-wide text-zinc-500">
               <th className="px-4 py-2 font-medium">Employee</th>
               {DIMENSION_KEYS.map((key) => (
-                <th key={key} className="px-2 py-2 font-medium">
-                  {ERA_DIMENSION_COLORS[key].label[0]}
+                <th
+                  key={key}
+                  className={`min-w-[7.5rem] px-2 py-2 font-medium ${ERA_DIMENSION_COLORS[key].text}`}
+                >
+                  {ERA_DIMENSION_COLORS[key].label}
                 </th>
               ))}
               <th className="px-4 py-2 font-medium">Risk</th>
@@ -242,12 +245,19 @@ export function EraRiskHeatmap({
                     </p>
                   </td>
                   {DIMENSION_KEYS.map((key) => (
-                    <td key={key} className="px-2 py-2.5">
-                      <EraDimensionBar
+                    <td key={key} className="px-2 py-2.5 align-top">
+                      <EraDimensionCell
+                        employee={employee}
                         dimension={key}
-                        value={dimensionValue(employee, key)}
-                        partial={isDimensionPartial(employee, key)}
-                        showValue
+                        onDimensionClick={
+                          onOpenDetailWithDimension
+                            ? (dimension) =>
+                                onOpenDetailWithDimension(
+                                  employee.employee_id,
+                                  dimension,
+                                )
+                            : undefined
+                        }
                       />
                     </td>
                   ))}
@@ -271,40 +281,66 @@ export function EraRiskHeatmap({
         </table>
       </div>
 
-      {/* Mobile cards */}
       <div className="space-y-2 p-3 md:hidden">
         {filtered.map((employee) => {
           const selected = employee.employee_id === selectedId;
           return (
-            <button
+            <div
               key={employee.employee_id}
-              type="button"
-              onClick={() => onSelect(employee.employee_id)}
-              className={`w-full rounded-lg border p-3 text-left ${
+              className={`rounded-lg border ${
                 selected
                   ? "border-violet-500/40 bg-zinc-800/60"
                   : "border-zinc-800 bg-zinc-950/40"
               }`}
             >
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <p className="font-medium text-zinc-100">{employee.name}</p>
-                  <p className="text-xs text-zinc-500">{employee.role}</p>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect(employee.employee_id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect(employee.employee_id);
+                  }
+                }}
+                className="w-full cursor-pointer p-3 text-left"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="font-medium text-zinc-100">{employee.name}</p>
+                    <p className="text-xs text-zinc-500">{employee.role}</p>
+                  </div>
+                  {riskBadge(employee.risk_level, employee.risk_factor_score)}
                 </div>
-                {riskBadge(employee.risk_level, employee.risk_factor_score)}
               </div>
-              <div className="mt-3 grid grid-cols-5 gap-1">
+              <div className="space-y-2 border-t border-zinc-800 px-3 pb-3 pt-2">
                 {DIMENSION_KEYS.map((key) => (
-                  <EraDimensionBar
-                    key={key}
-                    dimension={key}
-                    value={dimensionValue(employee, key)}
-                    partial={isDimensionPartial(employee, key)}
-                    showValue
-                  />
+                  <div key={key} className="flex items-start gap-2">
+                    <span
+                      className={`w-24 shrink-0 text-[10px] font-medium ${ERA_DIMENSION_COLORS[key].text}`}
+                    >
+                      {ERA_DIMENSION_COLORS[key].label}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <EraDimensionCell
+                        employee={employee}
+                        dimension={key}
+                        showHeadline={false}
+                        onDimensionClick={
+                          onOpenDetailWithDimension
+                            ? (dimension) =>
+                                onOpenDetailWithDimension(
+                                  employee.employee_id,
+                                  dimension,
+                                )
+                            : undefined
+                        }
+                      />
+                    </div>
+                  </div>
                 ))}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
