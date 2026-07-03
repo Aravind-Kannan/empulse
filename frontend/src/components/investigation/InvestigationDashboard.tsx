@@ -18,18 +18,21 @@ import type {
 } from "@/lib/types";
 
 import { IncidentHistoryBar } from "./IncidentHistoryBar";
-import { InvestigationChatPanel } from "./InvestigationChatPanel";
+import {
+  InvestigationChatPanel,
+  type InvestigationChatPanelHandle,
+} from "./InvestigationChatPanel";
 import { InvestigationContextPanel } from "./InvestigationContextPanel";
 import { InvestigationDiagnosticsPanel } from "./InvestigationDiagnosticsPanel";
 import {
   createBriefingFetcher,
   defaultWorkspaceChatHistory,
+  filterIncidentsForBar,
   PREFETCH_CONCURRENCY,
+  pickFirstBarIncident,
   type CachedWorkspace,
   type IncidentSyncStatus,
 } from "./investigation-prefetch";
-
-const INITIAL_PREFETCH_COUNT = 3;
 
 export function InvestigationDashboard() {
   const { refreshMetrics, notifyIncidentResolved } = useWorkspace();
@@ -51,6 +54,7 @@ export function InvestigationDashboard() {
   const workspaceCacheRef = useRef<Record<string, CachedWorkspace>>({});
   const fetchGenRef = useRef(0);
   const briefingFetcherRef = useRef(createBriefingFetcher());
+  const chatPanelRef = useRef<InvestigationChatPanelHandle>(null);
 
   const [syncStatus, setSyncStatus] = useState<Record<string, IncidentSyncStatus>>(
     {},
@@ -58,7 +62,12 @@ export function InvestigationDashboard() {
   const prefetchQueueRef = useRef<string[]>([]);
   const prefetchQueuedRef = useRef<Set<string>>(new Set());
   const prefetchRunningRef = useRef(0);
+  const prefetchPlanKeyRef = useRef("");
+  const foregroundBriefingRef = useRef(false);
+  const activeIncidentIdRef = useRef<string | null>(null);
   const allIncidentsRef = useRef<IncidentSummary[]>([]);
+
+  const [chatIncidentId, setChatIncidentId] = useState<string | null>(null);
 
   const [diagnostics, setDiagnostics] =
     useState<InvestigationDiagnostics | null>(null);
@@ -98,19 +107,48 @@ export function InvestigationDashboard() {
   );
 
   const restoreWorkspaceFromCache = useCallback(
-    (incident: IncidentSummary): boolean => {
+    (incident: IncidentSummary): "full" | "chat" | false => {
       const cached = readWorkspaceCache(incident.id);
-      if (!cached?.diagnostics) return false;
-      setDiagnostics(cached.diagnostics);
-      setDiagnosticsIncidentId(incident.id);
+      if (!cached) return false;
+
       setChatMessages(cached.chatHistory);
+      setChatIncidentId(incident.id);
       setBriefingError(null);
       setBriefingStatus(null);
+
+      if (!cached.diagnostics) {
+        setDiagnostics(null);
+        setDiagnosticsIncidentId(null);
+        return "chat";
+      }
+
+      setDiagnostics(cached.diagnostics);
+      setDiagnosticsIncidentId(incident.id);
       setIncidentSyncStatus(incident.id, "ready");
-      return true;
+      return "full";
     },
     [readWorkspaceCache, setIncidentSyncStatus],
   );
+
+  const persistActiveWorkspace = useCallback(() => {
+    const incidentId = activeIncidentIdRef.current;
+    if (!incidentId) return;
+
+    const cached = readWorkspaceCache(incidentId);
+    writeWorkspaceCache(incidentId, {
+      chatHistory: cached?.chatHistory ?? chatMessages,
+      diagnostics:
+        diagnosticsIncidentId === incidentId
+          ? diagnostics
+          : (cached?.diagnostics ?? null),
+    });
+  }, [
+    chatMessages,
+    diagnostics,
+    diagnosticsIncidentId,
+    readWorkspaceCache,
+    writeWorkspaceCache,
+  ]);
 
   const persistBriefingResult = useCallback(
     (incidentId: string, nextDiagnostics: InvestigationDiagnostics) => {
@@ -128,13 +166,16 @@ export function InvestigationDashboard() {
   );
 
   const runPrefetch = useCallback(
-    async (incidentId: string) => {
+    async (incidentId: string): Promise<boolean> => {
+      if (foregroundBriefingRef.current) {
+        return false;
+      }
       if (readWorkspaceCache(incidentId)?.diagnostics) {
         setIncidentSyncStatus(incidentId, "ready");
-        return;
+        return true;
       }
       if (briefingFetcherRef.current.isInFlight(incidentId)) {
-        return;
+        return true;
       }
 
       setIncidentSyncStatus(incidentId, "loading");
@@ -144,45 +185,69 @@ export function InvestigationDashboard() {
           await briefingFetcherRef.current.fetchBriefing(incidentId);
         if (!nextDiagnostics) {
           setIncidentSyncStatus(incidentId, "error");
-          return;
+          return true;
         }
         persistBriefingResult(incidentId, nextDiagnostics);
+        return true;
       } catch {
         setIncidentSyncStatus(incidentId, "error");
+        return true;
       }
     },
     [persistBriefingResult, readWorkspaceCache, setIncidentSyncStatus],
   );
 
   const drainPrefetchQueue = useCallback(() => {
+    if (foregroundBriefingRef.current) {
+      return;
+    }
+
     while (
       prefetchRunningRef.current < PREFETCH_CONCURRENCY &&
       prefetchQueueRef.current.length > 0
     ) {
-      const incidentId = prefetchQueueRef.current.shift();
-      if (!incidentId) continue;
+      const incidentId = prefetchQueueRef.current[0];
+      if (!incidentId) break;
 
-      prefetchQueuedRef.current.delete(incidentId);
+      if (incidentId === activeIncidentIdRef.current) {
+        prefetchQueueRef.current.shift();
+        prefetchQueuedRef.current.delete(incidentId);
+        continue;
+      }
 
       if (readWorkspaceCache(incidentId)?.diagnostics) {
+        prefetchQueueRef.current.shift();
+        prefetchQueuedRef.current.delete(incidentId);
         setIncidentSyncStatus(incidentId, "ready");
         continue;
       }
+
       if (briefingFetcherRef.current.isInFlight(incidentId)) {
-        continue;
+        break;
       }
 
+      prefetchQueueRef.current.shift();
+      prefetchQueuedRef.current.delete(incidentId);
       prefetchRunningRef.current += 1;
-      void runPrefetch(incidentId).finally(() => {
+
+      void runPrefetch(incidentId).then((completed) => {
+        if (!completed) {
+          prefetchQueueRef.current.unshift(incidentId);
+          prefetchQueuedRef.current.add(incidentId);
+        }
+      }).finally(() => {
         prefetchRunningRef.current -= 1;
         drainPrefetchQueue();
       });
+
+      break;
     }
   }, [readWorkspaceCache, runPrefetch, setIncidentSyncStatus]);
 
   const enqueuePrefetch = useCallback(
-    (incidentId: string) => {
-      if (!incidentId) return;
+    (incidentId: string, options?: { front?: boolean }) => {
+      if (!incidentId || incidentId === activeIncidentIdRef.current) return;
+
       if (readWorkspaceCache(incidentId)?.diagnostics) {
         setIncidentSyncStatus(incidentId, "ready");
         return;
@@ -195,7 +260,34 @@ export function InvestigationDashboard() {
       }
 
       prefetchQueuedRef.current.add(incidentId);
-      prefetchQueueRef.current.push(incidentId);
+      if (options?.front) {
+        prefetchQueueRef.current.unshift(incidentId);
+      } else {
+        prefetchQueueRef.current.push(incidentId);
+      }
+      drainPrefetchQueue();
+    },
+    [drainPrefetchQueue, readWorkspaceCache, setIncidentSyncStatus],
+  );
+
+  const rebuildPrefetchQueue = useCallback(
+    (orderedIds: string[], activeId: string | null) => {
+      const nextQueue: string[] = [];
+      const nextQueued = new Set<string>();
+
+      for (const id of orderedIds) {
+        if (id === activeId) continue;
+        if (readWorkspaceCache(id)?.diagnostics) {
+          setIncidentSyncStatus(id, "ready");
+          continue;
+        }
+        if (nextQueued.has(id)) continue;
+        nextQueue.push(id);
+        nextQueued.add(id);
+      }
+
+      prefetchQueueRef.current = nextQueue;
+      prefetchQueuedRef.current = nextQueued;
       drainPrefetchQueue();
     },
     [drainPrefetchQueue, readWorkspaceCache, setIncidentSyncStatus],
@@ -208,24 +300,32 @@ export function InvestigationDashboard() {
     ) => {
       const gen = options?.gen ?? fetchGenRef.current;
 
-      if (!options?.force) {
-        if (restoreWorkspaceFromCache(incident)) {
-          return;
-        }
-      } else {
-        delete workspaceCacheRef.current[incident.id];
-        setWorkspaceCache({ ...workspaceCacheRef.current });
-      }
-
-      setBriefingError(null);
-      if (options?.force || !readWorkspaceCache(incident.id)) {
-        setDiagnostics(null);
-        setDiagnosticsIncidentId(null);
-      }
-
-      setIncidentSyncStatus(incident.id, "loading");
-
+      foregroundBriefingRef.current = true;
       try {
+        if (!options?.force) {
+          const restored = restoreWorkspaceFromCache(incident);
+          if (restored === "full") {
+            return;
+          }
+        } else {
+          delete workspaceCacheRef.current[incident.id];
+          setWorkspaceCache({ ...workspaceCacheRef.current });
+        }
+
+        setBriefingError(null);
+        if (options?.force || !readWorkspaceCache(incident.id)) {
+          setDiagnostics(null);
+          setDiagnosticsIncidentId(null);
+          setBriefingStatus({
+            phase: "searching",
+            message: options?.force
+              ? "Refreshing knowledge graph context…"
+              : "Loading incident analysis…",
+          });
+        }
+
+        setIncidentSyncStatus(incident.id, "loading");
+
         const nextDiagnostics = await briefingFetcherRef.current.fetchBriefing(
           incident.id,
           {
@@ -256,6 +356,7 @@ export function InvestigationDashboard() {
         setDiagnostics(nextDiagnostics);
         setDiagnosticsIncidentId(incident.id);
         setChatMessages(chatHistory);
+        setChatIncidentId(incident.id);
       } catch (err) {
         if (fetchGenRef.current !== gen) return;
         setBriefingError(
@@ -267,12 +368,15 @@ export function InvestigationDashboard() {
           setDiagnosticsIncidentId(null);
         }
       } finally {
+        foregroundBriefingRef.current = false;
         if (fetchGenRef.current === gen) {
           setBriefingStatus(null);
         }
+        drainPrefetchQueue();
       }
     },
     [
+      drainPrefetchQueue,
       persistBriefingResult,
       readWorkspaceCache,
       restoreWorkspaceFromCache,
@@ -290,16 +394,10 @@ export function InvestigationDashboard() {
         if (prev) {
           return (
             data.incidents.find((item) => item.id === prev.id) ??
-            data.incidents[0] ??
-            null
+            pickFirstBarIncident(data.incidents)
           );
         }
-        return (
-          data.incidents.find((item) => item.status === "Investigating") ??
-          data.incidents.find((item) => item.status === "Open") ??
-          data.incidents[0] ??
-          null
-        );
+        return pickFirstBarIncident(data.incidents);
       });
     },
     [],
@@ -315,52 +413,96 @@ export function InvestigationDashboard() {
   }, [applyFeed]);
 
   useEffect(() => {
+    activeIncidentIdRef.current = activeIncident?.id ?? null;
+  }, [activeIncident?.id]);
+
+  useEffect(() => {
     if (!activeIncident) {
       setDiagnostics(null);
       setDiagnosticsIncidentId(null);
       setChatMessages(defaultChatWelcomeNoIncident());
+      setChatIncidentId(null);
       setBriefingStatus(null);
       setBriefingError(null);
       return;
     }
 
-    if (restoreWorkspaceFromCache(activeIncident)) {
+    const restored = restoreWorkspaceFromCache(activeIncident);
+    if (restored === "full") {
       return;
+    }
+
+    if (restored !== "chat") {
+      setChatMessages(defaultChatWelcome());
+      setChatIncidentId(activeIncident.id);
     }
 
     setDiagnostics(null);
     setDiagnosticsIncidentId(null);
     setBriefingStatus(null);
-    setChatMessages(defaultChatWelcome());
     void loadWorkspaceForIncident(activeIncident);
   }, [activeIncident?.id, loadWorkspaceForIncident, restoreWorkspaceFromCache]);
 
-  const filteredIncidents =
-    activeFilter === "All"
-      ? allIncidents
-      : allIncidents.filter((item) => item.status === activeFilter);
+  const filteredIncidents = filterIncidentsForBar(allIncidents, activeFilter);
 
   useEffect(() => {
     allIncidentsRef.current = allIncidents;
   }, [allIncidents]);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || !activeIncident || filteredIncidents.length === 0) return;
 
-    const filtered =
-      activeFilter === "All"
-        ? allIncidents
-        : allIncidents.filter((item) => item.status === activeFilter);
+    const orderedIds = filteredIncidents.map((item) => item.id);
+    const planKey = `${activeFilter}:${orderedIds.join("|")}`;
+    if (planKey === prefetchPlanKeyRef.current) return;
 
-    const seedIds = new Set<string>();
-    filtered.slice(0, INITIAL_PREFETCH_COUNT).forEach((incident) => {
-      seedIds.add(incident.id);
-    });
-    if (activeIncident) {
-      seedIds.add(activeIncident.id);
+    prefetchPlanKeyRef.current = planKey;
+    rebuildPrefetchQueue(orderedIds, activeIncident.id);
+  }, [
+    activeFilter,
+    activeIncident,
+    filteredIncidents,
+    loading,
+    rebuildPrefetchQueue,
+  ]);
+
+  useEffect(() => {
+    const activeId = activeIncident?.id;
+    if (!activeId) return;
+
+    prefetchQueueRef.current = prefetchQueueRef.current.filter((id) => id !== activeId);
+    prefetchQueuedRef.current.delete(activeId);
+    drainPrefetchQueue();
+  }, [activeIncident?.id, drainPrefetchQueue]);
+
+  function handleFilterChange(filter: IncidentStatus | "All") {
+    setActiveFilter(filter);
+
+    const nextFiltered = filterIncidentsForBar(allIncidents, filter);
+    if (nextFiltered.length === 0) return;
+
+    const currentActiveId = activeIncidentIdRef.current;
+    const nextActive =
+      currentActiveId &&
+      nextFiltered.some((item) => item.id === currentActiveId)
+        ? nextFiltered.find((item) => item.id === currentActiveId)!
+        : nextFiltered[0];
+
+    if (nextActive.id !== currentActiveId) {
+      leaveActiveIncident();
+      fetchGenRef.current += 1;
+      setBriefingError(null);
+      setBriefingStatus(null);
+      setActiveIncident(nextActive);
     }
-    seedIds.forEach((id) => enqueuePrefetch(id));
-  }, [activeIncident?.id, activeFilter, allIncidents, loading, enqueuePrefetch]);
+
+    const planKey = `${filter}:${nextFiltered.map((item) => item.id).join("|")}`;
+    prefetchPlanKeyRef.current = planKey;
+    rebuildPrefetchQueue(
+      nextFiltered.map((item) => item.id),
+      nextActive.id,
+    );
+  }
 
   const handleIncidentVisible = useCallback(
     (incidentId: string) => {
@@ -369,12 +511,17 @@ export function InvestigationDashboard() {
     [enqueuePrefetch],
   );
 
+  function leaveActiveIncident() {
+    chatPanelRef.current?.finalizeInterruptedStream();
+    persistActiveWorkspace();
+  }
+
   function handleSelectIncident(incident: IncidentSummary) {
     if (incident.id === activeIncident?.id) return;
+
+    leaveActiveIncident();
     fetchGenRef.current += 1;
     setBriefingError(null);
-    setDiagnostics(null);
-    setDiagnosticsIncidentId(null);
     setBriefingStatus(null);
     setActiveIncident(incident);
   }
@@ -421,21 +568,35 @@ export function InvestigationDashboard() {
 
   async function handleRefreshBriefing() {
     if (!activeIncident || refreshingBriefing) return;
+    fetchGenRef.current += 1;
+    const gen = fetchGenRef.current;
     setRefreshingBriefing(true);
+    setBriefingError(null);
     try {
-      await loadWorkspaceForIncident(activeIncident, { force: true });
+      await loadWorkspaceForIncident(activeIncident, { force: true, gen });
     } finally {
       setRefreshingBriefing(false);
     }
   }
 
-  function handleChatMessagesChange(messages: InvestigationChatMessage[]) {
-    if (!activeIncident) return;
-    setChatMessages(messages);
-    const cached = readWorkspaceCache(activeIncident.id);
-    writeWorkspaceCache(activeIncident.id, {
+  function handleChatMessagesChange(
+    messages: InvestigationChatMessage[],
+    forIncidentId: string,
+  ) {
+    if (!forIncidentId) return;
+
+    if (forIncidentId === activeIncidentIdRef.current) {
+      setChatMessages(messages);
+      setChatIncidentId(forIncidentId);
+    }
+
+    const cached = readWorkspaceCache(forIncidentId);
+    writeWorkspaceCache(forIncidentId, {
       chatHistory: messages,
-      diagnostics: cached?.diagnostics ?? diagnostics,
+      diagnostics:
+        diagnosticsIncidentId === forIncidentId
+          ? diagnostics
+          : (cached?.diagnostics ?? null),
     });
   }
 
@@ -467,6 +628,13 @@ export function InvestigationDashboard() {
       ? diagnostics
       : null;
 
+  const visibleChatMessages =
+    !activeIncident
+      ? defaultChatWelcomeNoIncident()
+      : chatIncidentId === activeIncident.id
+        ? chatMessages
+        : (workspaceCache[activeIncident.id]?.chatHistory ?? defaultChatWelcome());
+
   const panelError = error ?? briefingError;
 
   return (
@@ -494,20 +662,23 @@ export function InvestigationDashboard() {
         syncingCount={syncingCount}
         sourcesConnected={sourcesConnected}
         warnings={feedWarnings}
-        onFilterChange={setActiveFilter}
+        onFilterChange={handleFilterChange}
         onSelectIncident={handleSelectIncident}
         onIncidentVisible={handleIncidentVisible}
       />
 
-      <div className="grid h-[720px] gap-6 xl:grid-cols-3">
+      <div className="grid h-[720px] min-h-0 gap-6 xl:grid-cols-3">
         <InvestigationChatPanel
+          ref={chatPanelRef}
+          key={activeIncident?.id ?? "no-incident"}
           incidentId={activeIncident?.id ?? null}
           activeIncidentTitle={activeIncident?.title ?? null}
           suggestions={chatSuggestions}
-          messages={chatMessages}
+          messages={visibleChatMessages}
           onMessagesChange={handleChatMessagesChange}
         />
         <InvestigationDiagnosticsPanel
+          key={`diag-${activeIncident?.id ?? "none"}`}
           rootCause={visibleDiagnostics?.probable_root_cause ?? null}
           confidence={visibleDiagnostics?.confidence_score ?? null}
           workaround={visibleDiagnostics?.workaround ?? null}
@@ -531,6 +702,7 @@ export function InvestigationDashboard() {
           refreshing={refreshingBriefing}
         />
         <InvestigationContextPanel
+          key={`ctx-${activeIncident?.id ?? "none"}`}
           smes={visibleDiagnostics?.smes ?? []}
           slackThreads={visibleDiagnostics?.slack_threads ?? []}
           jiraTickets={visibleDiagnostics?.jira_tickets ?? []}

@@ -92,6 +92,17 @@
     stroke-dasharray: 4 4;
     animation: landing-dash 1.5s linear infinite;
   }
+
+  .incident-cards-scroll {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .incident-cards-scroll::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
 }
 
 @keyframes auth-ambient-drift {

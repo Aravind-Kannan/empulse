@@ -4,6 +4,8 @@ import {
   type InvestigationChatMessage,
 } from "@/hooks/useIncidentInvestigation";
 import type {
+  IncidentStatus,
+  IncidentSummary,
   InvestigationAnalysisStatus,
   InvestigationDiagnostics,
 } from "@/lib/types";
@@ -15,7 +17,7 @@ export interface CachedWorkspace {
   diagnostics: InvestigationDiagnostics | null;
 }
 
-export const PREFETCH_CONCURRENCY = 2;
+export const PREFETCH_CONCURRENCY = 1;
 
 export interface BriefingFetchCallbacks {
   onStatus?: (status: InvestigationAnalysisStatus) => void;
@@ -80,6 +82,7 @@ export function createBriefingFetcher() {
           diagnostics = diag;
           registry.onDiagnostics.forEach((handler) => handler(diag));
         },
+        { force: options?.force },
       );
 
       return diagnostics;
@@ -104,4 +107,19 @@ export function defaultWorkspaceChatHistory(
   cache: Record<string, CachedWorkspace>,
 ): InvestigationChatMessage[] {
   return cache[incidentId]?.chatHistory ?? defaultChatWelcome();
+}
+
+export function filterIncidentsForBar(
+  incidents: IncidentSummary[],
+  filter: IncidentStatus | "All",
+): IncidentSummary[] {
+  return filter === "All"
+    ? incidents
+    : incidents.filter((item) => item.status === filter);
+}
+
+export function pickFirstBarIncident(
+  incidents: IncidentSummary[],
+): IncidentSummary | null {
+  return incidents[0] ?? null;
 }

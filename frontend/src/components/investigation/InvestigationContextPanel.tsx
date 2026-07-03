@@ -97,7 +97,7 @@ export function InvestigationContextPanel({
       },
       {
         key: "jira",
-        label: "Jira Tickets",
+        label: "Related Jira Tickets",
         icon: Ticket,
         colorClass: "text-sky-400",
         bgClass: "bg-sky-500/5",

@@ -41,7 +41,7 @@ from app.services.github_doa import dominant_blame_author_login
 from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
-from app.services.jira_client import fetch_jira_issues
+from app.services.jira_client import fetch_jira_incident_issues, fetch_jira_issues
 from app.services.jira_mapper import map_issue_to_component
 from app.services.jira_types import JiraIssueActivity
 from app.services.notion_client import (
@@ -104,10 +104,11 @@ class GraphJiraTicket(DataPoint):
     priority: str
     status: str
     project_key: str
+    summary: str = ""
     assignedTo: SkipValidation[Any] = None
     blocksComponent: SkipValidation[Any] = None
     metadata: dict = {
-        "index_fields": ["ticket_id", "issue_type", "status"],
+        "index_fields": ["ticket_id", "issue_type", "status", "summary"],
         "identity_fields": ["ticket_id"],
     }
 
@@ -405,7 +406,7 @@ def fetch_and_map_jira_issues(
     *,
     use_fixture: bool = False,
 ) -> list[JiraIssueActivity]:
-    issues = fetch_jira_issues(config, use_fixture=use_fixture)
+    issues = fetch_jira_incident_issues(config, use_fixture=use_fixture)
     valid_ids = set(components_by_id)
     mapped: list[JiraIssueActivity] = []
     for issue in issues:
@@ -443,7 +444,7 @@ def analyze_jira_payload(
     for issue in issues:
         if project_filter and issue.project_key not in project_filter:
             continue
-        if issue.is_done:
+        if issue.is_done and not issue.is_bug_or_incident:
             continue
 
         assignee_employee_id: str | None = None
@@ -469,6 +470,7 @@ def analyze_jira_payload(
             priority=issue.priority,
             status=issue.status,
             project_key=issue.project_key,
+            summary=(issue.summary or issue.issue_key).strip(),
         )
         if assignee:
             ticket_node.assignedTo = (
@@ -491,8 +493,8 @@ def analyze_jira_payload(
         component_name = component.name if component else (issue.component_id or "unmapped")
         narrative_lines.append(
             f"{issue.issue_key} ({issue.issue_type}, {issue.priority}, "
-            f"{issue.status}) assigned to {assignee_name}, "
-            f"blocking component {component_name}."
+            f"{issue.status}): {(issue.summary or issue.issue_key).strip()}. "
+            f"Assigned to {assignee_name}, blocking component {component_name}."
         )
 
     return "\n".join(narrative_lines), data_points, edge_count

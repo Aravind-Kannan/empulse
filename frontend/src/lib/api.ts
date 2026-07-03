@@ -571,15 +571,22 @@ async function readInvestigationSseStream(
   }
 }
 
+/** SSE streams can run 30–90s while Cognee searches; do not use default 20s client timeout. */
+const INVESTIGATION_STREAM_TIMEOUT_MS = 120_000;
+
 export async function streamIncidentBriefing(
   incidentId: string,
   onStatus: (status: InvestigationAnalysisStatus) => void,
   onDiagnostics: (diagnostics: InvestigationDiagnostics) => void,
+  options?: { force?: boolean },
 ): Promise<void> {
+  const query = options?.force ? "?force=true" : "";
   const response = await apiFetch(
-    `${API_BASE}/api/investigation/incidents/${encodeURIComponent(incidentId)}/briefing/stream`,
+    `${API_BASE}/api/investigation/incidents/${encodeURIComponent(incidentId)}/briefing/stream${query}`,
     {
       method: "POST",
+      cache: "no-store",
+      timeoutMs: INVESTIGATION_STREAM_TIMEOUT_MS,
     },
   );
 
@@ -600,6 +607,7 @@ export async function streamInvestigationChat(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, incident_id: incidentId }),
+    timeoutMs: INVESTIGATION_STREAM_TIMEOUT_MS,
   });
 
   if (!response.ok || !response.body) {

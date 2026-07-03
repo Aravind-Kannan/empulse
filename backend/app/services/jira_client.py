@@ -92,7 +92,12 @@ def issues_from_mock_feed(site_url: str = "https://acme.atlassian.net") -> list[
     issues: list[JiraIssueActivity] = []
     for row in MOCK_JIRA_ISSUES:
         status = row.get("status", "Open")
-        status_category = "done" if status.lower() == "done" else "indeterminate"
+        lowered = status.lower()
+        status_category = (
+            "done"
+            if lowered in {"done", "closed", "resolved", "complete"}
+            else "indeterminate"
+        )
         issues.append(
             JiraIssueActivity(
                 issue_key=row["ticket_id"],
@@ -207,6 +212,64 @@ class JiraClient:
         jql_parts = [
             "issuetype in (Bug, Incident)",
             "statusCategory != Done",
+            "updated >= -14d",
+        ]
+        if project_keys:
+            joined = ", ".join(f'"{key}"' for key in project_keys)
+            jql_parts.insert(0, f"project in ({joined})")
+        jql = " AND ".join(jql_parts) + " ORDER BY updated DESC"
+
+        issues: list[JiraIssueActivity] = []
+        next_page_token: str | None = None
+        while len(issues) < 500:
+            body: dict[str, object] = {
+                "jql": jql,
+                "fields": JIRA_FIELDS,
+                "maxResults": 50,
+            }
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
+            response = self._request(
+                "POST",
+                "/rest/api/3/search/jql",
+                json=body,
+            )
+            payload = response.json()
+            rows = payload.get("issues") or []
+            if not rows:
+                break
+            for row in rows:
+                issues.append(_issue_from_api_payload(row, site_url=self.site_url))
+            if payload.get("isLast", True):
+                break
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
+                break
+        return issues
+
+    def fetch_incident_issues(self) -> list[JiraIssueActivity]:
+        """Bugs/incidents updated recently, including Done (for investigation cards)."""
+        if self.use_fixture:
+            return [
+                issue
+                for issue in load_fixture_issues(self.site_url)
+                if issue.is_bug_or_incident
+            ]
+        if not self.config.api_token.strip():
+            logger.warning("No Jira token configured; using embedded mock issue feed")
+            return [
+                issue
+                for issue in issues_from_mock_feed(self.site_url)
+                if issue.is_bug_or_incident
+            ]
+
+        project_keys = [
+            key.strip().upper()
+            for key in self.config.project_keys.split(",")
+            if key.strip()
+        ]
+        jql_parts = [
+            "issuetype in (Bug, Incident)",
             "updated >= -14d",
         ]
         if project_keys:
@@ -515,3 +578,11 @@ def fetch_jira_issues(
     use_fixture: bool = False,
 ) -> list[JiraIssueActivity]:
     return JiraClient(config, use_fixture=use_fixture).fetch_open_issues()
+
+
+def fetch_jira_incident_issues(
+    config: JiraConfigRequest,
+    *,
+    use_fixture: bool = False,
+) -> list[JiraIssueActivity]:
+    return JiraClient(config, use_fixture=use_fixture).fetch_incident_issues()
