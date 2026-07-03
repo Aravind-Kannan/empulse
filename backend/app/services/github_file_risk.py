@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.models.operational import Component, Employee, FileRiskSnapshot
 from app.services.github_doa import DOA_AUTHOR_THRESHOLD, _should_exclude_path, compute_doa_for_file
-from app.services.github_doa import FileTouch as DoaFileTouch
-from app.services.github_types import GitHubPullRequestActivity
-from app.services.identity_resolver import resolve_author_employee_id
+from app.services.github_touch import FileTouch as DoaFileTouch
+from app.services.github_touch import build_file_touch_indexes
+from app.services.github_types import GitHubCommitActivity, GitHubPullRequestActivity
 
 ANALYSIS_WINDOW_DAYS = 90
 HIGH_CHURN_PR_THRESHOLD = 3
@@ -91,6 +91,7 @@ def compute_file_risk_from_activities(
     db: Session,
     tenant_id: uuid.UUID,
     activities: list[GitHubPullRequestActivity],
+    commit_activities: list[GitHubCommitActivity] | None = None,
     *,
     repo_path: str = "",
     window_days: int = ANALYSIS_WINDOW_DAYS,
@@ -99,43 +100,32 @@ def compute_file_risk_from_activities(
     now = computed_at or datetime.now(UTC)
     cutoff = now - timedelta(days=window_days)
 
-    pr_ids_by_file: dict[tuple[str, str], set[int]] = defaultdict(set)
+    file_events, _ = build_file_touch_indexes(
+        db,
+        tenant_id,
+        activities,
+        commit_activities,
+        exclude_path=should_exclude_file_path,
+    )
+
+    pr_ids_by_file: dict[tuple[str, str], set[str]] = defaultdict(set)
     contributors_by_file: dict[tuple[str, str], set[str]] = defaultdict(set)
     touches_by_file: dict[tuple[str, str], list[DoaFileTouch]] = defaultdict(list)
 
-    for activity in activities:
-        merged_at = _parse_merged_at(activity.merged_at)
-        if merged_at < cutoff:
-            continue
-        if activity.author_type == "Bot":
-            continue
-
-        author_id = resolve_author_employee_id(
-            db,
-            tenant_id,
-            "github",
-            activity.author_provider_user_id,
-            demo_fallback_employee_id=None,
-            quarantine_event_type="github_pr",
-            quarantine_payload={"pr_number": activity.pr_number},
-        )
-        if not author_id:
-            continue
-
-        for file_change in activity.files:
-            if not file_change.component_id or should_exclude_file_path(file_change.path):
+    for key, events in file_events.items():
+        for event in events:
+            if event.touched_at < cutoff:
                 continue
-            key = (file_change.component_id, file_change.path)
-            pr_ids_by_file[key].add(activity.pr_number)
-            contributors_by_file[key].add(author_id)
+            pr_ids_by_file[key].add(event.churn_key)
+            contributors_by_file[key].add(event.employee_id)
             touches_by_file[key].append(
-                DoaFileTouch(employee_id=author_id, touched_at=merged_at)
+                DoaFileTouch(employee_id=event.employee_id, touched_at=event.touched_at)
             )
 
     records: list[FileRiskRecord] = []
-    for key, pr_ids in pr_ids_by_file.items():
+    for key, churn_keys in pr_ids_by_file.items():
         component_id, file_path = key
-        churn_score = len(pr_ids)
+        churn_score = len(churn_keys)
         if churn_score < MIN_TOUCHES:
             continue
 
@@ -178,6 +168,7 @@ def persist_file_risk_snapshots(
     db: Session,
     tenant_id: uuid.UUID,
     activities: list[GitHubPullRequestActivity],
+    commit_activities: list[GitHubCommitActivity] | None = None,
     *,
     repo_path: str = "",
     computed_at: datetime | None = None,
@@ -186,6 +177,7 @@ def persist_file_risk_snapshots(
         db,
         tenant_id,
         activities,
+        commit_activities,
         repo_path=repo_path,
         computed_at=computed_at,
     )
@@ -373,7 +365,7 @@ def build_file_risk_evidence_items(
                 "severity": "high",
                 "title": f"Critical file — {file_row['file_path']}",
                 "description": (
-                    f"High churn ({file_row['churn_score']} PRs/90d), "
+                    f"High churn ({file_row['churn_score']} changes/90d), "
                     f"bus factor {file_row['bus_factor']}{doa_note}."
                 ),
                 "impact_points": min(100.0, 22.0 + file_row["churn_score"] * 2.5),

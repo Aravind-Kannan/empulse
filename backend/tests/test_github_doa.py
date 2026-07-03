@@ -15,8 +15,8 @@ from app.services.github_doa import (
     compute_doa_for_file,
     compute_doa_from_activities,
     persist_doa_snapshots,
-    FileTouch,
 )
+from app.services.github_touch import FileTouch
 from app.services.github_evidence import build_github_evidence_items
 from app.services.integration_telemetry import (
     apply_github_telemetry,

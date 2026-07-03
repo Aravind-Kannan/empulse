@@ -1,0 +1,50 @@
+[
+  {
+    "commit_sha": "direct-push-001",
+    "branch": "main",
+    "author_provider_user_id": "gh-benrivera",
+    "author_login": "benrivera",
+    "author_type": "User",
+    "commit_url": "https://github.com/acme/payments-service/commit/direct-push-001",
+    "committed_at": "2026-06-20T11:00:00Z",
+    "files": [
+      {
+        "path": "services/payments/checkout.py",
+        "loc_added": 8,
+        "loc_removed": 1
+      }
+    ]
+  },
+  {
+    "commit_sha": "direct-push-002",
+    "branch": "main",
+    "author_provider_user_id": "gh-benrivera",
+    "author_login": "benrivera",
+    "author_type": "User",
+    "commit_url": "https://github.com/acme/payments-service/commit/direct-push-002",
+    "committed_at": "2026-06-21T11:00:00Z",
+    "files": [
+      {
+        "path": "services/payments/checkout.py",
+        "loc_added": 5,
+        "loc_removed": 0
+      }
+    ]
+  },
+  {
+    "commit_sha": "direct-push-003",
+    "branch": "main",
+    "author_provider_user_id": "gh-benrivera",
+    "author_login": "benrivera",
+    "author_type": "User",
+    "commit_url": "https://github.com/acme/payments-service/commit/direct-push-003",
+    "committed_at": "2026-06-22T11:00:00Z",
+    "files": [
+      {
+        "path": "services/payments/checkout.py",
+        "loc_added": 3,
+        "loc_removed": 1
+      }
+    ]
+  }
+]

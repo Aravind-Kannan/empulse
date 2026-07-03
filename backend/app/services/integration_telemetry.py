@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.operational import Assignment, Component, Employee, GitHubOwnershipSnapshot
-from app.services.github_types import GitHubPullRequestActivity
+from app.services.github_types import GitHubCommitActivity, GitHubPullRequestActivity
 from app.services.identity_resolver import resolve_author_employee_id
 from app.services.integration_config_store import (
     INTEGRATION_SOURCES,
@@ -615,6 +615,7 @@ def apply_github_telemetry(
     tenant_id: uuid.UUID,
     activities: list[GitHubPullRequestActivity] | None = None,
     *,
+    commit_activities: list[GitHubCommitActivity] | None = None,
     open_prs_by_login: dict[str, int] | None = None,
 ) -> dict[str, dict[str, float]]:
     """
@@ -636,7 +637,9 @@ def apply_github_telemetry(
 
     from app.services.github_doa import persist_doa_snapshots
 
-    doa_result = persist_doa_snapshots(db, tenant_id, activities)
+    doa_result = persist_doa_snapshots(
+        db, tenant_id, activities, commit_activities
+    )
     _doa_available = bool(doa_result.snapshots)
     _component_bus_factor.clear()
     _component_bus_factor.update(doa_result.bus_factor_by_component)
@@ -658,6 +661,7 @@ def apply_github_telemetry(
         db,
         tenant_id,
         activities,
+        commit_activities,
         repo_path=repo_path,
     )
 

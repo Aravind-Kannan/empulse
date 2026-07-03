@@ -22,11 +22,13 @@ from app.services.github_code import (
     collect_github_code_snapshots,
 )
 from app.services.github_client import (
+    GitHubClient,
     fetch_github_pull_request_activity,
     parse_repository_url,
 )
 from app.services.github_path_mapper import apply_path_mapping
-from app.services.github_types import GitHubPullRequestActivity
+from app.services.github_touch import pr_merge_shas
+from app.services.github_types import GitHubCommitActivity, GitHubPullRequestActivity
 from app.services.integration_config_store import record_integration_sync
 from app.services.integration_telemetry import (
     HIGH_PRIORITIES,
@@ -191,12 +193,19 @@ def fetch_and_map_github_activity(
     components_by_id: dict[str, Component],
     *,
     use_fixture: bool = False,
-) -> tuple[list[GitHubPullRequestActivity], list[str], dict[str, int]]:
+) -> tuple[
+    list[GitHubPullRequestActivity],
+    list[GitHubCommitActivity],
+    list[str],
+    dict[str, int],
+]:
     repository_urls = config.resolved_repository_urls()
     all_activities: list[GitHubPullRequestActivity] = []
+    all_commits: list[GitHubCommitActivity] = []
     all_unmapped: list[str] = []
     combined_open_prs: dict[str, int] = {}
     seen_activity_keys: set[str] = set()
+    seen_commit_keys: set[str] = set()
 
     for repository_url in repository_urls:
         repo_config = config.with_repository(repository_url)
@@ -220,7 +229,24 @@ def fetch_and_map_github_activity(
         for login, count in open_prs_by_login.items():
             combined_open_prs[login] = combined_open_prs.get(login, 0) + count
 
-    return all_activities, all_unmapped, combined_open_prs
+        commits = GitHubClient(repo_config, use_fixture=use_fixture).fetch_branch_commit_activity(
+            exclude_shas=pr_merge_shas(mapped),
+        )
+        mapped_commits, unmapped_commit_paths = apply_path_mapping(
+            commits,
+            path_component_map=config.path_component_map,
+            repo_name=repo_name,
+            components_by_id=components_by_id,
+            default_component_id=config.default_component_id,
+        )
+        for commit in mapped_commits:
+            if commit.dedupe_key in seen_commit_keys:
+                continue
+            seen_commit_keys.add(commit.dedupe_key)
+            all_commits.append(commit)
+        all_unmapped.extend(unmapped_commit_paths)
+
+    return all_activities, all_commits, all_unmapped, combined_open_prs
 
 
 def analyze_github_payload(
@@ -471,6 +497,7 @@ async def process_external_app_sync(
 
     employee_nodes, component_nodes, components_by_id = _load_org_context(db, tenant_id)
     github_activities: list[GitHubPullRequestActivity] = []
+    github_commits: list[GitHubCommitActivity] = []
     open_prs_by_login: dict[str, int] = {}
     jira_issues: list[JiraIssueActivity] = []
     notion_snapshot = None
@@ -485,8 +512,8 @@ async def process_external_app_sync(
 
         report("fetching", "Loading GitHub contributors for identity mapping…")
         await asyncio.to_thread(prepare_github_identity_context, db, tenant_id, config)
-        report("fetching", "Fetching pull requests and file changes from GitHub…")
-        github_activities, unmapped_paths, open_prs_by_login = await asyncio.to_thread(
+        report("fetching", "Fetching pull requests, commits, and file changes from GitHub…")
+        github_activities, github_commits, unmapped_paths, open_prs_by_login = await asyncio.to_thread(
             fetch_and_map_github_activity,
             config,
             components_by_id,
@@ -528,6 +555,7 @@ async def process_external_app_sync(
         if code_lines:
             narrative = narrative + "\n" + "\n".join(code_lines)
         cognify_extra_stats["prs_fetched"] = len(github_activities)
+        cognify_extra_stats["commits_fetched"] = len(github_commits)
         cognify_extra_stats["code_files_fetched"] = len(code_snapshots)
         report("building_graph", "Building ontology graph nodes from GitHub activity…")
     elif normalized == "jira":
@@ -710,6 +738,7 @@ async def process_external_app_sync(
             db,
             tenant_id,
             github_activities,
+            commit_activities=github_commits,
             open_prs_by_login=open_prs_by_login or None,
         )
         from app.services.component_management import sync_assignments_from_github_ownership

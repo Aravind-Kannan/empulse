@@ -35,3 +35,21 @@ class GitHubPullRequestActivity:
     @property
     def dedupe_key(self) -> str:
         return self.merge_commit_sha or f"pr-{self.pr_number}"
+
+
+@dataclass
+class GitHubCommitActivity:
+    """Direct commit on a tracked branch (captures pushes not opened as PRs)."""
+
+    commit_sha: str
+    branch: str
+    author_provider_user_id: str
+    author_login: str
+    author_type: str
+    commit_url: str
+    committed_at: str | None
+    files: list[GitHubFileChange] = field(default_factory=list)
+
+    @property
+    def dedupe_key(self) -> str:
+        return self.commit_sha

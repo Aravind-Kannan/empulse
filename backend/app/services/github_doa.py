@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.models.operational import Assignment, Component, DoaFileSnapshot, Employee
 from app.services.github_code import GitHubCodeFileSnapshot
-from app.services.github_types import GitHubPullRequestActivity
+from app.services.github_types import GitHubCommitActivity, GitHubPullRequestActivity
+from app.services.github_touch import FileTouch, build_file_touch_indexes, events_to_doa_touches
 from app.services.identity_resolver import resolve_author_employee_id
 
 DOA_AUTHOR_THRESHOLD = 0.75
@@ -33,12 +34,6 @@ BINARY_EXTENSIONS = {
     ".bin",
 }
 VENDOR_PREFIXES = ("vendor/", "node_modules/", "third_party/", "dist/", "build/")
-
-
-@dataclass
-class FileTouch:
-    employee_id: str
-    touched_at: datetime
 
 
 @dataclass
@@ -392,36 +387,13 @@ def compute_doa_from_activities(
     db: Session,
     tenant_id: uuid.UUID,
     activities: list[GitHubPullRequestActivity],
+    commit_activities: list[GitHubCommitActivity] | None = None,
 ) -> DoaComputationResult:
-    """Build per-file DOA from merged PR activity and aggregate to components."""
-    file_touches: dict[tuple[str, str], list[FileTouch]] = defaultdict(list)
-
-    for activity in sorted(
-        activities,
-        key=lambda row: _parse_merged_at(row.merged_at),
-    ):
-        if activity.author_type == "Bot":
-            continue
-        author_id = resolve_author_employee_id(
-            db,
-            tenant_id,
-            "github",
-            activity.author_provider_user_id,
-            demo_fallback_employee_id=None,
-            quarantine_event_type="github_pr",
-            quarantine_payload={
-                "pr_number": activity.pr_number,
-                "commit_sha": activity.commit_sha,
-            },
-        )
-        if not author_id:
-            continue
-        touched_at = _parse_merged_at(activity.merged_at)
-        for file_change in activity.files:
-            if not file_change.component_id or _should_exclude_path(file_change.path):
-                continue
-            key = (file_change.component_id, file_change.path)
-            file_touches[key].append(FileTouch(employee_id=author_id, touched_at=touched_at))
+    """Build per-file DOA from merged PR activity and direct branch commits."""
+    file_events, _ = build_file_touch_indexes(
+        db, tenant_id, activities, commit_activities
+    )
+    file_touches = events_to_doa_touches(file_events)
 
     per_component_files: dict[str, dict[str, list[DoaContributorScore]]] = defaultdict(dict)
     employee_max_doa: dict[str, float] = defaultdict(float)
@@ -505,10 +477,11 @@ def persist_doa_snapshots(
     db: Session,
     tenant_id: uuid.UUID,
     activities: list[GitHubPullRequestActivity],
+    commit_activities: list[GitHubCommitActivity] | None = None,
     *,
     computed_at: datetime | None = None,
 ) -> DoaComputationResult:
-    result = compute_doa_from_activities(db, tenant_id, activities)
+    result = compute_doa_from_activities(db, tenant_id, activities, commit_activities)
     valid_components = {
         row[0]
         for row in db.query(Component.id).filter(Component.tenant_id == tenant_id).all()
@@ -530,27 +503,10 @@ def persist_doa_snapshots(
         synchronize_session=False
     )
 
-    file_touches: dict[tuple[str, str], list[FileTouch]] = defaultdict(list)
-    for activity in sorted(activities, key=lambda row: _parse_merged_at(row.merged_at)):
-        if activity.author_type == "Bot":
-            continue
-        author_id = resolve_author_employee_id(
-            db,
-            tenant_id,
-            "github",
-            activity.author_provider_user_id,
-            demo_fallback_employee_id=None,
-            quarantine_event_type="github_pr",
-            quarantine_payload={"pr_number": activity.pr_number},
-        )
-        if not author_id:
-            continue
-        touched_at = _parse_merged_at(activity.merged_at)
-        for file_change in activity.files:
-            if not file_change.component_id or _should_exclude_path(file_change.path):
-                continue
-            key = (file_change.component_id, file_change.path)
-            file_touches[key].append(FileTouch(employee_id=author_id, touched_at=touched_at))
+    file_events, _ = build_file_touch_indexes(
+        db, tenant_id, activities, commit_activities
+    )
+    file_touches = events_to_doa_touches(file_events)
 
     snapshots: list[DoaFileSnapshot] = []
     for (component_id, file_path), touches in file_touches.items():

@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from app.schemas.integrations import GitHubConfigRequest, GitHubRepoInfo
-from app.services.github_types import GitHubFileChange, GitHubPullRequestActivity
+from app.services.github_types import GitHubFileChange, GitHubPullRequestActivity, GitHubCommitActivity
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,10 @@ MAX_PATCH_CHARS = 3_000
 FIXTURE_PATH = (
     Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures" / "github_merged_prs.json"
 )
+COMMIT_FIXTURE_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures" / "github_branch_commits.json"
+)
+MAX_COMMITS_PER_SYNC = 300
 
 
 class GitHubClientError(ValueError):
@@ -166,6 +170,13 @@ def load_fixture_activities() -> list[GitHubPullRequestActivity]:
     return [_activity_from_dict(item) for item in payload]
 
 
+def load_fixture_commits() -> list[GitHubCommitActivity]:
+    if not COMMIT_FIXTURE_PATH.is_file():
+        return []
+    payload = json.loads(COMMIT_FIXTURE_PATH.read_text())
+    return [_commit_from_dict(item) for item in payload]
+
+
 def activities_from_mock_feed() -> list[GitHubPullRequestActivity]:
     """Convert legacy MOCK_GITHUB_ACTIVITY into typed activities (tests / fallback)."""
     from app.services.integration_feeds import MOCK_GITHUB_ACTIVITY
@@ -226,6 +237,31 @@ def _activity_from_dict(item: dict) -> GitHubPullRequestActivity:
     )
 
 
+def _commit_from_dict(item: dict) -> GitHubCommitActivity:
+    return GitHubCommitActivity(
+        commit_sha=item["commit_sha"],
+        branch=item.get("branch", "main"),
+        author_provider_user_id=item["author_provider_user_id"],
+        author_login=item.get("author_login", item["author_provider_user_id"]),
+        author_type=item.get("author_type", "User"),
+        commit_url=item["commit_url"],
+        committed_at=item.get("committed_at"),
+        files=[
+            GitHubFileChange(
+                path=file_row["path"],
+                loc_added=file_row["loc_added"],
+                loc_removed=file_row["loc_removed"],
+                component_id=file_row.get("component_id"),
+                status=file_row.get("status", "modified"),
+                patch_preview=file_row.get("patch_preview", ""),
+                blob_sha=file_row.get("blob_sha", ""),
+                previous_path=file_row.get("previous_path", ""),
+            )
+            for file_row in item.get("files", [])
+        ],
+    )
+
+
 class GitHubClient:
     def __init__(self, config: GitHubConfigRequest, *, use_fixture: bool = False) -> None:
         self.config = config
@@ -263,6 +299,22 @@ class GitHubClient:
             activities.append(pr)
 
         return activities, open_by_author
+
+    def fetch_branch_commit_activity(
+        self,
+        *,
+        since: datetime | None = None,
+        exclude_shas: set[str] | None = None,
+    ) -> list[GitHubCommitActivity]:
+        if self.use_fixture:
+            return load_fixture_commits()
+        if not self.config.personal_access_token and not self.config.oauth_connected:
+            logger.warning("No GitHub token configured; skipping GitHub commit fetch")
+            return []
+
+        since_dt = since or (datetime.now(UTC) - timedelta(days=30 * SYNC_WINDOW_MONTHS))
+        branch_targets = self.config.resolved_branch_targets()
+        return self._fetch_branch_commits(since_dt, branch_targets, exclude_shas or set())
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         response = self._session.request(
@@ -420,6 +472,105 @@ class GitHubClient:
             )
         return files
 
+    def _parse_commit_files(self, rows: list[dict]) -> list[GitHubFileChange]:
+        files: list[GitHubFileChange] = []
+        for row in rows:
+            patch = row.get("patch") or ""
+            if len(patch) > MAX_PATCH_CHARS:
+                patch = patch[: MAX_PATCH_CHARS - 3] + "..."
+            files.append(
+                GitHubFileChange(
+                    path=row["filename"],
+                    loc_added=row.get("additions", 0),
+                    loc_removed=row.get("deletions", 0),
+                    status=row.get("status") or "modified",
+                    patch_preview=patch,
+                    blob_sha=row.get("sha") or "",
+                    previous_path=row.get("previous_filename") or "",
+                )
+            )
+        return files
+
+    def _fetch_branch_commits(
+        self,
+        since: datetime,
+        branch_targets: list[str] | None,
+        exclude_shas: set[str],
+    ) -> list[GitHubCommitActivity]:
+        branches = branch_targets or [self.config.branch_target or "main"]
+        activities: list[GitHubCommitActivity] = []
+        seen_shas: set[str] = set()
+
+        for branch in branches:
+            page = 1
+            while page <= 10 and len(activities) < MAX_COMMITS_PER_SYNC:
+                response = self._request(
+                    "GET",
+                    f"/repos/{self.owner}/{self.repo}/commits",
+                    params={
+                        "sha": branch,
+                        "since": since.isoformat(),
+                        "per_page": 100,
+                        "page": page,
+                    },
+                )
+                commits = response.json()
+                if not commits:
+                    break
+
+                stop_paging = False
+                for row in commits:
+                    if len(activities) >= MAX_COMMITS_PER_SYNC:
+                        break
+                    sha = (row.get("sha") or "")[:40]
+                    if not sha or sha in seen_shas or sha in exclude_shas:
+                        continue
+                    seen_shas.add(sha)
+
+                    commit_meta = row.get("commit") or {}
+                    committed_at = (commit_meta.get("author") or {}).get("date")
+                    if committed_at:
+                        committed_dt = datetime.fromisoformat(
+                            committed_at.replace("Z", "+00:00")
+                        )
+                        if committed_dt < since:
+                            stop_paging = True
+                            continue
+
+                    author = row.get("author") or {}
+                    if author.get("type") == "Bot":
+                        continue
+                    login = author.get("login") or "ghost"
+
+                    detail = self._request(
+                        "GET",
+                        f"/repos/{self.owner}/{self.repo}/commits/{sha}",
+                    )
+                    detail_json = detail.json()
+                    files = self._parse_commit_files(detail_json.get("files") or [])
+                    if not files:
+                        continue
+
+                    activities.append(
+                        GitHubCommitActivity(
+                            commit_sha=sha,
+                            branch=branch,
+                            author_provider_user_id=f"gh-{login}",
+                            author_login=login,
+                            author_type=author.get("type", "User"),
+                            commit_url=row.get("html_url")
+                            or f"https://github.com/{self.owner}/{self.repo}/commit/{sha}",
+                            committed_at=committed_at,
+                            files=files,
+                        )
+                    )
+
+                if stop_paging or len(commits) < 100:
+                    break
+                page += 1
+
+        return activities
+
     def _fetch_pr_reviewers(self, pr_number: int) -> list[str]:
         response = self._request(
             "GET",
@@ -508,3 +659,37 @@ def fetch_github_pull_request_activity(
             combined_open_prs[login] = combined_open_prs.get(login, 0) + count
 
     return all_activities, combined_open_prs
+
+
+def fetch_github_commit_activity(
+    config: GitHubConfigRequest,
+    *,
+    use_fixture: bool = False,
+    exclude_shas: set[str] | None = None,
+) -> list[GitHubCommitActivity]:
+    if use_fixture:
+        return GitHubClient(config, use_fixture=True).fetch_branch_commit_activity(
+            exclude_shas=exclude_shas
+        )
+
+    repository_urls = config.resolved_repository_urls()
+    if not repository_urls:
+        raise GitHubClientError("At least one GitHub repository URL is required.")
+
+    all_commits: list[GitHubCommitActivity] = []
+    seen_keys: set[str] = set()
+    skip_shas = set(exclude_shas or ())
+
+    for repository_url in repository_urls:
+        repo_config = config.with_repository(repository_url)
+        commits = GitHubClient(repo_config, use_fixture=False).fetch_branch_commit_activity(
+            exclude_shas=skip_shas
+        )
+        for activity in commits:
+            if activity.dedupe_key in seen_keys:
+                continue
+            seen_keys.add(activity.dedupe_key)
+            skip_shas.add(activity.commit_sha)
+            all_commits.append(activity)
+
+    return all_commits
