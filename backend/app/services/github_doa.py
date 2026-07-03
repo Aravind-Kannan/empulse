@@ -210,6 +210,23 @@ def dominant_blame_author_login(snap: GitHubCodeFileSnapshot) -> str | None:
     return max(weights, key=weights.get)
 
 
+def _group_code_snapshot_blame(
+    snapshots: list[GitHubCodeFileSnapshot],
+) -> dict[tuple[str, str], dict[str, int]]:
+    """Merge blame line weights per (component_id, file_path) across refs/branches."""
+    grouped: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for snap in snapshots:
+        if not snap.component_id or _should_exclude_path(snap.file_path):
+            continue
+        weights = _blame_line_weights_by_login(snap)
+        if not weights:
+            continue
+        key = (snap.component_id, snap.file_path)
+        for login, line_count in weights.items():
+            grouped[key][login] += line_count
+    return {key: dict(weights) for key, weights in grouped.items()}
+
+
 def compute_doa_from_code_snapshots(
     db: Session,
     tenant_id: uuid.UUID,
@@ -223,13 +240,7 @@ def compute_doa_from_code_snapshots(
     )
     now = datetime.now(UTC)
 
-    for snap in snapshots:
-        if not snap.component_id or _should_exclude_path(snap.file_path):
-            continue
-        weights = _blame_line_weights_by_login(snap)
-        if not weights:
-            continue
-
+    for (component_id, file_path), weights in _group_code_snapshot_blame(snapshots).items():
         total_lines = sum(weights.values()) or 1
         scores: list[DoaContributorScore] = []
         for login, line_count in weights.items():
@@ -240,8 +251,7 @@ def compute_doa_from_code_snapshots(
                 f"gh-{login}",
                 quarantine_event_type="github_blame",
                 quarantine_payload={
-                    "file_path": snap.file_path,
-                    "ref": snap.ref,
+                    "file_path": file_path,
                     "author_login": login,
                 },
             )
@@ -263,12 +273,12 @@ def compute_doa_from_code_snapshots(
                 share * 100.0,
             )
             if is_author:
-                authoritative_by_component[snap.component_id][snap.file_path].append(
+                authoritative_by_component[component_id][file_path].append(
                     employee_id
                 )
 
         if scores:
-            per_component_files[snap.component_id][snap.file_path] = scores
+            per_component_files[component_id][file_path] = scores
 
     ownership: dict[str, dict[str, float]] = {}
     bus_factor_by_component: dict[str, int] = {}
@@ -339,13 +349,8 @@ def persist_doa_from_code_snapshots(
     )
 
     persisted: list[DoaFileSnapshot] = []
-    for snap in snapshots:
-        if not snap.component_id or snap.component_id not in valid_components:
-            continue
-        if _should_exclude_path(snap.file_path):
-            continue
-        weights = _blame_line_weights_by_login(snap)
-        if not weights:
+    for (component_id, file_path), weights in _group_code_snapshot_blame(snapshots).items():
+        if component_id not in valid_components:
             continue
         total_lines = sum(weights.values()) or 1
         for login, line_count in weights.items():
@@ -356,8 +361,7 @@ def persist_doa_from_code_snapshots(
                 f"gh-{login}",
                 quarantine_event_type="github_blame",
                 quarantine_payload={
-                    "file_path": snap.file_path,
-                    "ref": snap.ref,
+                    "file_path": file_path,
                     "author_login": login,
                 },
             )
@@ -366,8 +370,8 @@ def persist_doa_from_code_snapshots(
             share = line_count / total_lines
             row = DoaFileSnapshot(
                 tenant_id=tenant_id,
-                component_id=snap.component_id,
-                file_path=snap.file_path,
+                component_id=component_id,
+                file_path=file_path,
                 employee_id=employee_id,
                 doa_score=round(share, 4),
                 is_author=share >= DOA_AUTHOR_THRESHOLD,

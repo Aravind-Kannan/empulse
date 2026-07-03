@@ -3,8 +3,10 @@ import shutil
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +40,10 @@ class Settings(BaseSettings):
     cognee_graph_db_password: str = "pleaseletmein"
     cognee_graph_db_name: str = "neo4j"
     cognee_backend_access_control: bool = False
+    # Cognee backend: local (Neo4j + Ollama) or cloud (remote tenant via cognee.serve).
+    cognee_backend: Literal["local", "cloud"] = "local"
+    cognee_service_url: str = ""
+    cognee_api_key: str = ""
 
     internal_debug_key: str = ""
 
@@ -57,6 +63,12 @@ class Settings(BaseSettings):
 
     era_v2_scoring: bool = True
 
+    # When false (default), GitHub sync skips full file bodies and diff patches on CodeArtifact nodes.
+    github_ingest_file_content: bool = False
+
+    # deployment environment — production enables landing-page Postgres warmup UX
+    app_env: Literal["development", "production"] = "development"
+
     # When unset, enrichment auto-skips for Ollama (local models fail Cognee summarization schema).
     cognify_enrichment_enabled: bool | None = None
 
@@ -65,6 +77,29 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("cognee_backend", mode="before")
+    @classmethod
+    def _normalize_cognee_backend(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.lower().strip()
+        return value
+
+    @field_validator("app_env", mode="before")
+    @classmethod
+    def _normalize_app_env(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.lower().strip()
+        return value
+
+
+def _graph_dataset_handler(graph_provider: str) -> str:
+    normalized = graph_provider.lower().strip()
+    if normalized == "neo4j":
+        return "neo4j"
+    if normalized == "kuzu":
+        return "kuzu"
+    return "ladybug"
 
 
 def _apply_runtime_env(settings: Settings) -> None:
@@ -89,8 +124,15 @@ def _apply_runtime_env(settings: Settings) -> None:
     os.environ.setdefault("GRAPH_DATABASE_USERNAME", settings.cognee_graph_db_username)
     os.environ.setdefault("GRAPH_DATABASE_PASSWORD", settings.cognee_graph_db_password)
     os.environ.setdefault("GRAPH_DATABASE_NAME", settings.cognee_graph_db_name)
-    os.environ.setdefault("GRAPH_DATASET_DATABASE_HANDLER", "neo4j")
+    os.environ.setdefault(
+        "GRAPH_DATASET_DATABASE_HANDLER",
+        _graph_dataset_handler(settings.cognee_graph_db_provider),
+    )
     os.environ.setdefault("VECTOR_DATASET_DATABASE_HANDLER", "lancedb")
+    if settings.cognee_service_url.strip():
+        os.environ.setdefault("COGNEE_SERVICE_URL", settings.cognee_service_url.strip())
+    if settings.cognee_api_key:
+        os.environ.setdefault("COGNEE_API_KEY", settings.cognee_api_key)
 
 
 _apply_runtime_env(Settings())
@@ -152,7 +194,7 @@ def ensure_cognee_metadata_database(settings: Settings) -> None:
 
 
 def setup_cognee() -> None:
-    """Initialize Cognee storage layout, Ollama LLM, and provider configuration."""
+    """Initialize Cognee storage layout and provider configuration (local or cloud-backed)."""
     settings = get_settings()
 
     cognee.config.data_root_directory(settings.cognee_data_root)
@@ -167,18 +209,21 @@ def setup_cognee() -> None:
 
     graph_db_config: dict = {
         "graph_database_provider": settings.cognee_graph_db_provider,
+        "graph_database_subprocess_enabled": False,
     }
-    if settings.cognee_graph_db_provider == "neo4j":
+    provider = settings.cognee_graph_db_provider.lower().strip()
+    if provider == "neo4j":
         graph_db_config.update(
             {
                 "graph_database_url": settings.cognee_graph_db_url,
                 "graph_database_username": settings.cognee_graph_db_username,
                 "graph_database_password": settings.cognee_graph_db_password,
                 "graph_database_name": settings.cognee_graph_db_name,
-                "graph_database_subprocess_enabled": False,
                 "graph_dataset_database_handler": "neo4j",
             }
         )
+    elif provider == "kuzu":
+        graph_db_config["graph_dataset_database_handler"] = "kuzu"
     cognee.config.set_graph_db_config(graph_db_config)
 
     cognee.config.set_llm_provider(settings.llm_provider)
@@ -209,11 +254,21 @@ async def run_cognee_add_and_cognify(
     custom_prompt: str | None = None,
 ) -> dict:
     """
-    Placeholder async utility that ingests unstructured text via cognee.add()
-    and builds the retrieval graph via cognee.cognify().
+    Ingest unstructured text and build the retrieval graph.
+
+    Local: cognee.add() + cognee.cognify().
+    Cloud: cognee.remember() (add + cognify + LLM enrichment in one pass).
     """
     settings = get_settings()
     target_dataset = dataset_name or settings.cognee_dataset_name
+
+    if settings.cognee_backend == "cloud":
+        result = await cognee.remember(
+            content,
+            dataset_name=target_dataset,
+            custom_prompt=custom_prompt,
+        )
+        return {"dataset": target_dataset, "cognify_result": result}
 
     await cognee.add(content, dataset_name=target_dataset)
     result = await cognee.cognify(

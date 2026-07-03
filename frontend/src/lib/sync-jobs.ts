@@ -1,5 +1,6 @@
+import { apiDateToEpochMs } from "@/lib/datetime";
+import { INTEGRATION_CATALOG, type IntegrationId } from "@/lib/integrations";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
-import type { IntegrationId } from "@/lib/integrations";
 
 export function jobsBySource(
   jobs: IntegrationSyncJobStatusResponse[],
@@ -37,12 +38,52 @@ export function latestJobPerSource(
     const existing = bySource.get(source);
     if (
       !existing ||
-      new Date(job.created_at).getTime() > new Date(existing.created_at).getTime()
+      apiDateToEpochMs(job.created_at) > apiDateToEpochMs(existing.created_at)
     ) {
       bySource.set(source, job);
     }
   }
   return bySource;
+}
+
+export function jobIntegrationId(
+  job: IntegrationSyncJobStatusResponse,
+): IntegrationId | null {
+  if (job.source === "github" || job.source === "github_repo") {
+    return "github";
+  }
+  if (job.source === "jira" || job.source === "slack" || job.source === "notion") {
+    return job.source;
+  }
+  return null;
+}
+
+export function syncJobShortTitle(job: IntegrationSyncJobStatusResponse): string {
+  if (job.job_kind === "github_repo" && job.repository_url) {
+    try {
+      const parts = new URL(job.repository_url).pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) {
+        return `${parts[0]}/${parts[1]}`;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  const integrationId = jobIntegrationId(job);
+  return (
+    INTEGRATION_CATALOG.find((app) => app.id === integrationId)?.name ??
+    job.source.charAt(0).toUpperCase() + job.source.slice(1)
+  );
+}
+
+export function syncJobKindLabel(job: IntegrationSyncJobStatusResponse): string | null {
+  if (job.job_kind === "github_repo") {
+    return "Full repo";
+  }
+  if (job.source === "github") {
+    return "Activity";
+  }
+  return null;
 }
 
 export function syncJobLabel(job: IntegrationSyncJobStatusResponse): string {

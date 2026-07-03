@@ -40,6 +40,7 @@ def test_collect_fixture_repo_snapshots():
         repository_url="https://github.com/acme/repo",
         personal_access_token="",
         branch_target="main",
+        ingest_file_content=True,
         path_component_map={"backend/": "comp-api"},
     )
     tree_files = fetch_repo_tree_files("", "acme", "repo", "deadbeef", use_fixture=True)

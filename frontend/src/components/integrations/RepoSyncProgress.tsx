@@ -2,6 +2,8 @@
 
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 
+import { SyncDuration } from "./SyncDuration";
+
 export interface RepoSyncProgressStats {
   branches_total?: number;
   branches_completed?: number;
@@ -27,12 +29,17 @@ export function RepoSyncProgress({ job, compact = false }: RepoSyncProgressProps
   if (!stats) {
     if (job?.progress_message) {
       return (
-        <p className={`text-sky-400/90 ${compact ? "text-[10px]" : "text-xs"}`}>
-          {job.progress_message}
-        </p>
+        <div className={compact ? "space-y-0.5" : "space-y-1"}>
+          {job && <SyncDuration job={job} className={`text-zinc-500 ${compact ? "text-[10px]" : "text-[11px]"}`} />}
+          <p className={`text-sky-400/90 ${compact ? "text-[10px]" : "text-xs"}`}>
+            {job.progress_message}
+          </p>
+        </div>
       );
     }
-    return null;
+    return job ? (
+      <SyncDuration job={job} className={`text-zinc-500 ${compact ? "text-[10px]" : "text-[11px]"}`} />
+    ) : null;
   }
 
   const filesTotal = stats.files_total ?? 0;
@@ -45,6 +52,9 @@ export function RepoSyncProgress({ job, compact = false }: RepoSyncProgressProps
   return (
     <div className={compact ? "mt-1 space-y-1" : "mt-2 space-y-2"}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-zinc-500">
+        {job && (
+          <SyncDuration job={job} className="text-sky-400/70" />
+        )}
         {branchesTotal > 0 && (
           <span>
             Branches{" "}

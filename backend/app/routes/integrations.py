@@ -162,6 +162,7 @@ def configure_github(
             branch_target=branch_targets[0] if branch_targets else branch_target,
             branch_targets=branch_targets,
             sync_all_branches=payload.sync_all_branches,
+            ingest_file_content=payload.ingest_file_content,
             personal_access_token=token,
             oauth_connected=False,
             path_component_map=payload.path_component_map

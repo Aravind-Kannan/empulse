@@ -39,6 +39,7 @@ class IntegrationSyncJobStatusResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None
+    duration_seconds: float | None = None
     job_kind: str = "source"
     repository_url: str | None = None
 

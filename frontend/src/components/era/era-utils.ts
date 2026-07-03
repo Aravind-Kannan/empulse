@@ -7,6 +7,8 @@ import type {
   IntegrationId,
 } from "@/lib/types";
 
+import { apiDateToEpochMs } from "@/lib/datetime";
+
 import { DIMENSION_KEYS, ERA_DIMENSION_COLORS } from "./era-colors";
 
 export interface TeamEvidenceItem extends EraEvidenceItem {
@@ -59,7 +61,7 @@ export function formatSyncFreshness(
     return { label: "No sync yet", tone: "stale" };
   }
   const latest = timestamps
-    .map((value) => new Date(value).getTime())
+    .map((value) => apiDateToEpochMs(value))
     .sort((a, b) => b - a)[0];
   const minutes = Math.round((Date.now() - latest) / 60000);
   if (minutes < 60) {
@@ -225,7 +227,7 @@ export function formatEraWarning(code: string): string {
 
 export function formatProviderSyncAge(iso: string | null | undefined): string {
   if (!iso) return "never";
-  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  const minutes = Math.round((Date.now() - apiDateToEpochMs(iso)) / 60000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.round(minutes / 60);

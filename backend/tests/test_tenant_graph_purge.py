@@ -99,18 +99,22 @@ def test_expand_ingest_with_org_anchors_adds_referenced_nodes():
 def test_external_key_resolves_legacy_and_current_github_code_ids():
     external_key = "code|https://github.com/acme/api|src/main.py|deadbeef"
     ids = external_key_to_node_ids("github", external_key)
-    assert len(ids) == 2
+    assert len(ids) == 3
     assert ids[0] == CodeArtifact.id_for(
         "https://github.com/acme/api",
         "src/main.py",
-        "deadbeef",
     )
     assert ids[1] == GraphCodeFile.id_for(
         "https://github.com/acme/api",
         "src/main.py",
         "deadbeef",
     )
-    assert ids[0] != ids[1]
+    assert ids[2] == CodeArtifact.id_for(
+        "https://github.com/acme/api",
+        "src/main.py",
+        "deadbeef",
+    )
+    assert len(set(ids)) == 3
 
 
 def test_structured_ingest_stub_file_uses_real_file_uri(tmp_path, monkeypatch):

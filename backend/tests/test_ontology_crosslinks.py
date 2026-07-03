@@ -6,13 +6,15 @@ from cognee.infrastructure.engine.models.Edge import Edge
 
 from app.ontology.crosslinks import (
     apply_ontology_cross_links,
+    consolidate_code_artifacts,
     wire_discussion_resolves,
     wire_document_references,
     wire_github_touches,
 )
 from app.ontology.datapoints import ChangeEvent, CodeArtifact, Discussion, Document, WorkItem
 from app.ontology.jira_keys import extract_jira_issue_keys as extract_keys
-from app.ontology.relations import REL_REFERENCES, REL_RESOLVES, REL_TOUCHES
+from app.ontology.relations import REL_AUTHORED, REL_REFERENCES, REL_RESOLVES, REL_TOUCHES
+from app.services.cognee_ingest import GraphEmployee
 
 
 def test_extract_jira_issue_keys():
@@ -22,6 +24,77 @@ def test_extract_jira_issue_keys():
         "ENG-99",
         "ENG-100",
     )
+
+
+def test_consolidate_code_artifacts_merges_same_path():
+    author_one = GraphEmployee(
+        external_id="emp-1",
+        name="Dev One",
+        role="Engineer",
+        email="dev1@acme.test",
+        tenure_years=2.0,
+    )
+    author_two = GraphEmployee(
+        external_id="emp-2",
+        name="Dev Two",
+        role="Engineer",
+        email="dev2@acme.test",
+        tenure_years=1.0,
+    )
+    artifact_main = CodeArtifact(
+        repository_url="https://github.com/acme/api",
+        file_path="src/shared.py",
+        ref="main-sha",
+        primary_authors="dev1",
+    )
+    artifact_main.authored = (Edge(relationship_type=REL_AUTHORED), author_one)
+    artifact_feature = CodeArtifact(
+        repository_url="https://github.com/acme/api",
+        file_path="src/shared.py",
+        ref="feature-sha",
+        primary_authors="dev2",
+    )
+    artifact_feature.authored = (Edge(relationship_type=REL_AUTHORED), author_two)
+    points = [artifact_main, artifact_feature]
+    assert consolidate_code_artifacts(points) == 1
+    assert len(points) == 1
+    merged = points[0]
+    assert "dev1" in merged.primary_authors
+    assert "dev2" in merged.primary_authors
+    assert isinstance(merged.authored, list)
+    assert len(merged.authored) == 2
+
+
+def test_wire_github_touches_links_change_author_to_shared_file():
+    author = GraphEmployee(
+        external_id="emp-1",
+        name="Dev One",
+        role="Engineer",
+        email="dev1@acme.test",
+        tenure_years=2.0,
+    )
+    artifact = CodeArtifact(
+        repository_url="https://github.com/acme/api",
+        file_path="src/main.py",
+        ref="deadbeef",
+    )
+    event = ChangeEvent(
+        repository_url="https://github.com/acme/api",
+        pr_number=7,
+        commit_sha="abc123",
+        branch="main",
+        loc_added=2,
+        loc_removed=1,
+        file_path="src/main.py",
+    )
+    event.authored = (Edge(relationship_type=REL_AUTHORED), author)
+    assert wire_github_touches([artifact, event]) == 2
+    assert artifact.authored is not None
+    if isinstance(artifact.authored, list):
+        assert len(artifact.authored) == 1
+        assert artifact.authored[0][1] is author
+    else:
+        assert artifact.authored[1] is author
 
 
 def test_wire_github_touches_matches_repo_and_path():

@@ -34,7 +34,13 @@ def cognify_enrichment_available() -> bool:
     Ollama/local models frequently return JSON that does not match Cognee's
     SummarizedContent instructor schema, causing long retry loops.
     Structured ontology nodes are already indexed without this step.
+    Cognee Cloud uses hosted LLMs — always run enrichment when COGNEE_BACKEND=cloud.
     """
+    from app.services.cognee_cloud import use_cognee_cloud_backend
+
+    if use_cognee_cloud_backend():
+        return True
+
     settings = get_settings()
     if settings.cognify_enrichment_enabled is not None:
         return settings.cognify_enrichment_enabled
@@ -42,6 +48,11 @@ def cognify_enrichment_available() -> bool:
 
 
 def cognify_enrichment_skip_reason() -> str:
+    from app.services.cognee_cloud import use_cognee_cloud_backend
+
+    if use_cognee_cloud_backend():
+        return "cognee cloud backend"
+
     settings = get_settings()
     if settings.cognify_enrichment_enabled is False:
         return "COGNIFY_ENRICHMENT_ENABLED=false"

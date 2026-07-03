@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { apiDateToEpochMs } from "@/lib/datetime";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 
 export interface CognifyProgressStats {
@@ -47,7 +48,10 @@ function useCognifyElapsed(
   }, [isActive, startedAt]);
 
   if (startedAt) {
-    return Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+    const startedMs = apiDateToEpochMs(startedAt);
+    if (startedMs) {
+      return Math.max(0, Math.floor((now - startedMs) / 1000));
+    }
   }
   return stats?.cognify_elapsed_sec ?? 0;
 }

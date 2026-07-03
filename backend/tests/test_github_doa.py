@@ -246,3 +246,52 @@ def test_compute_doa_from_blame_snapshots(db, tenant):
 
     ownership = apply_github_blame_telemetry(db, tenant.id, [snap])
     assert ownership["comp-api"]["emp-eng-001"] > 50
+
+
+def test_persist_doa_from_code_snapshots_dedupes_same_path_across_refs(db, tenant):
+    from app.services.github_code import BlameRange, GitHubCodeFileSnapshot
+    from app.services.github_doa import persist_doa_from_code_snapshots
+
+    _seed(db, tenant.id)
+    db.add(
+        Component(
+            id="comp-api",
+            tenant_id=tenant.id,
+            name="API",
+            description="",
+        )
+    )
+    db.commit()
+
+    shared_path = ".gitignore"
+    snapshots = [
+        GitHubCodeFileSnapshot(
+            repository_url="https://github.com/acme/repo",
+            file_path=shared_path,
+            ref="main",
+            component_id="comp-api",
+            blame_ranges=[BlameRange(1, 10, "benrivera", "sha1")],
+            primary_authors=["benrivera"],
+        ),
+        GitHubCodeFileSnapshot(
+            repository_url="https://github.com/acme/repo",
+            file_path=shared_path,
+            ref="feature-branch",
+            component_id="comp-api",
+            blame_ranges=[BlameRange(1, 5, "benrivera", "sha2")],
+            primary_authors=["benrivera"],
+        ),
+    ]
+
+    persist_doa_from_code_snapshots(db, tenant.id, snapshots)
+    rows = (
+        db.query(DoaFileSnapshot)
+        .filter(
+            DoaFileSnapshot.tenant_id == tenant.id,
+            DoaFileSnapshot.file_path == shared_path,
+        )
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].employee_id == "emp-eng-001"
+    assert rows[0].doa_score == 1.0

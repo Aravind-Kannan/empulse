@@ -10,6 +10,7 @@ import {
   Unplug,
 } from "lucide-react";
 
+import { formatLocalDateTime } from "@/lib/datetime";
 import type { IntegrationDefinition, IntegrationStatus } from "@/lib/integrations";
 import { syncStatusLabel } from "@/lib/sync-jobs";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
@@ -18,6 +19,7 @@ import { IntegrationLogo } from "./IntegrationLogos";
 import { GitHubRepoSyncPanel } from "./GitHubRepoSyncPanel";
 import { RepoSyncProgress } from "./RepoSyncProgress";
 import { CognifyProgress } from "./CognifyProgress";
+import { SyncDuration } from "./SyncDuration";
 import { SyncJobsPanel } from "./SyncJobsPanel";
 
 const STATUS_STYLES: Record<
@@ -129,6 +131,12 @@ export function IntegrationRow({
             {connected && (
               <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
                 <span className={syncLabel.className}>{syncLabel.text}</span>
+                {isActive && latestJob && (
+                  <SyncDuration
+                    job={latestJob}
+                    className="text-sky-400/80"
+                  />
+                )}
                 {isActive && latestJob?.progress_message && (
                   <span className="truncate text-sky-400/90">
                     · {latestJob.progress_message}
@@ -149,9 +157,10 @@ export function IntegrationRow({
                 {!isActive &&
                   latestJob?.status === "completed" &&
                   latestJob.completed_at && (
-                    <span className="flex items-center gap-1 text-zinc-500">
+                    <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-zinc-500">
                       <CheckCircle2 className="h-3 w-3 text-emerald-500/80" />
-                      {new Date(latestJob.completed_at).toLocaleString()}
+                      {formatLocalDateTime(latestJob.completed_at)}
+                      <SyncDuration job={latestJob} />
                       {latestJob.result && (
                         <span className="text-zinc-600">
                           · {latestJob.result.graph_nodes_created} ingested

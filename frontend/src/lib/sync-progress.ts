@@ -1,4 +1,5 @@
 import type { IntegrationSyncPhase, IntegrationSyncJobStatusResponse } from "@/lib/types";
+import { apiDateToEpochMs } from "@/lib/datetime";
 import { syncJobLabel } from "@/lib/sync-jobs";
 
 export const SYNC_PHASE_LABELS: Record<IntegrationSyncPhase, string> = {
@@ -32,7 +33,7 @@ function sortJobsOldestFirst(
   jobs: IntegrationSyncJobStatusResponse[],
 ): IntegrationSyncJobStatusResponse[] {
   return [...jobs].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    (a, b) => apiDateToEpochMs(a.created_at) - apiDateToEpochMs(b.created_at),
   );
 }
 
@@ -62,12 +63,12 @@ function scopeJobsForProgress(
   if (activeJobs.length === 0) return [];
 
   const anchorTime = Math.min(
-    ...activeJobs.map((job) => new Date(job.created_at).getTime()),
+    ...activeJobs.map((job) => apiDateToEpochMs(job.created_at)),
   );
   const windowMs = 5 * 60 * 1000;
 
   return syncJobs.filter((job) => {
-    const created = new Date(job.created_at).getTime();
+    const created = apiDateToEpochMs(job.created_at);
     if (created < anchorTime - windowMs) return false;
     return (
       job.status === "queued" ||

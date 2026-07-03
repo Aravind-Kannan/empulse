@@ -314,7 +314,23 @@ class GitHubClient:
 
         since_dt = since or (datetime.now(UTC) - timedelta(days=30 * SYNC_WINDOW_MONTHS))
         branch_targets = self.config.resolved_branch_targets()
-        return self._fetch_branch_commits(since_dt, branch_targets, exclude_shas or set())
+        return self._fetch_branch_commits(
+            since_dt,
+            self._commit_branch_list(branch_targets),
+            exclude_shas or set(),
+        )
+
+    def _commit_branch_list(self, branch_targets: list[str] | None) -> list[str]:
+        """Resolve branch names for commit history (sync-all lists every remote branch)."""
+        if branch_targets is not None:
+            return branch_targets
+        if self.config.sync_all_branches:
+            token = self.config.personal_access_token
+            if not token:
+                return [self.config.branch_target or "main"]
+            _, branches = list_repository_branches(token, self.repository_url)
+            return branches or [self.config.branch_target or "main"]
+        return [self.config.branch_target or "main"]
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         response = self._session.request(
@@ -334,6 +350,14 @@ class GitHubClient:
         if response.status_code == 404 and path.startswith(
             f"/repos/{self.owner}/{self.repo}"
         ):
+            params = kwargs.get("params") or {}
+            branch = params.get("sha")
+            if "/commits" in path and branch:
+                raise GitHubClientError(
+                    f"Branch '{branch}' was not found on '{self.owner}/{self.repo}'. "
+                    "Update the branch target under Settings → Integrations "
+                    "(many repos use 'master' instead of 'main')."
+                )
             raise GitHubClientError(
                 f"Repository '{self.owner}/{self.repo}' was not found or this token cannot access it. "
                 "Confirm the repository URL and that your PAT is authorized for this repo."
@@ -497,7 +521,7 @@ class GitHubClient:
         branch_targets: list[str] | None,
         exclude_shas: set[str],
     ) -> list[GitHubCommitActivity]:
-        branches = branch_targets or [self.config.branch_target or "main"]
+        branches = branch_targets
         activities: list[GitHubCommitActivity] = []
         seen_shas: set[str] = set()
 

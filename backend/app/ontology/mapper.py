@@ -37,6 +37,39 @@ def _edge(relationship_type: str, **properties: object) -> Edge:
     return Edge(relationship_type=relationship_type)
 
 
+def _set_authored_edges(
+    node: CodeArtifact,
+    person_refs: tuple,
+    *,
+    employee_nodes: dict[str, GraphEmployee],
+    attribution: str = "blame",
+) -> int:
+    authors: list[GraphEmployee] = []
+    seen: set[str] = set()
+    for ref in person_refs:
+        employee_id = getattr(ref, "employee_id", None)
+        if not employee_id or employee_id in seen:
+            continue
+        author = employee_nodes.get(employee_id)
+        if author is None:
+            continue
+        authors.append(author)
+        seen.add(employee_id)
+    if not authors:
+        return 0
+    if len(authors) == 1:
+        node.authored = (
+            _edge(REL_AUTHORED, attribution=attribution),
+            authors[0],
+        )
+    else:
+        node.authored = [
+            (_edge(REL_AUTHORED, attribution=attribution), author)
+            for author in authors
+        ]
+    return len(authors)
+
+
 def map_code_artifact(
     record: CanonicalCodeArtifact,
     *,
@@ -62,14 +95,12 @@ def map_code_artifact(
             node.documents = (_edge(REL_DOCUMENTS), component)
             edge_count += 1
 
-    if record.blame_author and record.blame_author.employee_id:
-        author = employee_nodes.get(record.blame_author.employee_id)
-        if author:
-            node.authored = (
-                _edge(REL_AUTHORED, attribution="blame"),
-                author,
-            )
-            edge_count += 1
+    edge_count += _set_authored_edges(
+        node,
+        record.blame_authors,
+        employee_nodes=employee_nodes,
+        attribution="blame",
+    )
 
     return node, edge_count
 

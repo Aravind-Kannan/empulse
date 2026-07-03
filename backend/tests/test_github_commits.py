@@ -134,6 +134,35 @@ def test_pr_merge_commit_not_double_counted(db, tenant):
     assert churn_keys == {"merge-sha-100", "direct-only"}
 
 
+def test_fetch_branch_commit_activity_sync_all_branches_lists_repo_branches():
+    from unittest.mock import patch
+
+    from app.schemas.integrations import GitHubConfigRequest
+    from app.services.github_client import GitHubClient
+
+    config = GitHubConfigRequest(
+        repository_urls=["https://github.com/acme/platform"],
+        personal_access_token="ghp_test",
+        sync_all_branches=True,
+        branch_target="main",
+    )
+    client = GitHubClient(config)
+
+    with patch(
+        "app.services.github_client.list_repository_branches",
+        return_value=("master", ["master", "era"]),
+    ) as list_mock, patch.object(
+        GitHubClient,
+        "_fetch_branch_commits",
+        return_value=[],
+    ) as fetch_mock:
+        client.fetch_branch_commit_activity()
+
+    list_mock.assert_called_once()
+    _, branch_targets, _ = fetch_mock.call_args[0]
+    assert branch_targets == ["master", "era"]
+
+
 def test_pr_merge_shas_collects_merge_and_head():
     prs = [
         GitHubPullRequestActivity(

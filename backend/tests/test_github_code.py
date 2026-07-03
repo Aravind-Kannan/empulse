@@ -37,6 +37,7 @@ def test_collect_fixture_code_snapshots():
         repository_url="https://github.com/acme/repo",
         personal_access_token="",
         branch_target="main",
+        ingest_file_content=True,
         path_component_map={"src/api/": "comp-api"},
         default_component_id=None,
     )
@@ -52,6 +53,26 @@ def test_collect_fixture_code_snapshots():
     assert snap.blame_ranges
     assert snap.primary_authors
     assert "new_handler" in snap.patch_preview or snap.patch_preview
+
+
+def test_collect_code_snapshots_skips_content_by_default():
+    config = GitHubConfigRequest(
+        repository_url="https://github.com/acme/repo",
+        personal_access_token="",
+        branch_target="main",
+        path_component_map={"src/api/": "comp-api"},
+    )
+    snapshots = collect_github_code_snapshots(
+        config,
+        [_activity()],
+        use_fixture=True,
+    )
+    assert len(snapshots) == 1
+    assert snapshots[0].content_preview == ""
+    assert snapshots[0].patch_preview == ""
+    assert snapshots[0].file_path == "src/api/handler.py"
+    assert snapshots[0].blame_ranges
+    assert snapshots[0].primary_authors
 
 
 def test_fetch_blame_ranges_parses_commit_blame(monkeypatch):

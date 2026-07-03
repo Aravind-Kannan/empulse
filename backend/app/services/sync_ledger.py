@@ -80,7 +80,7 @@ def _resolve_item_spec(source: str, node: Any) -> tuple[ItemKeyFn, ItemVersionFn
 
 
 def _github_code_key(node: Any) -> str:
-    return f"code|{node.repository_url}|{node.file_path}|{node.ref}"
+    return f"code|{node.repository_url}|{node.file_path}"
 
 
 def _ledger_content_version(*parts: object) -> str:
@@ -93,7 +93,8 @@ def _github_code_version(node: Any) -> str:
     return _ledger_content_version(
         node.blob_sha,
         node.blame_summary,
-        len(node.content_preview),
+        len(getattr(node, "content_preview", "") or ""),
+        len(getattr(node, "patch_preview", "") or ""),
     )
 
 
@@ -168,6 +169,39 @@ _SOURCE_SPECS: dict[str, tuple[ItemKeyFn, ItemVersionFn, ItemLabelFn]] = {
 }
 
 
+def _normalize_external_key(source: str, external_key: str) -> str:
+    """Map legacy github code keys (with ref suffix) to canonical repo+path key."""
+    if source == "github" and external_key.startswith("code|"):
+        parts = external_key.split("|")
+        if len(parts) >= 3:
+            return f"code|{parts[1]}|{parts[2]}"
+    return external_key
+
+
+def _dedupe_ledger_items(ledger_items: list[LedgerItem]) -> list[LedgerItem]:
+    """Keep one ledger row per external_key (last snapshot wins)."""
+    by_key: dict[str, LedgerItem] = {}
+    for item in ledger_items:
+        by_key[item.external_key] = item
+    return list(by_key.values())
+
+
+def _delete_legacy_github_code_rows(
+    db: Session,
+    tenant_id: uuid.UUID,
+    source: str,
+    canonical_key: str,
+) -> None:
+    if source != "github" or not canonical_key.startswith("code|"):
+        return
+    legacy_prefix = f"{canonical_key}|"
+    db.query(IntegrationSyncRecord).filter(
+        IntegrationSyncRecord.tenant_id == tenant_id,
+        IntegrationSyncRecord.source == source,
+        IntegrationSyncRecord.external_key.like(f"{legacy_prefix}%"),
+    ).delete(synchronize_session=False)
+
+
 def _load_ledger(
     db: Session,
     tenant_id: uuid.UUID,
@@ -181,7 +215,7 @@ def _load_ledger(
         )
         .all()
     )
-    return {row.external_key: row.content_version for row in rows}
+    return { _normalize_external_key(source, row.external_key): row.content_version for row in rows }
 
 
 def plan_sync_ingest(
@@ -202,6 +236,7 @@ def plan_sync_ingest(
         return plan
 
     existing = _load_ledger(db, tenant_id, source)
+    batch_slots: dict[str, int] = {}
 
     for node in data_points:
         item_spec = _resolve_item_spec(source, node) or spec
@@ -214,6 +249,21 @@ def plan_sync_ingest(
         content_version = version_fn(node)
         display_label = label_fn(node)
         prior = existing.get(external_key)
+        ledger_item = LedgerItem(
+            external_key=external_key,
+            content_version=content_version,
+            display_label=display_label,
+            node=node,
+        )
+
+        if external_key in batch_slots:
+            idx = batch_slots[external_key]
+            plan.to_ingest[idx] = node
+            for i, item in enumerate(plan.ledger_items):
+                if item.external_key == external_key:
+                    plan.ledger_items[i] = ledger_item
+                    break
+            continue
 
         if prior is not None and prior == content_version:
             plan.skipped_count += 1
@@ -221,15 +271,9 @@ def plan_sync_ingest(
                 plan.skipped_preview.append(display_label)
             continue
 
+        batch_slots[external_key] = len(plan.to_ingest)
         plan.to_ingest.append(node)
-        plan.ledger_items.append(
-            LedgerItem(
-                external_key=external_key,
-                content_version=content_version,
-                display_label=display_label,
-                node=node,
-            )
-        )
+        plan.ledger_items.append(ledger_item)
         if prior is None:
             plan.new_count += 1
         else:
@@ -245,6 +289,7 @@ def record_synced_items(
     ledger_items: list[LedgerItem],
 ) -> None:
     """Upsert ledger rows for items successfully sent to Cognee."""
+    ledger_items = _dedupe_ledger_items(ledger_items)
     if not ledger_items:
         return
 
@@ -270,9 +315,11 @@ def record_synced_items(
                 external_key=item.external_key,
             )
             db.add(row)
+            by_key[item.external_key] = row
         row.content_version = item.content_version
         row.display_label = item.display_label
         row.synced_at = now
+        _delete_legacy_github_code_rows(db, tenant_id, source, item.external_key)
 
 
 def count_graph_edges(data_points: list[Any]) -> int:

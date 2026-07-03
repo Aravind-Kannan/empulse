@@ -11,7 +11,7 @@ types:
     identity: [external_id]
   CodeArtifact:
     cognee_type: CodeArtifact
-    identity: [repository_url, file_path, ref]
+    identity: [repository_url, file_path]
     index: [file_path, repository_url, ref, primary_authors, source]
   ChangeEvent:
     cognee_type: ChangeEvent

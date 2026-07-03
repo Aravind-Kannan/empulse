@@ -7,7 +7,7 @@ from typing import Any
 from cognee.infrastructure.engine.models.Edge import Edge
 
 from app.ontology.datapoints import ChangeEvent, CodeArtifact, Discussion, Document, WorkItem
-from app.ontology.relations import REL_REFERENCES, REL_RESOLVES, REL_TOUCHES
+from app.ontology.relations import REL_AUTHORED, REL_REFERENCES, REL_RESOLVES, REL_TOUCHES
 from app.ontology.spec import validate_relation
 
 
@@ -67,6 +67,116 @@ def _set_multi_edge(node: Any, attr: str, relationship_type: str, targets: list[
     return len(targets)
 
 
+def _authored_targets(node: Any) -> list[Any]:
+    existing = getattr(node, "authored", None)
+    if existing is None:
+        return []
+    if isinstance(existing, list):
+        return [target for _, target in existing]
+    return [existing[1]]
+
+
+def _employee_id(node: Any) -> str | None:
+    return getattr(node, "external_id", None)
+
+
+def _append_authored(artifact: CodeArtifact, author: Any) -> bool:
+    targets = _authored_targets(artifact)
+    author_id = _employee_id(author)
+    if author_id and any(_employee_id(target) == author_id for target in targets):
+        return False
+    targets.append(author)
+    _set_multi_edge(artifact, "authored", REL_AUTHORED, targets)
+    return True
+
+
+def _merge_primary_authors(existing: str, incoming: str) -> str:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for chunk in (existing, incoming):
+        for name in chunk.split(","):
+            cleaned = name.strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                merged.append(cleaned)
+    return ", ".join(merged)
+
+
+def _merge_code_artifact(canonical: CodeArtifact, other: CodeArtifact) -> None:
+    canonical.primary_authors = _merge_primary_authors(
+        canonical.primary_authors or "",
+        other.primary_authors or "",
+    )
+    if other.blame_summary and (
+        not canonical.blame_summary
+        or len(other.blame_summary) > len(canonical.blame_summary)
+    ):
+        canonical.blame_summary = other.blame_summary
+    if other.blob_sha:
+        canonical.blob_sha = other.blob_sha
+    if other.ref:
+        canonical.ref = other.ref
+    if other.content_preview and len(other.content_preview) > len(
+        canonical.content_preview or ""
+    ):
+        canonical.content_preview = other.content_preview
+    if other.patch_preview and len(other.patch_preview) > len(
+        canonical.patch_preview or ""
+    ):
+        canonical.patch_preview = other.patch_preview
+    for author in _authored_targets(other):
+        _append_authored(canonical, author)
+
+
+def consolidate_code_artifacts(data_points: list[Any]) -> int:
+    """Merge in-batch CodeArtifact nodes that share repository_url + file_path."""
+    canonical_by_path: dict[tuple[str, str], CodeArtifact] = {}
+    duplicate_count = 0
+
+    for point in data_points:
+        if not isinstance(point, CodeArtifact):
+            continue
+        key = (point.repository_url, point.file_path)
+        existing = canonical_by_path.get(key)
+        if existing is None:
+            canonical_by_path[key] = point
+            continue
+        duplicate_count += 1
+        _merge_code_artifact(existing, point)
+
+    if duplicate_count == 0:
+        return 0
+
+    deduped: list[Any] = []
+    seen_paths: set[tuple[str, str]] = set()
+    for point in data_points:
+        if isinstance(point, CodeArtifact):
+            key = (point.repository_url, point.file_path)
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            deduped.append(canonical_by_path[key])
+            continue
+        if isinstance(point, ChangeEvent) and getattr(point, "touches", None):
+            edge, target = point.touches
+            if isinstance(target, CodeArtifact):
+                key = (target.repository_url, target.file_path)
+                point.touches = (edge, canonical_by_path.get(key, target))
+        deduped.append(point)
+
+    data_points[:] = deduped
+    return duplicate_count
+
+
+def _change_event_author(event: ChangeEvent) -> Any | None:
+    authored = getattr(event, "authored", None)
+    if authored is None:
+        return None
+    if isinstance(authored, list):
+        return authored[0][1] if authored else None
+    return authored[1]
+
+
 def wire_github_touches(data_points: list[Any]) -> int:
     """Link ChangeEvent -> CodeArtifact when repo + file_path match."""
     artifacts: dict[tuple[str, str], CodeArtifact] = {}
@@ -89,11 +199,15 @@ def wire_github_touches(data_points: list[Any]) -> int:
                 file_path=point.file_path,
                 ref=point.commit_sha,
             )
+            artifacts[key] = artifact
         point.touches = (
             _edge(REL_TOUCHES, file_path=point.file_path, commit_sha=point.commit_sha),
             artifact,
         )
         edge_count += 1
+        author = _change_event_author(point)
+        if author and _append_authored(artifact, author):
+            edge_count += 1
     return edge_count
 
 
@@ -135,6 +249,7 @@ def apply_ontology_cross_links(data_points: list[Any]) -> int:
     """Apply all in-batch ontology cross-links. Returns new edge count."""
     if not data_points:
         return 0
+    consolidate_code_artifacts(data_points)
     return (
         wire_github_touches(data_points)
         + wire_discussion_resolves(data_points)

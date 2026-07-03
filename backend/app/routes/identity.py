@@ -87,12 +87,18 @@ def read_provider_members_bundle(
 
 
 @router.put("/mappings", response_model=list[EmployeeIdentityRecord])
-def update_identity_mappings(
+async def update_identity_mappings(
     payload: IdentityMappingsUpdateRequest,
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> list[EmployeeIdentityRecord]:
-    return save_identity_mappings(db, tenant, payload.mappings)
+    saved = save_identity_mappings(db, tenant, payload.mappings)
+    employee_ids = {mapping.employee_id for mapping in payload.mappings}
+    if employee_ids:
+        from app.services.identity_cognee import sync_employee_identities_to_cognee
+
+        await sync_employee_identities_to_cognee(db, tenant.id, employee_ids)
+    return saved
 
 
 @router.post("/sync", response_model=IdentitySyncResponse)

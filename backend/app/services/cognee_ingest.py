@@ -32,6 +32,13 @@ from app.tenancy import tenant_dataset_name
 
 AUTO_COMPONENT_DESC_PREFIX = "AUTO:"
 
+PROVIDER_IDENTITY_FIELDS: dict[str, str] = {
+    "github": "github_id",
+    "jira": "jira_id",
+    "slack": "slack_id",
+    "notion": "notion_id",
+}
+
 
 def _merge_auto_provisioned_components(
     db: Session,
@@ -70,12 +77,28 @@ class GraphEmployee(DataPoint):
     email: str
     tenure_years: float
     team_name: str | None = None
+    github_id: str = ""
+    jira_id: str = ""
+    slack_id: str = ""
+    notion_id: str = ""
     reportsTo: SkipValidation[Any] = None
     directReportOf: SkipValidation[Any] = None
     manages: SkipValidation[Any] = None
     ownsComponent: SkipValidation[Any] = None
     owns: SkipValidation[Any] = None
-    metadata: dict = {"index_fields": ["name", "role", "team_name"]}
+    metadata: dict = {
+        "index_fields": [
+            "name",
+            "role",
+            "team_name",
+            "email",
+            "github_id",
+            "jira_id",
+            "slack_id",
+            "notion_id",
+        ],
+        "identity_fields": ["external_id"],
+    }
 
 
 class GraphComponent(DataPoint):
@@ -84,7 +107,10 @@ class GraphComponent(DataPoint):
     description: str
     open_tasks_count: int
     unresolved_incidents: int
-    metadata: dict = {"index_fields": ["name", "description"]}
+    metadata: dict = {
+        "index_fields": ["name", "description"],
+        "identity_fields": ["external_id"],
+    }
 
 
 def _delete_employee_dependents(
@@ -388,6 +414,87 @@ def assign_org_graph_edges(
         edge_count += 2
 
     return edge_count
+
+
+def apply_provider_identities(
+    node: GraphEmployee,
+    identities: list[EmployeeIdentity],
+) -> GraphEmployee:
+    updates = {field: "" for field in PROVIDER_IDENTITY_FIELDS.values()}
+    for row in identities:
+        field = PROVIDER_IDENTITY_FIELDS.get(row.provider)
+        if field:
+            updates[field] = row.provider_username_or_id
+    return node.model_copy(update=updates)
+
+
+def build_graph_employee(
+    employee: Employee,
+    identities: list[EmployeeIdentity] | None = None,
+) -> GraphEmployee:
+    node = GraphEmployee(
+        external_id=employee.id,
+        name=employee.name,
+        role=employee.role,
+        email=employee.email,
+        tenure_years=employee.tenure_years,
+        team_name=employee.team_name,
+    )
+    if identities:
+        return apply_provider_identities(node, identities)
+    return node
+
+
+def build_tenant_org_graph_nodes(
+    db: Session,
+    tenant_id: uuid.UUID,
+    *,
+    assign_edges: bool = True,
+) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent], dict[str, Component]]:
+    """Build in-memory org graph nodes with provider identities for Cognee ingest."""
+    employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
+    components = db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    if not employees:
+        return {}, {}, {}
+
+    identity_rows = (
+        db.query(EmployeeIdentity)
+        .filter(EmployeeIdentity.tenant_id == tenant_id)
+        .all()
+    )
+    identities_by_employee: dict[str, list[EmployeeIdentity]] = {}
+    for row in identity_rows:
+        identities_by_employee.setdefault(row.employee_id, []).append(row)
+
+    employee_nodes = {
+        employee.id: build_graph_employee(
+            employee,
+            identities_by_employee.get(employee.id, []),
+        )
+        for employee in employees
+    }
+    component_nodes = {
+        component.id: GraphComponent(
+            external_id=component.id,
+            name=component.name,
+            description=component.description,
+            open_tasks_count=component.open_tasks_count,
+            unresolved_incidents=component.unresolved_incidents,
+        )
+        for component in components
+    }
+    components_by_id = {component.id: component for component in components}
+
+    if assign_edges:
+        from app.models.tenant import Tenant
+        from app.services.org_chart_read import load_org_chart
+
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).one_or_none()
+        if tenant is not None:
+            payload = load_org_chart(db, tenant)
+            assign_org_graph_edges(payload, employee_nodes, component_nodes)
+
+    return employee_nodes, component_nodes, components_by_id
 
 
 async def ingest_org_chart_to_cognee(

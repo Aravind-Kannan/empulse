@@ -834,6 +834,7 @@ export interface IntegrationSyncJobStatusResponse {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  duration_seconds?: number | null;
   job_kind?: string;
   repository_url?: string | null;
 }
@@ -863,43 +864,6 @@ export interface GlobalSyncResult {
   results: IntegrationSyncResult[];
   total_nodes_created: number;
   total_edges_created: number;
-}
-
-export interface SimulationGraphNode {
-  id: string;
-  label: string;
-  type: string;
-}
-
-export interface SimulationGraphEdge {
-  source: string;
-  target: string;
-  relationship: string;
-}
-
-export interface SimulationLogEntry {
-  type: "log";
-  message: string;
-  status: string;
-}
-
-export interface SimulationGraphResult {
-  nodes: SimulationGraphNode[];
-  edges: SimulationGraphEdge[];
-  cognee_dataset: string;
-  documents_generated: number;
-  notion_pages_written: number;
-  success: boolean;
-}
-
-export type SimulationStreamEvent =
-  | SimulationLogEntry
-  | ({ type: "result" } & SimulationGraphResult);
-
-export interface NotionSimulationRequest {
-  notion_integration_token?: string;
-  notion_database_id?: string;
-  ollama_model?: string;
 }
 
 export type IdentityProvider = "github" | "jira" | "slack" | "notion";

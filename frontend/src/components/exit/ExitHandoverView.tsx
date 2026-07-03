@@ -8,6 +8,7 @@ import { EmployeeSearchCombobox } from "@/components/exit/EmployeeSearchCombobox
 import { HandoverMarkdownPreview } from "@/components/exit/HandoverMarkdownPreview";
 import { useToast } from "@/context/ToastContext";
 import { fetchExitEmployees, fetchHandover, sendHandoverSlack } from "@/lib/api";
+import { formatLocalDateTime } from "@/lib/datetime";
 import type { EmployeeOption, HandoverResponse } from "@/lib/types";
 
 function handoverBaseFilename(employeeName: string): string {
@@ -138,7 +139,7 @@ function ExitHandoverContent() {
           {handover?.era_computed_at ? (
             <p className="mt-1 text-xs text-violet-200/80">
               Risk data computed at{" "}
-              {new Date(handover.era_computed_at).toLocaleString()}
+              {formatLocalDateTime(handover.era_computed_at)}
               {handover.era_risk_score != null
                 ? ` — score ${Math.round(handover.era_risk_score)}%`
                 : ""}

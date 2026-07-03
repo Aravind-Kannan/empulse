@@ -11,6 +11,7 @@ import {
 } from "recharts";
 
 import type { EraRiskHistoryPoint } from "@/lib/types";
+import { formatLocalDate } from "@/lib/datetime";
 
 interface EraDetailHistoryChartProps {
   history: EraRiskHistoryPoint[];
@@ -18,8 +19,7 @@ interface EraDetailHistoryChartProps {
 }
 
 function formatDate(value: string) {
-  const date = new Date(`${value}T00:00:00`);
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return formatLocalDate(value, { month: "short", day: "numeric" });
 }
 
 export function EraDetailHistoryChart({

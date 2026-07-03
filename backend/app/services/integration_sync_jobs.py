@@ -176,6 +176,12 @@ def list_integration_sync_jobs(
     return query.limit(max(1, min(limit, 100))).all()
 
 
+def _job_duration_seconds(job: IntegrationSyncJob) -> float | None:
+    if not job.completed_at or not job.created_at:
+        return None
+    return max(0.0, (job.completed_at - job.created_at).total_seconds())
+
+
 def job_to_status_response(job: IntegrationSyncJob) -> IntegrationSyncJobStatusResponse:
     result = None
     if job.result:
@@ -193,6 +199,7 @@ def job_to_status_response(job: IntegrationSyncJob) -> IntegrationSyncJobStatusR
         created_at=job.created_at,
         updated_at=job.updated_at,
         completed_at=job.completed_at,
+        duration_seconds=_job_duration_seconds(job),
         job_kind=job.job_kind or "source",
         repository_url=job.repository_url,
     )

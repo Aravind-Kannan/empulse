@@ -316,6 +316,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
             "branchTarget",
             "branchTargets",
             "syncAllBranches",
+            "ingestFileContent",
           ],
           jira: ["siteUrl", "apiToken", "projectKeys", "authEmail"],
         };

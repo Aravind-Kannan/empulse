@@ -13,7 +13,11 @@ from app.ontology.datapoints import (
     Document,
     WorkItem,
 )
-from app.ontology.github import normalize_github_code_snapshot, normalize_github_pr_file_change
+from app.ontology.github import (
+    normalize_github_code_snapshot,
+    normalize_github_commit_file_change,
+    normalize_github_pr_file_change,
+)
 from app.ontology.jira import normalize_jira_issue
 from app.ontology.mapper import (
     map_change_event,
@@ -26,7 +30,7 @@ from app.ontology.notion import normalize_notion_document
 from app.ontology.slack import normalize_slack_thread
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
 from app.services.cognee_ingest import GraphComponent, GraphEmployee
-from app.services.github_types import GitHubPullRequestActivity
+from app.services.github_types import GitHubCommitActivity, GitHubPullRequestActivity
 from app.services.jira_types import JiraIssueActivity
 from app.services.notion_telemetry import living_runbook_template_narrative
 from app.services.notion_types import NotionDocRecord
@@ -157,6 +161,61 @@ def build_github_change_events(
             summary_lines.append(
                 f"ChangeEvent PR #{canonical.pr_number} ({canonical.pr_url}): "
                 f"{author_name} changed {canonical.file_path} "
+                f"(+{canonical.loc_added}/-{canonical.loc_removed} LOC) "
+                f"modifying {component_name}."
+            )
+
+    return summary_lines, data_points, edge_count
+
+
+def build_github_commit_change_events(
+    config: GitHubConfigRequest,
+    commits: list[GitHubCommitActivity],
+    *,
+    db: Session,
+    tenant_id: uuid.UUID,
+    employee_nodes: dict[str, GraphEmployee],
+    component_nodes: dict[str, GraphComponent],
+    components_by_id: dict,
+) -> tuple[list[str], list[ChangeEvent], int]:
+    """Normalize direct branch commits (non-PR merges) to ontology ChangeEvent nodes."""
+    if not commits:
+        return [], [], 0
+
+    summary_lines = [
+        f"GitHub commit ingest: {', '.join(config.resolved_repository_urls())}",
+    ]
+    data_points: list[ChangeEvent] = []
+    edge_count = 0
+
+    for activity in commits:
+        for file_change in activity.files:
+            canonical = normalize_github_commit_file_change(
+                activity,
+                file_change,
+                config=config,
+                db=db,
+                tenant_id=tenant_id,
+                components_by_id=components_by_id,
+            )
+            if canonical is None:
+                continue
+            node, edges = map_change_event(
+                canonical,
+                employee_nodes=employee_nodes,
+                component_nodes=component_nodes,
+            )
+            data_points.append(node)
+            edge_count += edges
+            author_name = (
+                canonical.author.display_name if canonical.author else "unknown"
+            )
+            component_name = (
+                canonical.component.name if canonical.component else ""
+            )
+            summary_lines.append(
+                f"ChangeEvent commit {canonical.commit_sha[:12]} "
+                f"({canonical.pr_url}): {author_name} changed {canonical.file_path} "
                 f"(+{canonical.loc_added}/-{canonical.loc_removed} LOC) "
                 f"modifying {component_name}."
             )

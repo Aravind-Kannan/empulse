@@ -20,12 +20,20 @@ def test_github_pr_external_key_maps_to_node_id():
 
 
 def test_github_code_external_key_maps_to_node_id():
+    external_key = "code|https://github.com/acme/api|src/main.py"
+    node_id = external_key_to_node_id("github", external_key)
+    assert node_id == CodeArtifact.id_for(
+        "https://github.com/acme/api",
+        "src/main.py",
+    )
+
+
+def test_github_code_legacy_external_key_still_resolves():
     external_key = "code|https://github.com/acme/api|src/main.py|deadbeef"
     node_id = external_key_to_node_id("github", external_key)
     assert node_id == CodeArtifact.id_for(
         "https://github.com/acme/api",
         "src/main.py",
-        "deadbeef",
     )
 
 

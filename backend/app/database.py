@@ -1,9 +1,12 @@
 from collections.abc import Generator
+import logging
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -21,6 +24,17 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def check_database_connection() -> tuple[bool, str | None]:
+    """Lightweight Postgres ping for cold-start warmup and health checks."""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return True, None
+    except Exception as exc:
+        logger.warning("Postgres health check failed: %s", exc)
+        return False, str(exc)
 
 
 def init_db() -> None:

@@ -93,7 +93,7 @@ def test_plan_mixed_github_pr_and_code_nodes(db, tenant):
         "github",
         [
             LedgerItem(
-                external_key="code|https://github.com/acme/repo|src/a.py|abc123",
+                external_key="code|https://github.com/acme/repo|src/a.py",
                 content_version=_github_code_version(code_node),
                 display_label="src/a.py @ abc123",
                 node=code_node,
@@ -120,3 +120,74 @@ def test_github_code_version_stays_within_ledger_limit():
     )
     version = _github_code_version(node)
     assert len(version) <= 64
+
+
+def _code_node(*, path: str, ref: str, blob_sha: str = "sha1"):
+    return SimpleNamespace(
+        repository_url="https://github.com/acme/repo",
+        file_path=path,
+        ref=ref,
+        content_preview="",
+        patch_preview="",
+        blame_summary=f"L1-2: dev ({ref})",
+        blob_sha=blob_sha,
+    )
+
+
+def test_plan_sync_ingest_dedupes_same_path_across_refs(db, tenant):
+    main = _code_node(path=".gitignore", ref="main-sha")
+    feature = _code_node(path=".gitignore", ref="feature-sha", blob_sha="sha2")
+    plan = plan_sync_ingest(db, tenant.id, "github", [main, feature])
+    assert len(plan.to_ingest) == 1
+    assert len(plan.ledger_items) == 1
+    assert plan.ledger_items[0].node is feature
+
+
+def test_record_synced_items_upserts_duplicate_keys_in_one_batch(db, tenant):
+    main = _code_node(path=".gitignore", ref="main-sha")
+    feature = _code_node(path=".gitignore", ref="feature-sha", blob_sha="sha2")
+    items = [
+        LedgerItem(
+            external_key="code|https://github.com/acme/repo|.gitignore",
+            content_version=_github_code_version(main),
+            display_label="main",
+            node=main,
+        ),
+        LedgerItem(
+            external_key="code|https://github.com/acme/repo|.gitignore",
+            content_version=_github_code_version(feature),
+            display_label="feature",
+            node=feature,
+        ),
+    ]
+    record_synced_items(db, tenant.id, "github", items)
+    db.commit()
+    rows = (
+        db.query(IntegrationSyncRecord)
+        .filter(
+            IntegrationSyncRecord.tenant_id == tenant.id,
+            IntegrationSyncRecord.source == "github",
+            IntegrationSyncRecord.external_key == "code|https://github.com/acme/repo|.gitignore",
+        )
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].display_label == "feature"
+
+
+def test_plan_sync_ingest_matches_legacy_ref_suffixed_ledger_key(db, tenant):
+    code_node = _code_node(path="src/a.py", ref="abc123")
+    db.add(
+        IntegrationSyncRecord(
+            tenant_id=tenant.id,
+            source="github",
+            external_key="code|https://github.com/acme/repo|src/a.py|abc123",
+            content_version=_github_code_version(code_node),
+            display_label="legacy",
+        )
+    )
+    db.commit()
+
+    plan = plan_sync_ingest(db, tenant.id, "github", [code_node])
+    assert plan.skipped_count == 1
+    assert len(plan.to_ingest) == 0

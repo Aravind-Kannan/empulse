@@ -93,7 +93,24 @@ def test_create_integration_sync_job(db, tenant):
     assert any(item.id == job.id for item in jobs)
 
 
-def test_completed_sync_job_refreshes_era(db, tenant):
+def test_job_to_status_response_includes_duration_seconds(db, tenant):
+    from datetime import timedelta
+
+    from app.services.integration_sync_jobs import _utcnow
+
+    job = create_integration_sync_job(db, tenant_id=tenant.id, source="github")
+    started = _utcnow()
+    job.created_at = started
+    completed = started + timedelta(seconds=125)
+    _update_job(db, job.id, status="completed", progress_message="Done.")
+    job = db.query(type(job)).filter_by(id=job.id).one()
+    job.created_at = started
+    job.completed_at = completed
+    db.commit()
+    db.refresh(job)
+
+    response = job_to_status_response(job)
+    assert response.duration_seconds == 125.0
     job = create_integration_sync_job(db, tenant_id=tenant.id, source="github")
     fake_result = {
         "source": "github",

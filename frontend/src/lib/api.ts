@@ -35,8 +35,6 @@ import type {
   OrgChartPayload,
   IngestJobAcceptedResponse,
   IngestJobStatusResponse,
-  NotionSimulationRequest,
-  SimulationStreamEvent,
   IdentityReconciliationResponse,
   ProviderMembersBundleResponse,
   IdentitySyncRequest,
@@ -854,6 +852,7 @@ type StoredIntegrationsConfig = {
     branch_target: string;
     branch_targets: string[];
     sync_all_branches: boolean;
+    ingest_file_content?: boolean;
     personal_access_token: string;
     oauth_connected: boolean;
     validated?: boolean;
@@ -902,6 +901,7 @@ function mapStoredIntegrationConfig(
             ? [stored.github.branch_target]
             : [],
       syncAllBranches: Boolean(stored.github.sync_all_branches),
+      ingestFileContent: Boolean(stored.github.ingest_file_content),
       personalAccessToken: stored.github.personal_access_token ?? "",
       oauthConnected: Boolean(stored.github.oauth_connected),
       validated: Boolean(stored.github.validated),
@@ -987,6 +987,7 @@ export async function saveGitHubIntegrationConfig(
       branch_target: config.branchTargets[0] ?? config.branchTarget,
       branch_targets: config.branchTargets,
       sync_all_branches: config.syncAllBranches,
+      ingest_file_content: config.ingestFileContent,
       personal_access_token: config.personalAccessToken,
       oauth_connected: config.oauthConnected,
       validated: config.validated ?? false,
@@ -1201,44 +1202,6 @@ export async function saveAndSyncIntegration(
     return syncIntegrationSource("slack");
   }
   return null;
-}
-
-export async function streamNotionSimulation(
-  payload: NotionSimulationRequest,
-  onEvent: (event: SimulationStreamEvent) => void,
-): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/api/test/run-simulation/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      notion_integration_token: payload.notion_integration_token ?? "",
-      notion_database_id: payload.notion_database_id ?? "",
-      ollama_model: payload.ollama_model ?? "llama3.2",
-    }),
-  });
-
-  if (!response.ok || !response.body) {
-    throw new Error(`Simulation stream failed (${response.status})`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const event = JSON.parse(line.slice(6)) as SimulationStreamEvent;
-      onEvent(event);
-    }
-  }
 }
 
 export async function fetchEmployeeMasterData(

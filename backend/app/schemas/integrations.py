@@ -9,6 +9,7 @@ class GitHubConfigRequest(BaseModel):
     branch_target: str = "main"
     branch_targets: list[str] = Field(default_factory=list)
     sync_all_branches: bool = False
+    ingest_file_content: bool = False
     personal_access_token: str = ""
     oauth_connected: bool = False
     path_component_map: dict[str, str] = Field(default_factory=dict)
@@ -136,6 +137,7 @@ class StoredGitHubConfig(BaseModel):
     branch_target: str = "main"
     branch_targets: list[str] = Field(default_factory=list)
     sync_all_branches: bool = False
+    ingest_file_content: bool = False
     personal_access_token: str = ""
     oauth_connected: bool = False
     validated: bool = False

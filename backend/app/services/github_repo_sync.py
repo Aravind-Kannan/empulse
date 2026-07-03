@@ -27,6 +27,7 @@ from app.services.github_code import (
     _fetch_file_content,
     _fixture_code_snapshot,
     fetch_blame_ranges,
+    github_ingest_file_content_enabled,
 )
 from app.services.github_doa import should_exclude_repo_path
 from app.services.github_path_mapper import map_path_to_component
@@ -452,28 +453,40 @@ def _snapshot_for_path(
     component_id: str | None,
     use_fixture: bool,
     patch_preview: str = "",
+    ingest_content: bool = False,
 ) -> GitHubCodeFileSnapshot:
     if use_fixture or not token:
-        return _fixture_code_snapshot(
+        snap = _fixture_code_snapshot(
             repository_url,
             path,
             ref_sha,
             component_id,
             patch_preview=patch_preview,
         )
+        if not ingest_content:
+            snap.content_preview = ""
+            snap.patch_preview = ""
+        return snap
 
     content, content_sha = _fetch_file_content(
-        session, token, owner, repo, path, ref_sha
+        session,
+        token,
+        owner,
+        repo,
+        path,
+        ref_sha,
+        include_content=ingest_content,
     )
     blame = fetch_blame_ranges(token, owner, repo, path, ref_sha, max_ranges=None)
     authors = sorted({row.author_login for row in blame if row.author_login})
+    stored_patch = _truncate_patch(patch_preview) if ingest_content else ""
     return GitHubCodeFileSnapshot(
         repository_url=repository_url,
         file_path=path,
         ref=ref_sha,
         component_id=component_id,
         content_preview=content,
-        patch_preview=_truncate_patch(patch_preview),
+        patch_preview=stored_patch,
         blame_ranges=blame,
         primary_authors=authors,
         content_sha=content_sha or "",
@@ -506,6 +519,7 @@ def collect_branch_snapshots(
     snapshots: list[GitHubCodeFileSnapshot] = []
     files_completed = files_completed_offset
     branch_total = len(tree_files)
+    ingest_content = github_ingest_file_content_enabled(config)
 
     for batch_start in range(0, branch_total, FULL_REPO_BATCH_SIZE):
         batch = tree_files[batch_start : batch_start + FULL_REPO_BATCH_SIZE]
@@ -535,6 +549,7 @@ def collect_branch_snapshots(
                         component_id=component_id,
                         use_fixture=use_fixture,
                         patch_preview=tree_file.patch_preview,
+                        ingest_content=ingest_content,
                     )
                 )
             except Exception as exc:

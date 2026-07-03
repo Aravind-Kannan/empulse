@@ -22,11 +22,13 @@ def test_map_code_artifact_uses_ontology_edges():
         blame_summary="lines 1-3: dev1",
         primary_authors=("dev1",),
         component=None,
-        blame_author=CanonicalPersonRef(
-            employee_id="emp-1",
-            provider="github",
-            provider_user_id="gh-dev1",
-            display_name="dev1",
+        blame_authors=(
+            CanonicalPersonRef(
+                employee_id="emp-1",
+                provider="github",
+                provider_user_id="gh-dev1",
+                display_name="dev1",
+            ),
         ),
     )
     employees = {
@@ -43,6 +45,39 @@ def test_map_code_artifact_uses_ontology_edges():
     assert node.authored is not None
     assert node.authored[0].relationship_type == REL_AUTHORED
     assert edge_count == 1
+
+
+def test_map_code_artifact_multi_author_authored_edges():
+    record = CanonicalCodeArtifact(
+        source="github",
+        repository_url="https://github.com/acme/repo",
+        file_path="backend/shared.py",
+        ref="abc123",
+        blame_authors=(
+            CanonicalPersonRef(employee_id="emp-1", display_name="dev1"),
+            CanonicalPersonRef(employee_id="emp-2", display_name="dev2"),
+        ),
+    )
+    employees = {
+        "emp-1": GraphEmployee(
+            external_id="emp-1",
+            name="Dev One",
+            role="Engineer",
+            email="dev1@acme.test",
+            tenure_years=2.0,
+        ),
+        "emp-2": GraphEmployee(
+            external_id="emp-2",
+            name="Dev Two",
+            role="Engineer",
+            email="dev2@acme.test",
+            tenure_years=1.0,
+        ),
+    }
+    node, edge_count = map_code_artifact(record, employee_nodes=employees, component_nodes={})
+    assert isinstance(node.authored, list)
+    assert len(node.authored) == 2
+    assert edge_count == 2
 
 
 def test_map_change_event_uses_modified_edge():
@@ -151,3 +186,70 @@ def test_normalize_github_pr_file_change_without_component(db, tenant):
     assert canonical is not None
     assert canonical.file_path == "src/unmapped.py"
     assert canonical.component is None
+
+
+def test_build_github_commit_change_events_maps_authored_edges(db, tenant):
+    from app.ontology.ingest import build_github_commit_change_events
+    from app.schemas.integrations import GitHubConfigRequest
+    from app.services.cognee_ingest import GraphComponent, GraphEmployee
+    from app.services.github_types import GitHubCommitActivity, GitHubFileChange
+
+    config = GitHubConfigRequest(
+        repository_url="https://github.com/acme/repo",
+        branch_target="main",
+    )
+    commits = [
+        GitHubCommitActivity(
+            commit_sha="deadbeef1234567890",
+            branch="main",
+            author_provider_user_id="gh-dev1",
+            author_login="dev1",
+            author_type="User",
+            commit_url="https://github.com/acme/repo/commit/deadbeef",
+            committed_at="2026-01-01T00:00:00Z",
+            files=[
+                GitHubFileChange(
+                    path="src/app.ts",
+                    loc_added=5,
+                    loc_removed=1,
+                    component_id="comp-api",
+                )
+            ],
+        )
+    ]
+    employees = {
+        "emp-1": GraphEmployee(
+            external_id="emp-1",
+            name="Dev One",
+            role="Engineer",
+            email="dev1@acme.test",
+            tenure_years=2.0,
+        )
+    }
+    components = {
+        "comp-api": GraphComponent(
+            external_id="comp-api",
+            name="API",
+            description="",
+            open_tasks_count=0,
+            unresolved_incidents=0,
+            tier=1,
+        )
+    }
+    _, data_points, edge_count = build_github_commit_change_events(
+        config,
+        commits,
+        db=db,
+        tenant_id=tenant.id,
+        employee_nodes=employees,
+        component_nodes=components,
+        components_by_id={"comp-api": components["comp-api"]},
+    )
+    assert len(data_points) == 1
+    node = data_points[0]
+    assert isinstance(node, ChangeEvent)
+    assert node.event_kind == "commit"
+    assert node.pr_number == 0
+    assert node.commit_sha == "deadbeef1234567890"
+    assert node.file_path == "src/app.ts"
+    assert edge_count >= 0

@@ -104,16 +104,19 @@ def external_key_to_node_ids(source: str, external_key: str) -> list[UUID]:
 
     if normalized == "github":
         if external_key.startswith("code|"):
-            parts = external_key.split("|", 3)
-            if len(parts) != 4:
+            parts = external_key.split("|")
+            if len(parts) < 3:
                 return []
-            _, repository_url, file_path, ref = parts
+            _, repository_url, file_path = parts[0], parts[1], parts[2]
+            ref = parts[3] if len(parts) > 3 else ""
             ids.extend(
                 [
-                    CodeArtifact.id_for(repository_url, file_path, ref),
-                    GraphCodeFile.id_for(repository_url, file_path, ref),
+                    CodeArtifact.id_for(repository_url, file_path),
+                    GraphCodeFile.id_for(repository_url, file_path, ref or "main"),
                 ]
             )
+            if ref:
+                ids.append(CodeArtifact.id_for(repository_url, file_path, ref))
         else:
             parts = external_key.split("|", 3)
             if len(parts) != 4:

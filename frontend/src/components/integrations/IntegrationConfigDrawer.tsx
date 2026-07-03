@@ -718,6 +718,23 @@ export function IntegrationConfigDrawer({
                 </label>
               </div>
             </Field>
+            <Field
+              label="Cognee file content & patches"
+              hint="Off by default. When enabled, full file bodies and diff patches are stored on graph nodes. Blame, paths, commit history, and authors always sync."
+            >
+              <label className="flex items-center gap-2 text-sm text-zinc-200">
+                <input
+                  type="checkbox"
+                  checked={config.github.ingestFileContent}
+                  onChange={(event) =>
+                    updateConfig("github", {
+                      ingestFileContent: event.target.checked,
+                    })
+                  }
+                />
+                Ingest full file contents and diff patches into Cognee
+              </label>
+            </Field>
             {!config.github.syncAllBranches && (
               <Field
                 label="Target branches"

@@ -41,7 +41,7 @@ class CodeArtifact(DataPoint):
             "primary_authors",
             "source",
         ],
-        "identity_fields": ["repository_url", "file_path", "ref"],
+        "identity_fields": ["repository_url", "file_path"],
     }
 
 

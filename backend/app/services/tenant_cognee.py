@@ -43,10 +43,16 @@ logger = logging.getLogger(__name__)
 
 
 async def ensure_tenant_cognee_dataset(tenant_id: uuid.UUID) -> str:
-    """Register the tenant dataset in Cognee metadata."""
+    """Register the tenant dataset locally and provision on Cognee Cloud when enabled."""
     dataset = tenant_dataset_name(tenant_id)
     user = await get_default_user()
     await resolve_authorized_user_dataset(dataset, user=user)
+
+    from app.services.cognee_cloud import ensure_cloud_tenant_dataset, use_cognee_cloud_backend
+
+    if use_cognee_cloud_backend():
+        await ensure_cloud_tenant_dataset(dataset)
+
     return dataset
 
 
@@ -110,6 +116,12 @@ async def tenant_add_data_points(
             component_nodes,
         )
 
+    from app.services.cognee_cloud import (
+        is_cognee_cloud_mode,
+        push_tenant_ontology_graph,
+        skip_local_vector_indexing_for_cloud,
+    )
+
     async with _tenant_cognee_lock(tenant_id):
         async with tenant_cognee_context(tenant_id) as dataset_name:
             user, dataset = await resolve_authorized_user_dataset(
@@ -124,7 +136,11 @@ async def tenant_add_data_points(
                 data_item=data_item,
                 pipeline_name="empulse_structured_ingest",
             )
-            await add_data_points(tagged_points, ctx=ctx)
+            async with skip_local_vector_indexing_for_cloud():
+                await add_data_points(tagged_points, ctx=ctx)
+
+            if is_cognee_cloud_mode():
+                await push_tenant_ontology_graph(dataset_name)
 
 
 async def tenant_add_and_cognify(
@@ -137,6 +153,7 @@ async def tenant_add_and_cognify(
         cognify_enrichment_available,
         cognify_enrichment_skip_reason,
     )
+    from app.services.cognee_cloud import use_cognee_cloud_backend
 
     dataset = tenant_dataset_name(tenant_id)
     if not cognify_enrichment_available():
@@ -154,6 +171,17 @@ async def tenant_add_and_cognify(
 
     async with _tenant_cognee_lock(tenant_id):
         async with tenant_cognee_context(tenant_id):
+            if use_cognee_cloud_backend():
+                result = await cognee.remember(
+                    content,
+                    dataset_name=dataset,
+                    custom_prompt=custom_prompt,
+                )
+                return {
+                    "dataset": dataset,
+                    "cognify_result": result,
+                    "skipped": False,
+                }
             return await run_cognee_add_and_cognify(
                 content,
                 dataset_name=dataset,
@@ -171,6 +199,7 @@ async def tenant_write_memory_record(
     import json
 
     from app.ontology.enrichment import cognify_enrichment_available
+    from app.services.cognee_cloud import use_cognee_cloud_backend
 
     dataset = tenant_dataset_name(tenant_id)
     content = json.dumps(record, indent=2)
@@ -180,6 +209,13 @@ async def tenant_write_memory_record(
     )
     async with _tenant_cognee_lock(tenant_id):
         async with tenant_cognee_context(tenant_id):
+            if use_cognee_cloud_backend():
+                await cognee.remember(
+                    content,
+                    dataset_name=dataset,
+                    custom_prompt=prompt,
+                )
+                return
             await cognee.add(content, dataset_name=dataset)
             if cognify_enrichment_available():
                 await cognee.cognify(datasets=dataset, custom_prompt=prompt)

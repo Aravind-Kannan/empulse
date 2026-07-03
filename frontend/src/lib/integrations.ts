@@ -30,6 +30,8 @@ export interface GitHubConfig {
   branchTarget: string;
   branchTargets: string[];
   syncAllBranches: boolean;
+  /** When true, store full file bodies and diff patches on Cognee CodeArtifact nodes (default off). */
+  ingestFileContent: boolean;
   personalAccessToken: string;
   oauthConnected: boolean;
   validated?: boolean;
@@ -143,6 +145,7 @@ export const DEFAULT_INTEGRATION_CONFIG: IntegrationConfigMap = {
     branchTarget: "main",
     branchTargets: [],
     syncAllBranches: false,
+    ingestFileContent: false,
     personalAccessToken: "",
     oauthConnected: false,
   },

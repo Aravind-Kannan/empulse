@@ -67,6 +67,15 @@ def _truncate(text: str, limit: int) -> str:
     return cleaned[: limit - 3] + "..."
 
 
+def github_ingest_file_content_enabled(config) -> bool:
+    """True when full file bodies and diff patches go on CodeArtifact nodes (default off)."""
+    if getattr(config, "ingest_file_content", False):
+        return True
+    from app.config import get_settings
+
+    return get_settings().github_ingest_file_content
+
+
 def _fetch_file_content(
     session: requests.Session,
     token: str,
@@ -74,6 +83,8 @@ def _fetch_file_content(
     repo: str,
     path: str,
     ref: str,
+    *,
+    include_content: bool = True,
 ) -> tuple[str, str]:
     response = session.get(
         f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
@@ -93,6 +104,8 @@ def _fetch_file_content(
     encoding = payload.get("encoding")
     raw = payload.get("content") or ""
     sha = payload.get("sha") or ""
+    if not include_content:
+        return "", sha
     if encoding != "base64" or not raw:
         return "", sha
     try:
@@ -301,6 +314,7 @@ def collect_github_code_snapshots(
     repository_url = repository_urls[0]
     owner, repo = parse_repository_url(repository_url)
     token = (config.personal_access_token or "").strip()
+    ingest_content = github_ingest_file_content_enabled(config)
 
     seen: set[str] = set()
     candidates: list[tuple[str, str, str | None, str]] = []
@@ -314,13 +328,11 @@ def collect_github_code_snapshots(
             if key in seen:
                 continue
             seen.add(key)
+            patch_preview = (
+                file_change.patch_preview if ingest_content else ""
+            )
             candidates.append(
-                (
-                    ref,
-                    file_change.path,
-                    file_change.component_id,
-                    file_change.patch_preview,
-                )
+                (ref, file_change.path, file_change.component_id, patch_preview)
             )
             if len(candidates) >= MAX_CODE_FILES_PER_SYNC:
                 break
@@ -332,19 +344,30 @@ def collect_github_code_snapshots(
 
     for ref, path, component_id, patch_preview in candidates:
         if use_fixture or not token:
-            snapshots.append(
-                _fixture_code_snapshot(
-                    repository_url, path, ref, component_id, patch_preview
-                )
+            snap = _fixture_code_snapshot(
+                repository_url, path, ref, component_id, patch_preview
             )
+            if not ingest_content:
+                snap.content_preview = ""
+                snap.patch_preview = ""
+            snapshots.append(snap)
             continue
 
         try:
             content, content_sha = _fetch_file_content(
-                session, token, owner, repo, path, ref
+                session,
+                token,
+                owner,
+                repo,
+                path,
+                ref,
+                include_content=ingest_content,
             )
             blame = _fetch_blame_graphql(token, owner, repo, path, ref)
             authors = sorted({row.author_login for row in blame if row.author_login})
+            stored_patch = (
+                _truncate(patch_preview, MAX_PATCH_CHARS) if ingest_content else ""
+            )
             snapshots.append(
                 GitHubCodeFileSnapshot(
                     repository_url=repository_url,
@@ -352,7 +375,7 @@ def collect_github_code_snapshots(
                     ref=ref,
                     component_id=component_id,
                     content_preview=content,
-                    patch_preview=_truncate(patch_preview, MAX_PATCH_CHARS),
+                    patch_preview=stored_patch,
                     blame_ranges=blame,
                     primary_authors=authors,
                     content_sha=content_sha,
@@ -360,13 +383,16 @@ def collect_github_code_snapshots(
             )
         except Exception as exc:
             logger.warning("Skipping code snapshot for %s@%s: %s", path, ref, exc)
+            stored_patch = (
+                _truncate(patch_preview, MAX_PATCH_CHARS) if ingest_content else ""
+            )
             snapshots.append(
                 GitHubCodeFileSnapshot(
                     repository_url=repository_url,
                     file_path=path,
                     ref=ref,
                     component_id=component_id,
-                    patch_preview=_truncate(patch_preview, MAX_PATCH_CHARS),
+                    patch_preview=stored_patch,
                     primary_authors=[],
                     content_sha="",
                 )

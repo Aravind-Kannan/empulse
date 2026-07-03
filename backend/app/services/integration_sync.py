@@ -158,34 +158,9 @@ def _load_org_context(
     db: Session,
     tenant_id: uuid.UUID,
 ) -> tuple[dict[str, GraphEmployee], dict[str, GraphComponent], dict[str, Component]]:
-    employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
-    components = db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    from app.services.cognee_ingest import build_tenant_org_graph_nodes
 
-    if not employees:
-        return {}, {}, {}
-
-    employee_nodes = {
-        employee.id: GraphEmployee(
-            external_id=employee.id,
-            name=employee.name,
-            role=employee.role,
-            email=employee.email,
-            tenure_years=employee.tenure_years,
-        )
-        for employee in employees
-    }
-    component_nodes = {
-        component.id: GraphComponent(
-            external_id=component.id,
-            name=component.name,
-            description=component.description,
-            open_tasks_count=component.open_tasks_count,
-            unresolved_incidents=component.unresolved_incidents,
-        )
-        for component in components
-    }
-    components_by_id = {component.id: component for component in components}
-    return employee_nodes, component_nodes, components_by_id
+    return build_tenant_org_graph_nodes(db, tenant_id, assign_edges=False)
 
 
 def fetch_and_map_github_activity(
@@ -256,9 +231,10 @@ def analyze_github_payload(
     db: Session,
     tenant_id: uuid.UUID,
     activities: list[GitHubPullRequestActivity],
+    commits: list[GitHubCommitActivity] | None = None,
 ) -> tuple[str, list[ChangeEvent], int]:
-    """Build ontology ChangeEvent nodes from live GitHub pull request activity."""
-    from app.ontology.ingest import build_github_change_events
+    """Build ontology ChangeEvent nodes from GitHub PR and direct commit activity."""
+    from app.ontology.ingest import build_github_change_events, build_github_commit_change_events
 
     components_by_id = {cid: component_nodes[cid] for cid in component_nodes}
     summary_lines, data_points, edge_count = build_github_change_events(
@@ -270,6 +246,18 @@ def analyze_github_payload(
         component_nodes=component_nodes,
         components_by_id=components_by_id,
     )
+    commit_lines, commit_points, commit_edges = build_github_commit_change_events(
+        config,
+        commits or [],
+        db=db,
+        tenant_id=tenant_id,
+        employee_nodes=employee_nodes,
+        component_nodes=component_nodes,
+        components_by_id=components_by_id,
+    )
+    summary_lines.extend(commit_lines)
+    data_points.extend(commit_points)
+    edge_count += commit_edges
     return "\n".join(summary_lines), data_points, edge_count
 
 
@@ -532,10 +520,11 @@ async def process_external_app_sync(
             db,
             tenant_id,
             github_activities,
+            commits=github_commits,
         )
         if narrative_prefix:
             narrative = f"{narrative_prefix}\n{narrative}"
-        report("fetching", "Fetching file contents, diffs, and blame metadata…")
+        report("fetching", "Fetching blame and file metadata from GitHub…")
         code_snapshots = await asyncio.to_thread(
             collect_github_code_snapshots,
             config,

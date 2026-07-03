@@ -31,7 +31,7 @@ class CanonicalCodeArtifact:
     blame_summary: str = ""
     primary_authors: tuple[str, ...] = ()
     component: CanonicalComponentRef | None = None
-    blame_author: CanonicalPersonRef | None = None
+    blame_authors: tuple[CanonicalPersonRef, ...] = ()
 
 
 @dataclass(frozen=True)

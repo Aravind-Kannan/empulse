@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, Loader2, X } from "lucide-react";
 
 import { fetchEraOpenP1Issues } from "@/lib/api";
+import { formatLocalDate } from "@/lib/datetime";
 import type { EraOpenP1IssuesResponse } from "@/lib/types";
 
 interface EraOpenP1DrawerProps {
@@ -24,10 +25,7 @@ function priorityClass(priority: string) {
 }
 
 function formatUpdatedAt(iso: string | null | undefined) {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString(undefined, {
+  return formatLocalDate(iso, {
     month: "short",
     day: "numeric",
     year: "numeric",

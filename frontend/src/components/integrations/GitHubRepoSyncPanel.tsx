@@ -2,9 +2,11 @@
 
 import { Loader2, RefreshCw } from "lucide-react";
 
+import { apiDateToEpochMs } from "@/lib/datetime";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 
 import { RepoSyncProgress } from "./RepoSyncProgress";
+import { SyncDuration } from "./SyncDuration";
 
 function repoLabel(repositoryUrl: string): string {
   try {
@@ -43,7 +45,7 @@ function latestRepoJob(
   );
   if (matches.length === 0) return undefined;
   return [...matches].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    (a, b) => apiDateToEpochMs(b.created_at) - apiDateToEpochMs(a.created_at),
   )[0];
 }
 
@@ -73,8 +75,8 @@ export function GitHubRepoSyncPanel({
         </p>
         <p className="mt-0.5 text-[11px] text-zinc-600">
           Walk full tree on{" "}
-          <span className="text-zinc-500">{branchScopeLabel}</span> — file contents
-          + blame into Cognee. One job per repo.
+          <span className="text-zinc-500">{branchScopeLabel}</span> — blame metadata
+          into Cognee (file bodies optional). One job per repo.
         </p>
       </div>
 
@@ -102,10 +104,16 @@ export function GitHubRepoSyncPanel({
                     {job.result?.branches_total ?? job.result?.branches_synced?.length ?? 1}{" "}
                     branch
                     {(job.result?.branches_total ?? 1) === 1 ? "" : "es"}
+                    {" · "}
+                    <SyncDuration job={job} className="inline text-emerald-400/60" />
                   </p>
                 )}
                 {!active && job?.status === "failed" && (
-                  <p className="mt-0.5 text-[10px] text-red-400">Last sync failed</p>
+                  <p className="mt-0.5 text-[10px] text-red-400">
+                    Last sync failed
+                    {" · "}
+                    <SyncDuration job={job} className="inline text-red-400/70" />
+                  </p>
                 )}
               </div>
 

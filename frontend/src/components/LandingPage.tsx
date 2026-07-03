@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import {
   BrainCircuit,
@@ -23,6 +24,7 @@ import {
   LandingMotionConfig,
 } from "@/components/landing/HeroSequence";
 import { LandingNav } from "@/components/landing/LandingNav";
+import { PostgresWarmupBanner } from "@/components/landing/PostgresWarmupBanner";
 import { ParallaxLayer, ScrollReveal } from "@/components/landing/ScrollReveal";
 import { useMouseSpotlight } from "@/components/landing/useMouseSpotlight";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
@@ -145,11 +147,14 @@ const BENTO_ITEMS = [
 export function LandingPage() {
   const { ref: heroRef, onMouseMove } = useMouseSpotlight<HTMLElement>();
   const reducedMotion = useReducedMotion();
+  const [bannerVisible, setBannerVisible] = useState(false);
+  const navTopOffset = bannerVisible ? 44 : 0;
 
   return (
     <LandingMotionConfig>
       <div className="min-h-screen bg-[#09090b] text-zinc-100">
-        <LandingNav />
+        <PostgresWarmupBanner onVisibleChange={setBannerVisible} />
+        <LandingNav topOffset={navTopOffset} />
 
         <HeroShell
           heroRef={heroRef}
