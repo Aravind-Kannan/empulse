@@ -204,6 +204,34 @@ def test_skip_local_vector_indexing_for_cloud_patches_indexers():
         asyncio.run(_run())
 
 
+def test_push_tenant_ontology_graph_falls_back_on_cogx_import_error():
+    node = SampleNode(external_id="e1", name="Ada")
+    with patch(
+        "app.services.cognee_cloud.is_cognee_cloud_mode",
+        return_value=True,
+    ), patch(
+        "cognee.push",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError(
+            'Remote remember failed (409): {"error":"An error occurred during COGX archive import."}'
+        ),
+    ), patch(
+        "cognee.remember",
+        new_callable=AsyncMock,
+        return_value=MagicMock(status="completed", pipeline_run_id="run-fb"),
+    ) as remember_mock:
+        result = asyncio.run(
+            push_tenant_ontology_graph(
+                "empulse_tenant_abc",
+                data_points=[node],
+            )
+        )
+
+    remember_mock.assert_awaited_once()
+    assert result["fallback"] == "remember_text"
+    assert result["num_nodes"] == 1
+
+
 def test_tenant_add_data_points_pushes_ontology_after_local_ingest():
     tenant_id = __import__("uuid").uuid4()
     node = SampleNode(external_id="e1", name="Ada")
@@ -246,7 +274,8 @@ def test_tenant_add_data_points_pushes_ontology_after_local_ingest():
         asyncio.run(tenant_add_data_points(tenant_id, [node]))
 
     add_points_mock.assert_awaited_once()
-    push_mock.assert_awaited_once_with("empulse_tenant_test")
+    push_mock.assert_awaited_once()
+    assert push_mock.await_args.kwargs["data_points"] == [node]
 
 
 def test_tenant_add_and_cognify_uses_remember_on_cloud_backend():

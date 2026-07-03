@@ -144,7 +144,18 @@ async def tenant_add_data_points(
                 await add_data_points(tagged_points, ctx=ctx)
 
             if is_cognee_cloud_mode():
-                await push_tenant_ontology_graph(dataset_name)
+                try:
+                    await push_tenant_ontology_graph(
+                        dataset_name,
+                        data_points=tagged_points,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Cloud ontology upload failed for %s (local staging kept): %s",
+                        dataset_name,
+                        exc,
+                        exc_info=True,
+                    )
 
 
 async def tenant_add_and_cognify(

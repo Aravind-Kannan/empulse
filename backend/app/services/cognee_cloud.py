@@ -160,9 +160,52 @@ async def ensure_cloud_tenant_dataset(dataset_name: str) -> None:
     logger.info("Provisioned Cognee Cloud dataset %s", dataset_name)
 
 
+def _cogx_push_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return (
+        "remote remember failed" in message
+        or "cogx" in message
+        or "archive import" in message
+    )
+
+
+async def _remember_datapoints_fallback(
+    dataset_name: str,
+    data_points: list[Any],
+    *,
+    push_error: BaseException,
+) -> dict[str, Any]:
+    """Fallback when COGX push/import fails on Cognee Cloud."""
+    import cognee
+
+    content = serialize_datapoints_for_cloud(data_points)
+    logger.warning(
+        "COGX push failed for %s (%s); falling back to remote remember(text)",
+        dataset_name,
+        push_error,
+    )
+    result = await cognee.remember(
+        content,
+        dataset_name=dataset_name,
+        custom_prompt=(
+            "Ingest structured ontology JSON blocks. Preserve entity types, external IDs, "
+            "and relationship fields (owns, reportsTo, authored, documents, blocks, "
+            "touches, resolves, references)."
+        ),
+    )
+    return {
+        "status": getattr(result, "status", "completed"),
+        "num_nodes": len(data_points),
+        "num_edges": 0,
+        "pipeline_run_id": getattr(result, "pipeline_run_id", None),
+        "fallback": "remember_text",
+    }
+
+
 async def push_tenant_ontology_graph(
     dataset_name: str,
     *,
+    data_points: list[Any] | None = None,
     run_in_background: bool = False,
 ) -> dict[str, Any] | None:
     """
@@ -194,6 +237,16 @@ async def push_tenant_ontology_graph(
                 dataset_name,
             )
             return None
+        if data_points and _cogx_push_error(exc):
+            return await _remember_datapoints_fallback(
+                dataset_name, data_points, push_error=exc
+            )
+        raise
+    except RuntimeError as exc:
+        if data_points and _cogx_push_error(exc):
+            return await _remember_datapoints_fallback(
+                dataset_name, data_points, push_error=exc
+            )
         raise
 
     logger.info(
