@@ -38,3 +38,28 @@ class KraBackupAssignmentResponse(BaseModel):
     employee_id: str
     codebase_share_pct: float
     is_spof_resolved: bool
+
+
+class KraMetricCoverage(BaseModel):
+    github: Literal["confirmed", "partial", "missing"] = "missing"
+    is_partial: bool = True
+
+
+class CriticalSpofComponent(BaseModel):
+    component_id: str
+    component_name: str
+    bus_factor: int | None = None
+    owner_count: int
+    owner_names: list[str] = Field(default_factory=list)
+    github_verified: bool = False
+    criticality: str
+
+
+class CriticalSpofResult(BaseModel):
+    count: int
+    components: list[CriticalSpofComponent] = Field(default_factory=list)
+    data_completeness: KraMetricCoverage
+
+
+class KraSummaryResponse(BaseModel):
+    critical_spof: CriticalSpofResult

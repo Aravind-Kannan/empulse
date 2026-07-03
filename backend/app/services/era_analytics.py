@@ -725,8 +725,7 @@ def get_era_metrics(db: Session, tenant) -> EraAnalyticsResponse:
     )
 
     if not employees:
-        metrics = _fallback_acme_metrics()
-        return _wrap_response(db, tenant, metrics, demo_mode=True)
+        return _wrap_response(db, tenant, [], demo_mode=False)
 
     total_components = total_component_count(
         db.query(Component).filter(Component.tenant_id == tenant.id).all()
@@ -766,25 +765,6 @@ def get_era_employee_detail(
         .options(joinedload(Employee.assignments).joinedload(Assignment.component))
         .one_or_none()
     )
-
-    if employee is None and not db.query(Employee).filter(Employee.tenant_id == tenant.id).count():
-        fallback = next(
-            (item for item in _fallback_acme_metrics() if item.employee_id == employee_id),
-            None,
-        )
-        if fallback is None:
-            return None
-        evidence = fallback.evidence
-        return EraEmployeeDetailResponse(
-            computed_at=datetime.now(UTC),
-            employee=fallback,
-            evidence=evidence,
-            evidence_total_count=fallback.evidence_total_count or len(evidence),
-            limit=limit,
-            offset=offset,
-            backup_candidates=[],
-            warnings=[],
-        )
 
     if employee is None:
         return None
@@ -968,14 +948,7 @@ def _parse_since_days(since: str | None, default: int = 90) -> int:
 def _ensure_review_network(db: Session, tenant_id) -> bool:
     if has_review_network():
         return True
-    if hydrate_github_telemetry_from_db(db, tenant_id):
-        return has_review_network()
-    from app.services.github_client import activities_from_mock_feed
-    from app.services.integration_telemetry import apply_github_telemetry
-
-    if not has_github_sync():
-        apply_github_telemetry(db, tenant_id, activities_from_mock_feed())
-    return has_review_network()
+    return hydrate_github_telemetry_from_db(db, tenant_id) and has_review_network()
 
 
 def get_era_review_network(

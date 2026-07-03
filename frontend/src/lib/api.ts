@@ -28,6 +28,7 @@ import type {
   KraAnalyticsResponse,
   KraBackupAssignmentResponse,
   KraFileRiskResponse,
+  KraSummaryResponse,
   OrgChartIngestResponse,
   OrgChartPayload,
   IngestJobAcceptedResponse,
@@ -460,6 +461,18 @@ export async function fetchKraGraph(): Promise<KraAnalyticsResponse> {
 
   if (!response.ok) {
     throw new Error(`Failed to load KRA graph (${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function fetchKraSummary(): Promise<KraSummaryResponse> {
+  const response = await apiFetch(`${API_BASE}/api/analytics/kra/summary`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load KRA summary (${response.status})`);
   }
 
   return response.json();

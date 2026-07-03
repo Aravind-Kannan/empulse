@@ -13,7 +13,6 @@ from cognee.infrastructure.engine.models.Edge import Edge
 
 from app.models.operational import Component, Employee
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
-from app.schemas.org import ACME_ORG_CHART
 from app.services.cognee_ingest import GraphComponent, GraphEmployee
 from app.services.github_code import (
     GitHubCodeFileSnapshot,
@@ -156,38 +155,7 @@ def _load_org_context(
     components = db.query(Component).filter(Component.tenant_id == tenant_id).all()
 
     if not employees:
-        employee_nodes = {
-            employee.id: GraphEmployee(
-                external_id=employee.id,
-                name=employee.name,
-                role=employee.role,
-                email=employee.email,
-                tenure_years=employee.tenure_years,
-            )
-            for employee in ACME_ORG_CHART.employees
-        }
-        component_nodes = {
-            component.id: GraphComponent(
-                external_id=component.id,
-                name=component.name,
-                description=component.description,
-                open_tasks_count=component.open_tasks_count,
-                unresolved_incidents=component.unresolved_incidents,
-            )
-            for component in ACME_ORG_CHART.components
-        }
-        components_by_id = {
-            component.id: Component(
-                id=component.id,
-                tenant_id=tenant_id,
-                name=component.name,
-                description=component.description,
-                open_tasks_count=component.open_tasks_count,
-                unresolved_incidents=component.unresolved_incidents,
-            )
-            for component in ACME_ORG_CHART.components
-        }
-        return employee_nodes, component_nodes, components_by_id
+        return {}, {}, {}
 
     employee_nodes = {
         employee.id: GraphEmployee(

@@ -25,6 +25,7 @@ from app.schemas.kra import (
     KraAnalyticsResponse,
     KraBackupAssignmentRequest,
     KraBackupAssignmentResponse,
+    KraSummaryResponse,
 )
 from app.services.era_analytics import (
     get_era_employee_detail,
@@ -49,6 +50,7 @@ from app.services.kra_analytics import (
     get_kra_graph,
     is_component_spof_resolved,
 )
+from app.services.kra_metrics import get_kra_summary
 from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
@@ -258,6 +260,14 @@ def kra_analytics(
     db: Session = Depends(get_db),
 ) -> KraAnalyticsResponse:
     return get_kra_graph(db, tenant)
+
+
+@router.get("/kra/summary", response_model=KraSummaryResponse)
+def kra_summary(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> KraSummaryResponse:
+    return get_kra_summary(db, tenant.id)
 
 
 @router.post("/kra/assign-backup", response_model=KraBackupAssignmentResponse)

@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.operational import Assignment, Component, Employee
 from app.schemas.kra import KraAnalyticsResponse, KraLink, KraNode
-from app.schemas.org import ACME_ORG_CHART
 from app.services.integration_telemetry import (
     get_all_bus_factors,
     get_github_ownership,
@@ -16,32 +15,14 @@ from app.services.integration_telemetry import (
 )
 from app.services.role_utils import is_leadership_role
 
-DOCUMENTATION_SOURCES: dict[str, list[str]] = {
-    "comp-payments": [
-        "Notion: Payment Gateway Runbook",
-        "Slack: #payments-oncall",
-    ],
-    "comp-auth": [
-        "Notion: Auth Service Architecture",
-        "Slack: #identity-team",
-    ],
-    "comp-notifications": [
-        "Notion: Notification Hub Playbook",
-        "Slack: #comms-infra",
-    ],
-}
-
 
 def _doc_sources_for_component(component_id: str, name: str) -> list[str]:
-    if has_notion_sync():
-        sources = get_notion_component_sources(component_id)
-        if sources:
-            return sources
-        return [f"No Notion runbook for {name}"]
-    return DOCUMENTATION_SOURCES.get(
-        component_id,
-        [f"Notion: {name} Overview"],
-    )
+    if not has_notion_sync():
+        return []
+    sources = get_notion_component_sources(component_id)
+    if sources:
+        return sources
+    return [f"No Notion runbook for {name}"]
 
 
 def _build_graph(
@@ -51,10 +32,6 @@ def _build_graph(
 ) -> KraAnalyticsResponse:
     nodes: list[KraNode] = []
     links: list[KraLink] = []
-
-    employee_ids_with_assignments: set[str] = set()
-    for assignment in assignments:
-        employee_ids_with_assignments.add(assignment.employee_id)
 
     for employee in employees:
         if is_leadership_role(employee.role):
@@ -129,12 +106,8 @@ def _build_graph(
     return KraAnalyticsResponse(nodes=nodes, links=links)
 
 
-def _fallback_acme_graph() -> KraAnalyticsResponse:
-    return _build_graph(
-        ACME_ORG_CHART.employees,
-        ACME_ORG_CHART.components,
-        ACME_ORG_CHART.assignments,
-    )
+def _empty_graph() -> KraAnalyticsResponse:
+    return KraAnalyticsResponse(nodes=[], links=[])
 
 
 def get_kra_graph(db: Session, tenant) -> KraAnalyticsResponse:
@@ -149,7 +122,7 @@ def get_kra_graph(db: Session, tenant) -> KraAnalyticsResponse:
     )
 
     if not employees or not components:
-        return _fallback_acme_graph()
+        return _empty_graph()
 
     class _EmployeeView:
         def __init__(self, emp: Employee):

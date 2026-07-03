@@ -477,6 +477,31 @@ export interface KraAnalyticsResponse {
   links: KraLink[];
 }
 
+export interface KraMetricCoverage {
+  github: "confirmed" | "partial" | "missing";
+  is_partial: boolean;
+}
+
+export interface CriticalSpofComponent {
+  component_id: string;
+  component_name: string;
+  bus_factor: number | null;
+  owner_count: number;
+  owner_names: string[];
+  github_verified: boolean;
+  criticality: string;
+}
+
+export interface CriticalSpofResult {
+  count: number;
+  components: CriticalSpofComponent[];
+  data_completeness: KraMetricCoverage;
+}
+
+export interface KraSummaryResponse {
+  critical_spof: CriticalSpofResult;
+}
+
 export interface KraBackupAssignmentResponse {
   component_id: string;
   employee_id: string;

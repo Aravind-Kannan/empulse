@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from app.models.operational import Employee
 from app.models.tenant import Tenant
 from app.schemas.exit import DashboardMetrics
-from app.schemas.org import ACME_ORG_CHART
 from app.services.investigation import list_incidents
 from app.services.kra_analytics import get_kra_graph
 
@@ -12,9 +11,8 @@ def get_dashboard_metrics(db: Session, tenant: Tenant) -> DashboardMetrics:
     employees = db.query(Employee).filter(Employee.tenant_id == tenant.id).all()
 
     if not employees:
-        employees_data = ACME_ORG_CHART.employees
-        avg_tenure = sum(e.tenure_years for e in employees_data) / len(employees_data)
-        employee_count = len(employees_data)
+        employee_count = 0
+        avg_tenure = 0.0
     else:
         avg_tenure = sum(e.tenure_years for e in employees) / len(employees)
         employee_count = len(employees)

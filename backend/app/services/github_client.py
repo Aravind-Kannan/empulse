@@ -245,8 +245,8 @@ class GitHubClient:
         if self.use_fixture:
             return load_fixture_activities(), {}
         if not self.config.personal_access_token and not self.config.oauth_connected:
-            logger.warning("No GitHub token configured; using embedded mock activity feed")
-            return activities_from_mock_feed(), {}
+            logger.warning("No GitHub token configured; skipping GitHub activity fetch")
+            return [], {}
 
         since_dt = since or (datetime.now(UTC) - timedelta(days=30 * SYNC_WINDOW_MONTHS))
         branch_targets = self.config.resolved_branch_targets()

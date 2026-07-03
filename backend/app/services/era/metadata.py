@@ -241,7 +241,9 @@ def build_warnings(
             .filter(Employee.tenant_id == tenant_id)
             .count()
         )
-        if employee_count:
+        if employee_count == 0:
+            warnings.append("no_org_chart")
+        elif employee_count:
             component_count = (
                 db.query(Component.id)
                 .filter(Component.tenant_id == tenant_id)

@@ -22,7 +22,14 @@ def client():
 
 
 def test_handover_without_prefill_has_no_era_sections(client, db, tenant):
-    response = client.get("/api/exit/handover?id=emp-eng-001")
+    employee = add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-exit-001",
+        name="Exit Engineer",
+        email="exit@acme.com",
+    )
+    response = client.get(f"/api/exit/handover?id={employee.id}")
     assert response.status_code == 200
     payload = response.json()
     assert payload["prefill_from_era"] is False
@@ -31,7 +38,14 @@ def test_handover_without_prefill_has_no_era_sections(client, db, tenant):
 
 
 def test_handover_prefill_era_includes_sections(client, db, tenant):
-    response = client.get("/api/exit/handover?id=emp-eng-001&prefill=era")
+    employee = add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-exit-002",
+        name="Exit ERA Engineer",
+        email="exit-era@acme.com",
+    )
+    response = client.get(f"/api/exit/handover?id={employee.id}&prefill=era")
     assert response.status_code == 200
     payload = response.json()
     assert payload["prefill_from_era"] is True

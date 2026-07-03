@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.operational import Assignment, Employee
 from app.schemas.era import EraEmployeeDetailResponse, EraEvidenceItem, EraMitigationItem
 from app.schemas.exit import EmployeeOption, HandoverResponse
-from app.schemas.org import ACME_ORG_CHART
 from app.services.era.signals_builder import _undocumented_solved_incidents
 from app.services.github_file_risk import get_employee_hotspots
 from app.services.integration_config_store import get_jira_config
@@ -44,11 +43,7 @@ def list_exit_candidates(db: Session, tenant) -> list[EmployeeOption]:
     )
     candidates = [e for e in employees if not is_leadership_role(e.role)]
     if not candidates:
-        return [
-            EmployeeOption(id=e.id, name=e.name, role=e.role)
-            for e in ACME_ORG_CHART.employees
-            if not is_leadership_role(e.role)
-        ]
+        return []
     return [EmployeeOption(id=e.id, name=e.name, role=e.role) for e in candidates]
 
 
@@ -67,12 +62,7 @@ def _hotfix_lines(employee_id: str, role: str, component_names: list[str]) -> li
 
 
 def _tenant_demo_mode(db: Session, tenant) -> bool:
-    return (
-        db.query(Employee)
-        .filter(Employee.tenant_id == tenant.id)
-        .count()
-        == 0
-    )
+    return False
 
 
 def _load_era_handover_context(
@@ -327,54 +317,26 @@ def build_handover_markdown(
     )
 
     if not employee:
-        acme_employee = next(
-            (e for e in ACME_ORG_CHART.employees if e.id == employee_id),
-            None,
+        raise ValueError(f"Employee '{employee_id}' not found.")
+
+    employee_name = employee.name
+    role = employee.role
+    component_lines = []
+    task_lines = []
+    component_names = []
+
+    for assignment in employee.assignments:
+        comp = assignment.component
+        component_names.append(comp.name)
+        component_lines.append(
+            f"- **{comp.name}** ({assignment.codebase_share_pct}% codebase share) — "
+            f"{comp.description}"
         )
-        if not acme_employee:
-            raise ValueError(f"Employee '{employee_id}' not found.")
-
-        assignments = [
-            a for a in ACME_ORG_CHART.assignments if a.employee_id == employee_id
-        ]
-        component_by_id = {c.id: c for c in ACME_ORG_CHART.components}
-        employee_name = acme_employee.name
-        role = acme_employee.role
-
-        component_lines = []
-        task_lines = []
-        component_names = []
-        for assignment in assignments:
-            comp = component_by_id[assignment.component_id]
-            component_names.append(comp.name)
-            component_lines.append(
-                f"- **{comp.name}** ({assignment.codebase_share_pct}% codebase share) — "
-                f"{comp.description}"
+        if comp.open_tasks_count > 0:
+            task_lines.append(
+                f"- {comp.open_tasks_count} open tasks on **{comp.name}** "
+                f"({comp.unresolved_incidents} unresolved incidents)"
             )
-            if comp.open_tasks_count > 0:
-                task_lines.append(
-                    f"- {comp.open_tasks_count} open tasks on **{comp.name}** "
-                    f"({comp.unresolved_incidents} unresolved incidents)"
-                )
-    else:
-        employee_name = employee.name
-        role = employee.role
-        component_lines = []
-        task_lines = []
-        component_names = []
-
-        for assignment in employee.assignments:
-            comp = assignment.component
-            component_names.append(comp.name)
-            component_lines.append(
-                f"- **{comp.name}** ({assignment.codebase_share_pct}% codebase share) — "
-                f"{comp.description}"
-            )
-            if comp.open_tasks_count > 0:
-                task_lines.append(
-                    f"- {comp.open_tasks_count} open tasks on **{comp.name}** "
-                    f"({comp.unresolved_incidents} unresolved incidents)"
-                )
 
     if not component_lines:
         component_lines = ["- No owned components found in Cognee knowledge graph."]

@@ -145,12 +145,9 @@ def apply_jira_telemetry(
     global _jira_synced, _jira_issues_cache
 
     if issues is None:
-        from app.services.integration_config_store import get_jira_config
-        from app.services.jira_client import issues_from_mock_feed
-
-        config = get_jira_config(db, tenant_id)
-        site_url = config.site_url if config else "https://acme.atlassian.net"
-        issues = issues_from_mock_feed(site_url)
+        if hydrate_jira_telemetry_from_db(db, tenant_id):
+            return dict(_jira_backlog_by_employee)
+        return {}
 
     priorities = high_priorities or HIGH_PRIORITIES
     valid_components = {
@@ -508,9 +505,7 @@ def apply_github_telemetry(
     if activities is None:
         if hydrate_github_telemetry_from_db(db, tenant_id):
             return _github_ownership
-        from app.services.github_client import activities_from_mock_feed
-
-        activities = activities_from_mock_feed()
+        return {}
 
     if open_prs_by_login:
         _github_open_prs_by_login.clear()

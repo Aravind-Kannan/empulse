@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.operational import Assignment, Component
 from app.services.era_analytics import get_era_metrics, get_era_employee_detail
 
 from tests.conftest import add_employee
@@ -14,6 +15,19 @@ from tests.conftest import add_employee
 @pytest.fixture()
 def client():
     return TestClient(app)
+
+
+def _seed_component(db, tenant_id, *, component_id: str, name: str) -> None:
+    db.add(
+        Component(
+            id=component_id,
+            tenant_id=tenant_id,
+            name=name,
+            description="",
+            criticality="tier2_core",
+        )
+    )
+    db.commit()
 
 
 def test_get_era_metrics_returns_team_summary_envelope(db, tenant):
@@ -27,17 +41,35 @@ def test_get_era_metrics_returns_team_summary_envelope(db, tenant):
     assert isinstance(response.unmapped_activity, list)
 
 
-def test_demo_mode_when_acme_fallback(db, tenant):
+def test_empty_org_returns_no_demo_employees(db, tenant):
     response = get_era_metrics(db, tenant)
-    assert response.demo_mode is True
-    assert "demo_data" in response.warnings
-    assert len(response.employees) > 0
+    assert response.demo_mode is False
+    assert response.employees == []
+    assert "no_org_chart" in response.warnings
 
 
 def test_v2_employee_has_dimensions_and_evidence(db, tenant):
+    employee = add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-era-001",
+        name="ERA Engineer",
+        email="era@acme.com",
+    )
+    _seed_component(db, tenant.id, component_id="comp-era", name="ERA Component")
+    db.add(
+        Assignment(
+            tenant_id=tenant.id,
+            employee_id=employee.id,
+            component_id="comp-era",
+            codebase_share_pct=80.0,
+        )
+    )
+    db.commit()
+
     response = get_era_metrics(db, tenant)
 
-    assert response.demo_mode is True
+    assert response.demo_mode is False
     sample = next(item for item in response.employees if item.dimensions)
     assert sample.dimensions is not None
     assert sample.dimension_summaries
@@ -49,13 +81,28 @@ def test_v2_employee_has_dimensions_and_evidence(db, tenant):
 
 
 def test_employee_detail_endpoint_returns_full_evidence(client, db, tenant):
-    list_response = get_era_metrics(db, tenant)
-    employee_id = list_response.employees[0].employee_id
+    employee = add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-era-detail",
+        name="Detail Engineer",
+        email="detail@acme.com",
+    )
+    _seed_component(db, tenant.id, component_id="comp-detail", name="Detail Component")
+    db.add(
+        Assignment(
+            tenant_id=tenant.id,
+            employee_id=employee.id,
+            component_id="comp-detail",
+            codebase_share_pct=70.0,
+        )
+    )
+    db.commit()
 
-    http_response = client.get(f"/api/analytics/era/{employee_id}")
+    http_response = client.get(f"/api/analytics/era/{employee.id}")
     assert http_response.status_code == 200
     payload = http_response.json()
-    assert payload["employee"]["employee_id"] == employee_id
+    assert payload["employee"]["employee_id"] == employee.id
     assert "evidence" in payload
     assert payload["evidence_total_count"] >= len(payload["evidence"])
 

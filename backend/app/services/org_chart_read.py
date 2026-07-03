@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from app.models.operational import Assignment, Component, Employee
 from app.models.tenant import Tenant
 from app.schemas.org import (
-    ACME_ORG_CHART,
     AssignmentSchema,
     ComponentSchema,
     EmployeeSchema,
@@ -20,7 +19,12 @@ def load_org_chart(db: Session, tenant: Tenant) -> OrgChartIngestRequest:
         .all()
     )
     if not employees:
-        return ACME_ORG_CHART.model_copy(update={"company": tenant.company_name})
+        return OrgChartIngestRequest(
+            company=tenant.company_name,
+            employees=[],
+            components=[],
+            assignments=[],
+        )
 
     components = (
         db.query(Component)

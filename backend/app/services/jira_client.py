@@ -201,8 +201,8 @@ class JiraClient:
         if self.use_fixture:
             return load_fixture_issues(self.site_url)
         if not self.config.api_token.strip():
-            logger.warning("No Jira token configured; using embedded mock issue feed")
-            return issues_from_mock_feed(self.site_url)
+            logger.warning("No Jira token configured; skipping Jira issue fetch")
+            return []
 
         project_keys = [
             key.strip().upper()
