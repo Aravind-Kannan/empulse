@@ -11,7 +11,7 @@ Person-centric **continuity risk**: if this employee left tomorrow, how much ope
 - Per-employee dimension scores (K / O / D / S / B)
 - Evidence feed, file hotspots, review network
 - Proactive alerts and review cadence
-- Bridge to Employee Exit handover
+- Bridge to Employee Knowledge Handover
 
 ## Mapped source paths
 
@@ -44,6 +44,6 @@ Re-run **Integration sync** after saving identity mappings so historical quarant
 
 ## Related
 
-- [Employee Exit](../employee-exit/README.md)
+- [Employee Knowledge Handover](../employee-exit/README.md)
 - [Identity Mapping](../identity-mapping/README.md)
 - [Integration Sync](../integration-sync/README.md)

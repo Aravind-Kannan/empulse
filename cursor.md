@@ -42,14 +42,14 @@ prompts/           Original build prompts (reference only)
 | `/era` | Employee Risk Assessment | Burnout, bottlenecks, risk scores |
 | `/kra` | Knowledge Risk Assessment | Dependency graph, SPOF detection |
 | `/investigation` | Incident Investigation | 3-panel root-cause workspace |
-| `/exit` | Employee Exit | Handover pack generation |
+| `/exit` | Employee Knowledge Handover | Handover doc generation |
 | `/settings` | Settings hub | Integrations, graph debugger |
 
 ### Key acronyms
 - **ERA** — Employee Risk Assessment
 - **KRA** — Knowledge Risk Assessment
 - **II** — Incident Investigation
-- **EE** — Employee Exit
+- **EKH** — Employee Knowledge Handover
 - **SPOF** — Single Point of Failure
 
 ---

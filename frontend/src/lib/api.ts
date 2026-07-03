@@ -16,6 +16,7 @@ import type {
   EraTeamRiskyChangesResponse,
   GlobalSyncResult,
   HandoverResponse,
+  HandoverSlackSendResponse,
   IncidentListResult,
   IncidentStatus,
   IncidentSummary,
@@ -736,6 +737,24 @@ export async function fetchHandover(
   );
   if (!response.ok) {
     throw new Error(`Failed to generate handover (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function sendHandoverSlack(
+  employeeId: string,
+  options?: { prefillEra?: boolean },
+): Promise<HandoverSlackSendResponse> {
+  const params = new URLSearchParams({ id: employeeId });
+  if (options?.prefillEra) {
+    params.set("prefill", "era");
+  }
+  const response = await apiFetch(
+    `${API_BASE}/api/exit/handover/send-slack?${params.toString()}`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Failed to send handover to Slack"));
   }
   return response.json();
 }

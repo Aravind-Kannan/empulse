@@ -26,7 +26,7 @@ const navItems = [
   { href: "/era", label: "Employee Risk Assessment", abbr: "ERA", icon: Users },
   { href: "/kra", label: "Knowledge Risk Assessment", abbr: "KRA", icon: Network },
   { href: "/investigation", label: "Incident Investigation", abbr: "II", icon: Search },
-  { href: "/exit", label: "Employee Exit", abbr: "EE", icon: LogOut },
+  { href: "/exit", label: "Employee Knowledge Handover", abbr: "EKH", icon: LogOut },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

@@ -1,9 +1,9 @@
-# Employee Exit (EE)
+# Employee Knowledge Handover (EKH)
 
 **Route:** `/exit`  
 **Audience:** Engineering managers, HR business partners
 
-Generates a structured **handover pack** (markdown) when someone departs — critical knowledge, owned components, open work, tacit gaps, and suggested successors. Can be pre-filled from ERA.
+Generates structured **knowledge handover documentation** (markdown) when someone departs — critical knowledge, owned components, open work, tacit gaps, and suggested successors. Can be pre-filled from ERA.
 
 ## Capabilities
 

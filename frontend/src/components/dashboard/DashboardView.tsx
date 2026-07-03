@@ -128,7 +128,7 @@ export function DashboardView() {
               { href: "/era", label: "Employee Risk Assessment", icon: Users },
               { href: "/kra", label: "Knowledge Risk Graph", icon: Network },
               { href: "/investigation", label: "Incident Investigation", icon: Search },
-              { href: "/exit", label: "Employee Exit Handover", icon: Users },
+              { href: "/exit", label: "Employee Knowledge Handover", icon: Users },
             ].map(({ href, label, icon: Icon }) => (
               <Link
                 key={href}

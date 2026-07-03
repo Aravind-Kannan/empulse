@@ -10,7 +10,7 @@ Feature folders under `docs/features/` serve two purposes:
 | Folder | Component | Route |
 |--------|-----------|-------|
 | [era](./era/README.md) | Era | `/era` |
-| [employee-exit](./employee-exit/README.md) | Employee Exit | `/exit` |
+| [employee-exit](./employee-exit/README.md) | Employee Knowledge Handover | `/exit` |
 | [incident-investigation](./incident-investigation/README.md) | Incident Investigation | `/investigation` |
 | [identity-mapping](./identity-mapping/README.md) | Identity Mapping | `/settings/identity-mapping` |
 | [integration-sync](./integration-sync/README.md) | Integration Sync | Settings → Integrations |

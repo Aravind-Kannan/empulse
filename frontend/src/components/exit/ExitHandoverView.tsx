@@ -1,11 +1,25 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Copy, Download, Loader2 } from "lucide-react";
+import { Download, FileText, Loader2, Send, UserRound } from "lucide-react";
 
-import { fetchExitEmployees, fetchHandover } from "@/lib/api";
+import { EmployeeSearchCombobox } from "@/components/exit/EmployeeSearchCombobox";
+import { HandoverMarkdownPreview } from "@/components/exit/HandoverMarkdownPreview";
+import { fetchExitEmployees, fetchHandover, sendHandoverSlack } from "@/lib/api";
 import type { EmployeeOption, HandoverResponse } from "@/lib/types";
+
+function handoverBaseFilename(employeeName: string): string {
+  const safe = employeeName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
+  return `handover_${safe || "employee"}`;
+}
+
+function handoverMarkdownContent(handover: HandoverResponse): string {
+  return handover.markdown_content ?? handover.markdown;
+}
 
 function ExitHandoverContent() {
   const searchParams = useSearchParams();
@@ -15,10 +29,11 @@ function ExitHandoverContent() {
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [handover, setHandover] = useState<HandoverResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loadingEmployees, setLoadingEmployees] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [sendingSlack, setSendingSlack] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [slackSuccess, setSlackSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     fetchExitEmployees()
@@ -26,49 +41,81 @@ function ExitHandoverContent() {
         setEmployees(data);
         if (employeeParam && data.some((emp) => emp.id === employeeParam)) {
           setSelectedId(employeeParam);
-        } else if (data[0]) {
-          setSelectedId(data[0].id);
         }
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Failed to load employees"),
       )
-      .finally(() => setLoading(false));
+      .finally(() => setLoadingEmployees(false));
   }, [employeeParam]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId) {
+      setHandover(null);
+      return;
+    }
 
+    let cancelled = false;
+    setHandover(null);
     setGenerating(true);
     setError(null);
+    setSlackSuccess(null);
+
     fetchHandover(selectedId, { prefillEra })
-      .then(setHandover)
-      .catch((err) => {
-        setHandover(null);
-        setError(err instanceof Error ? err.message : "Handover failed");
+      .then((data) => {
+        if (!cancelled) setHandover(data);
       })
-      .finally(() => setGenerating(false));
+      .catch((err) => {
+        if (!cancelled) {
+          setHandover(null);
+          setError(err instanceof Error ? err.message : "Handover failed");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGenerating(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedId, prefillEra]);
 
-  async function handleCopy() {
-    if (!handover) return;
-    await navigator.clipboard.writeText(handover.markdown);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
+  const selectedEmployee = useMemo(
+    () => employees.find((emp) => emp.id === selectedId) ?? null,
+    [employees, selectedId],
+  );
 
   function handleDownload() {
     if (!handover) return;
-    const blob = new Blob([handover.markdown], { type: "text/markdown" });
+    const content = handoverMarkdownContent(handover);
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = handover.filename;
+    const base =
+      handover.filename?.replace(/\.md$/i, "") ??
+      handoverBaseFilename(handover.employee_name);
+    anchor.download = `${base}.md`;
     anchor.click();
     URL.revokeObjectURL(url);
   }
 
-  if (loading) {
+  async function handleSendSlack() {
+    if (!handover || !selectedId) return;
+    setSendingSlack(true);
+    setError(null);
+    setSlackSuccess(null);
+    try {
+      const result = await sendHandoverSlack(selectedId, { prefillEra });
+      setSlackSuccess(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send handover to Slack");
+    } finally {
+      setSendingSlack(false);
+    }
+  }
+
+  if (loadingEmployees) {
     return (
       <div className="flex h-64 items-center justify-center text-zinc-400">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" />
@@ -81,10 +128,10 @@ function ExitHandoverContent() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-zinc-100">
-          Employee Exit (EE)
+          Employee Knowledge Handover
         </h1>
         <p className="mt-1 text-sm text-zinc-400">
-          Generate a Cognee-powered handover asset pack for departing engineers.
+          Generate and deliver knowledge handover documentation for departing engineers.
         </p>
       </div>
 
@@ -93,73 +140,126 @@ function ExitHandoverContent() {
           <p className="font-medium">Pre-filled from ERA risk assessment</p>
           {handover?.era_computed_at ? (
             <p className="mt-1 text-xs text-violet-200/80">
-              ERA data computed at{" "}
+              Risk data computed at{" "}
               {new Date(handover.era_computed_at).toLocaleString()}
               {handover.era_risk_score != null
-                ? ` — risk score ${Math.round(handover.era_risk_score)}%`
+                ? ` — score ${Math.round(handover.era_risk_score)}%`
                 : ""}
             </p>
           ) : null}
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-        <div className="flex-1">
-          <label className="mb-1.5 block text-sm text-zinc-400">
-            Select engineer
-          </label>
-          <select
-            value={selectedId}
-            onChange={(e) => setSelectedId(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
-          >
-            {employees.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.name} ({emp.role})
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={handleCopy}
-            disabled={!handover || generating}
-            className="flex items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 transition hover:bg-zinc-900 disabled:opacity-50"
-          >
-            <Copy className="h-4 w-4" />
-            {copied ? "Copied!" : "Copy"}
-          </button>
-          <button
-            type="button"
-            onClick={handleDownload}
-            disabled={!handover || generating}
-            className="flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-white disabled:opacity-50"
-          >
-            <Download className="h-4 w-4" />
-            Download pack
-          </button>
-        </div>
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+        <label
+          htmlFor="exit-employee-search"
+          className="mb-2 block text-sm text-zinc-400"
+        >
+          Select engineer
+        </label>
+        <EmployeeSearchCombobox
+          employees={employees}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          disabled={generating}
+        />
       </div>
 
-      {error && (
+      {error ? (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-300">
           {error}
         </div>
-      )}
+      ) : null}
 
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/30">
-        <div className="border-b border-zinc-800 px-4 py-3 text-xs text-zinc-500">
-          {generating
-            ? "Querying Cognee knowledge graph…"
-            : handover
-              ? `Preview — ${handover.filename}`
-              : "Select an employee to generate handover"}
+      {slackSuccess ? (
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+          {slackSuccess}
         </div>
-        <pre className="max-h-[520px] overflow-auto p-5 text-sm leading-relaxed text-zinc-300 whitespace-pre-wrap font-mono">
-          {generating ? "Loading…" : handover?.markdown ?? ""}
-        </pre>
-      </div>
+      ) : null}
+
+      <section className="relative min-h-[28rem] overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
+        <div className="flex flex-col gap-3 border-b border-zinc-800 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/60">
+              <FileText className="h-4 w-4 text-zinc-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-zinc-100">
+                {handover
+                  ? `Handover blueprint — ${handover.employee_name}`
+                  : "Handover document preview"}
+              </p>
+              <p className="truncate text-xs text-zinc-500">
+                {generating
+                  ? "Compiling handover document…"
+                  : handover
+                    ? handover.filename
+                    : selectedEmployee
+                      ? `Ready to generate for ${selectedEmployee.name}`
+                      : "No engineer selected"}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleSendSlack}
+              disabled={!handover || generating || sendingSlack}
+              className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {sendingSlack ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Send to Slack DM
+            </button>
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={!handover || generating || sendingSlack}
+              className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Download className="h-4 w-4" />
+              Download Asset Pack
+            </button>
+          </div>
+        </div>
+
+        <div className="relative max-h-[calc(100vh-20rem)] min-h-[24rem] overflow-auto p-6 md:p-8">
+          {!selectedId ? (
+            <div className="flex h-full min-h-[20rem] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-800 bg-zinc-950/30 px-6 text-center">
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-zinc-800 bg-zinc-900/50">
+                <UserRound className="h-7 w-7 text-zinc-500" />
+              </div>
+              <p className="text-base font-medium text-zinc-200">
+                Select an engineer to begin
+              </p>
+              <p className="mt-2 max-w-md text-sm text-zinc-500">
+                Search for a departing team member above. Empulse will compile
+                ownership, open tasks, operational context, and documentation
+                gaps into a downloadable handover pack.
+              </p>
+            </div>
+          ) : handover ? (
+            <HandoverMarkdownPreview markdown={handoverMarkdownContent(handover)} />
+          ) : selectedId ? (
+            <div className="min-h-[20rem]" />
+          ) : null}
+        </div>
+
+        {generating ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/55 backdrop-blur-[2px]">
+            <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/90 px-5 py-3 shadow-xl">
+              <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+              <span className="text-sm text-zinc-300">
+                Generating handover pack…
+              </span>
+            </div>
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 }
@@ -168,7 +268,7 @@ function ExitHandoverFallback() {
   return (
     <div className="flex h-64 items-center justify-center text-zinc-400">
       <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-      Loading exit handover…
+      Loading knowledge handover…
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 const HANDOVER_LINES = [
-  { text: "# Exit Handover — Diego Alvarez", heading: true },
+  { text: "# Employee Knowledge Handover — Diego Alvarez", heading: true },
   { text: "## Owned Components", heading: true },
   { text: "- Payment Gateway (primary, 68% graph share)", heading: false },
   { text: "- Checkout API (backup reviewer)", heading: false },
