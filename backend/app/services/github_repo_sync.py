@@ -42,7 +42,7 @@ from app.services.sync_ledger import (
     plan_sync_ingest,
     record_synced_items,
 )
-from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
+from app.services.tenant_cognee import tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
 logger = logging.getLogger(__name__)
@@ -717,6 +717,11 @@ async def process_github_repo_sync(
 
     repo_config = config.with_repository(normalized_url)
 
+    from app.services.github_identity import prepare_github_identity_context
+
+    report("fetching", "Loading GitHub contributors for identity mapping…")
+    await asyncio.to_thread(prepare_github_identity_context, db, tenant_id, repo_config)
+
     employee_nodes, component_nodes, components_by_id = _load_org_context(db, tenant_id)
 
     all_snapshots, branch_plans, files_total, synced_branches = await asyncio.to_thread(
@@ -739,11 +744,15 @@ async def process_github_repo_sync(
         component_nodes,
         db,
         tenant_id,
+        components_by_id=components_by_id,
     )
 
     ingest_plan = plan_sync_ingest(db, tenant_id, "github", data_points)
     data_points = ingest_plan.to_ingest
+    from app.ontology.crosslinks import apply_ontology_cross_links
+
     edge_count = count_graph_edges(data_points)
+    edge_count += apply_ontology_cross_links(data_points)
 
     report("building_graph", ingest_plan.progress_message(), None)
 
@@ -768,12 +777,6 @@ async def process_github_repo_sync(
         narrative_lines.append(f"+{len(code_lines) - 40} more file summaries.")
     narrative = "\n".join(narrative_lines)
 
-    custom_prompt = (
-        "Extract full repository source files including file paths, content previews, "
-        "git blame line ownership ranges, and primary author attribution. Map files "
-        "to components via documentsComponent and blameAttributedTo relationships."
-    )
-
     if data_points:
         _check_cancel()
         report(
@@ -787,19 +790,24 @@ async def process_github_repo_sync(
                 files_completed=files_completed,
             ),
         )
-        await tenant_add_data_points(tenant_id, data_points)
+        await tenant_add_data_points(
+            tenant_id,
+            data_points,
+            employee_nodes=employee_nodes,
+            component_nodes=component_nodes,
+        )
         record_synced_items(db, tenant_id, "github", ingest_plan.ledger_items)
 
     dataset = tenant_dataset_name(tenant_id)
-    if ingest_plan.should_cognify:
-        report("cognifying", ingest_plan.cognify_message(), None)
-        await tenant_add_and_cognify(
-            narrative,
-            tenant_id,
-            custom_prompt=custom_prompt,
-        )
-    else:
-        report("cognifying", ingest_plan.cognify_message(), None)
+    from app.ontology.enrichment import run_post_structured_cognify_enrichment
+
+    await run_post_structured_cognify_enrichment(
+        "github",
+        tenant_id,
+        narrative,
+        ingest_plan,
+        report=report,
+    )
 
     report("finalizing", "Updating ownership graph from git blame…", None)
     from app.services.integration_telemetry import apply_github_blame_telemetry

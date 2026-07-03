@@ -8,11 +8,18 @@ import pytest
 
 from app.schemas.integrations import SlackConfigRequest
 from app.services.slack_client import (
+    _slack_api_get,
     discover_channel_ids,
     fetch_slack_incident_threads,
     list_accessible_channels,
     resolve_sync_channels,
 )
+
+
+@pytest.fixture(autouse=True)
+def _disable_slack_pacing(monkeypatch):
+    monkeypatch.setattr("app.services.slack_client._pace_slack_request", lambda: None)
+    monkeypatch.setattr("app.services.slack_client.time.sleep", lambda _: None)
 
 
 def _conversations_list_payload(
@@ -133,6 +140,68 @@ def test_resolve_sync_channels_allowlist_overrides_discovery():
     assert on_call == {"C2"}
 
 
+def test_fetch_slack_incident_threads_includes_standalone_messages():
+    """Standalone channel messages become single-message discussions."""
+    config = SlackConfigRequest(
+        workspace_url="https://acme.slack.com",
+        bot_token="xoxb-test",
+        channel_ids="C_INC",
+    )
+    history = [
+        {
+            "ts": "1717200060.000200",
+            "user": "U_BEN",
+            "text": "standup notes for today",
+        },
+        {
+            "ts": "1717200000.000100",
+            "user": "U_ALICE",
+            "text": "#incident payments latency",
+            "thread_ts": "1717200000.000100",
+            "reply_count": 2,
+        },
+    ]
+    thread_replies = [
+        history[1],
+        {
+            "ts": "1717203600.000400",
+            "user": "U_BEN",
+            "text": "resolved — mitigated",
+            "reactions": ["white_check_mark"],
+        },
+    ]
+
+    with (
+        patch(
+            "app.services.slack_client.resolve_sync_channels",
+            return_value=(
+                {"C_INC"},
+                {"C_INC"},
+                {"C_INC"},
+                {"C_INC": "incidents"},
+                1,
+            ),
+        ),
+        patch(
+            "app.services.slack_client.fetch_channel_history",
+            return_value=history,
+        ),
+        patch(
+            "app.services.slack_client._fetch_thread_replies",
+            return_value=thread_replies,
+        ) as mock_replies,
+    ):
+        threads, _, warnings, stats = fetch_slack_incident_threads(config)
+
+    assert not warnings
+    assert mock_replies.call_count == 1
+    assert len(threads) == 2
+    titles = {thread.parent_text for thread in threads}
+    assert "standup notes for today" in titles
+    assert "#incident payments latency" in titles
+    assert stats["messages_ingested"] == len(history) + len(thread_replies) - 1
+
+
 def test_fetch_slack_incident_threads_empty_channel_ids_discovers_all():
     config = SlackConfigRequest(
         workspace_url="https://acme.slack.com",
@@ -217,3 +286,31 @@ def test_fetch_slack_incident_threads_allowlist_limits_sync():
     mock_resolve.assert_called_once_with("xoxb-test", config)
     assert stats["channels_discovered"] == 5
     assert stats["channels_synced"] == 1
+
+
+def test_slack_api_get_retries_http_429():
+    calls = {"count": 0}
+
+    def fake_get(*_args, **_kwargs):
+        calls["count"] += 1
+        response = MagicMock()
+        if calls["count"] == 1:
+            response.status_code = 429
+            response.headers = {"Retry-After": "1"}
+            return response
+        response.status_code = 200
+        response.raise_for_status = MagicMock()
+        response.headers = {}
+        response.json.return_value = {"ok": True, "messages": [{"ts": "1"}]}
+        return response
+
+    with patch("app.services.slack_client.requests.get", side_effect=fake_get):
+        payload = _slack_api_get(
+            "https://slack.com/api/conversations.replies",
+            token="xoxb-test",
+            params={"channel": "C1", "ts": "1.0"},
+            context="conversations.replies",
+        )
+
+    assert payload["ok"] is True
+    assert calls["count"] == 2

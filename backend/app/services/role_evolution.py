@@ -4,12 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.models.operational import (
     Assignment,
-    DoaFileSnapshot,
     Employee,
-    GitHubOwnershipSnapshot,
-    NotionDocSnapshot,
     RoleHistory,
-    FileRiskSnapshot,
 )
 from app.models.tenant import Tenant
 from app.schemas.org import EmployeeSchema
@@ -19,7 +15,10 @@ from app.schemas.role_evolution import (
     EmployeeUpdateResponse,
     RoleHistoryRecord,
 )
-from app.services.cognee_ingest import ingest_org_chart_to_cognee
+from app.services.cognee_ingest import (
+    _delete_employee_dependents,
+    ingest_org_chart_to_cognee,
+)
 from app.services.org_chart_read import load_org_chart
 from app.services.org_helpers import would_create_cycle
 from app.services.role_utils import is_leadership_role
@@ -226,35 +225,7 @@ async def delete_employee_with_cognee_sync(
         )
     )
 
-    db.query(GitHubOwnershipSnapshot).filter(
-        GitHubOwnershipSnapshot.employee_id == employee_id,
-        GitHubOwnershipSnapshot.tenant_id == tenant.id,
-    ).delete(synchronize_session=False)
-
-    db.query(DoaFileSnapshot).filter(
-        DoaFileSnapshot.employee_id == employee_id,
-        DoaFileSnapshot.tenant_id == tenant.id,
-    ).delete(synchronize_session=False)
-
-    db.query(FileRiskSnapshot).filter(
-        FileRiskSnapshot.primary_owner_employee_id == employee_id,
-        FileRiskSnapshot.tenant_id == tenant.id,
-    ).update(
-        {
-            FileRiskSnapshot.primary_owner_employee_id: None,
-            FileRiskSnapshot.primary_owner_doa_pct: None,
-        },
-        synchronize_session=False,
-    )
-
-    db.query(NotionDocSnapshot).filter(
-        NotionDocSnapshot.owner_employee_id == employee_id,
-        NotionDocSnapshot.tenant_id == tenant.id,
-    ).update(
-        {NotionDocSnapshot.owner_employee_id: None},
-        synchronize_session=False,
-    )
-
+    _delete_employee_dependents(db, tenant.id, employee_id)
     db.delete(employee)
     db.commit()
 

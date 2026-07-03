@@ -20,6 +20,7 @@ import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 import { latestJobPerSource } from "@/lib/sync-jobs";
 
 import { SyncJobsPanel } from "./SyncJobsPanel";
+import { GlobalSyncProgressBar } from "./GlobalSyncProgressBar";
 
 function aggregateSyncStats(jobs: IntegrationSyncJobStatusResponse[]) {
   const completed = jobs.filter((job) => job.status === "completed" && job.result);
@@ -75,11 +76,6 @@ export function GlobalSyncBanner() {
   const latestBySource = useMemo(() => latestJobPerSource(syncJobs), [syncJobs]);
   const stats = useMemo(() => aggregateSyncStats(syncJobs), [syncJobs]);
   const hasStartedSync = syncJobs.length > 0 || globalSyncPending;
-
-  const progressPct =
-    syncProgress.total > 0
-      ? Math.round((syncProgress.completed.length / syncProgress.total) * 100)
-      : 0;
 
   const isGlobalBusy = syncProgress.active || globalSyncPending;
   const connectedApps = INTEGRATION_CATALOG.filter((app) =>
@@ -175,24 +171,11 @@ export function GlobalSyncBanner() {
       )}
 
       {(syncProgress.active || globalSyncPending) && (
-        <div className="mt-5 space-y-3 border-t border-zinc-800 pt-5">
-          <div className="flex items-center justify-between text-xs text-zinc-500">
-            <span>
-              {syncProgress.currentSource
-                ? `Ingesting ${syncProgress.currentSource}…`
-                : "Preparing ingestion pipeline…"}
-            </span>
-            <span>{progressPct}%</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-500 ease-out"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-          {syncProgress.error && (
-            <p className="text-xs text-red-400">{syncProgress.error}</p>
-          )}
+        <div className="mt-5 border-t border-zinc-800 pt-5">
+          <GlobalSyncProgressBar
+            progress={syncProgress}
+            currentJob={syncProgress.currentJob}
+          />
         </div>
       )}
 

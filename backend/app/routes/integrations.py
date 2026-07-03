@@ -12,6 +12,8 @@ from app.schemas.integration_sync_job import (
 )
 from app.schemas.jira import parse_project_keys
 from app.schemas.integrations import (
+    CogneeDatasetResetRequest,
+    CogneeDatasetResetResponse,
     GitHubBranchesRequest,
     GitHubBranchesResponse,
     GitHubConfigRequest,
@@ -546,6 +548,43 @@ def cancel_sync_job(
 ) -> IntegrationSyncJobStatusResponse:
     job = cancel_integration_sync_job(db, job_id, tenant.id)
     return job_to_status_response(job)
+
+
+@router.post(
+    "/cognee/reset",
+    response_model=CogneeDatasetResetResponse,
+)
+async def reset_cognee_dataset(
+    payload: CogneeDatasetResetRequest,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> CogneeDatasetResetResponse:
+    """
+    Reset the tenant Cognee dataset (graph + vectors) via cognee.forget.
+
+    Unlike per-integration disconnect, this wipes the full tenant dataset,
+    including cognify-created nodes and org-chart graph memory.
+    """
+    from app.services.tenant_cognee_reset import reset_tenant_cognee_dataset
+
+    try:
+        result = await reset_tenant_cognee_dataset(
+            db,
+            tenant.id,
+            memory_only=payload.memory_only,
+            clear_ledger=payload.clear_ledger,
+            clear_telemetry=payload.clear_telemetry,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Cognee dataset reset failed for tenant %s", tenant.id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cognee dataset reset failed: {exc}",
+        ) from exc
+
+    return CogneeDatasetResetResponse(**result)
 
 
 @router.post(

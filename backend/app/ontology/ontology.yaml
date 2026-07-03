@@ -1,0 +1,53 @@
+# Empulse shared ontology spine (integration ingest)
+#
+# Normalizers produce canonical records; mapper emits Cognee DataPoints below.
+
+types:
+  Person:
+    cognee_anchor: GraphEmployee
+    identity: [external_id]
+  Component:
+    cognee_anchor: GraphComponent
+    identity: [external_id]
+  CodeArtifact:
+    cognee_type: CodeArtifact
+    identity: [repository_url, file_path, ref]
+    index: [file_path, repository_url, ref, primary_authors, source]
+  ChangeEvent:
+    cognee_type: ChangeEvent
+    identity: [repository_url, pr_number, commit_sha, file_path]
+    index: [pr_number, file_path, branch, event_kind, source]
+  WorkItem:
+    cognee_type: WorkItem
+    identity: [work_item_id]
+    index: [work_item_id, issue_type, status, summary, source]
+  Document:
+    cognee_type: Document
+    identity: [page_id]
+    index: [page_id, title, doc_kind, source]
+  Discussion:
+    cognee_type: Discussion
+    identity: [thread_id]
+    index: [thread_id, channel_name, title, source]
+
+relations:
+  authored: Person -> CodeArtifact | ChangeEvent
+  documents: CodeArtifact -> Component
+  modified: ChangeEvent -> Component
+  assignedTo: WorkItem -> Person
+  blocks: WorkItem -> Component
+  discusses: Discussion -> Component
+  touches: ChangeEvent -> CodeArtifact
+  resolves: Discussion -> WorkItem
+  references: Document -> WorkItem
+  owns: Person -> Component
+  reportsTo: Person -> Person
+
+ingest_policy:
+  # structured_only — deterministic DataPoints only, no cognify
+  # structured_with_enrichment — DataPoints first, then narrative cognify layer
+  # dual_path — legacy unstructured cognify (no structured-only gate)
+  github: structured_with_enrichment
+  jira: structured_with_enrichment
+  notion: structured_with_enrichment
+  slack: structured_with_enrichment

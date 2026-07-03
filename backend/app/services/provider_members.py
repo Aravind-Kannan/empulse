@@ -9,10 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.schemas.employee_master import FetchUsersRequest, MasterDataRecord
 from app.schemas.identity import ProviderMember
-from app.services.employee_master_fetch import (
-    _fetch_github_org_members_live,
-    _fetch_slack_users_live,
-)
+from app.services.employee_master_fetch import _fetch_slack_users_live
+from app.services.github_identity import fetch_github_provider_members
 from app.services.integration_config_store import (
     get_all_configs,
     get_github_config,
@@ -91,11 +89,7 @@ def fetch_live_provider_members(
             config = get_github_config(db, tenant_id)
             if not config:
                 return []
-            records = _fetch_github_org_members_live(
-                config.resolved_repository_urls()[0],
-                config.personal_access_token,
-            )
-            return _records_to_members(records)
+            return fetch_github_provider_members(config)
 
         if provider == "slack":
             stored = get_all_configs(db, tenant_id)["slack"]
@@ -171,19 +165,38 @@ def build_fetch_users_request(
     source: str,
 ) -> FetchUsersRequest:
     """Build credentials payload for employee_master_fetch from stored integration config."""
+    return build_fetch_users_request_for_sources(db, tenant_id, [source])
+
+
+def build_fetch_users_request_for_sources(
+    db: Session,
+    tenant_id: uuid.UUID,
+    sources: list[str],
+) -> FetchUsersRequest:
     stored = get_all_configs(db, tenant_id)
-    row = stored.get(source, {})
+    normalized = [source.lower().strip() for source in sources if source.strip()]
+    slack = stored.get("slack", {})
+    notion = stored.get("notion", {})
+    github = stored.get("github", {})
+    jira = stored.get("jira", {})
+    repository_urls = [
+        url.strip()
+        for url in (github.get("repository_urls") or [])
+        if str(url).strip()
+    ]
+    repository_url = (github.get("repository_url") or "").strip()
+    if not repository_url and repository_urls:
+        repository_url = repository_urls[0]
+
     return FetchUsersRequest(
-        sources=[source],
-        slack_bot_token=row.get("bot_token") if source == "slack" else None,
-        notion_integration_token=row.get("integration_token") if source == "notion" else None,
-        notion_database_ids=row.get("database_ids") if source == "notion" else None,
-        github_repository_url=row.get("repository_url") if source == "github" else None,
-        github_personal_access_token=(
-            row.get("personal_access_token") if source == "github" else None
-        ),
-        jira_site_url=row.get("site_url") if source == "jira" else None,
-        jira_api_token=row.get("api_token") if source == "jira" else None,
-        jira_account_email=row.get("account_email") if source == "jira" else None,
-        jira_project_keys=row.get("project_keys") if source == "jira" else None,
+        sources=normalized,
+        slack_bot_token=slack.get("bot_token"),
+        notion_integration_token=notion.get("integration_token"),
+        notion_database_ids=notion.get("database_ids"),
+        github_repository_url=repository_url or None,
+        github_personal_access_token=github.get("personal_access_token"),
+        jira_site_url=jira.get("site_url"),
+        jira_api_token=jira.get("api_token"),
+        jira_account_email=jira.get("account_email"),
+        jira_project_keys=jira.get("project_keys"),
     )

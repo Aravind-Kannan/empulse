@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,99 @@ MIN_THREAD_MESSAGES = 3
 MIN_THREAD_USERS = 2
 ESCALATION_THREAD_THRESHOLD = 8
 ESCALATION_CONCENTRATION_PCT = 70.0
+SLACK_API_MIN_INTERVAL_SEC = 1.15
+SLACK_MAX_RETRIES = 8
+_last_slack_request_at = 0.0
+
+
+def _pace_slack_request() -> None:
+    """Stay under Tier-2 conversations.* limits (~50 req/min)."""
+    global _last_slack_request_at
+    now = time.monotonic()
+    elapsed = now - _last_slack_request_at
+    if elapsed < SLACK_API_MIN_INTERVAL_SEC:
+        time.sleep(SLACK_API_MIN_INTERVAL_SEC - elapsed)
+    _last_slack_request_at = time.monotonic()
+
+
+def _retry_after_seconds(response: requests.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(float(retry_after), 1.0)
+        except ValueError:
+            pass
+    return min(60.0, 2.0 ** attempt)
+
+
+def _format_slack_api_error(error: str, *, method: str) -> str:
+    if error in ("missing_scope", "invalid_auth", "token_revoked"):
+        return _format_slack_conversations_error(error)
+    if error == "rate_limited":
+        return (
+            f"Slack {method} rate limited. Retry the sync in a minute or narrow "
+            "channel_ids to fewer incident channels."
+        )
+    return f"Slack {method} failed: {error}"
+
+
+def _slack_api_get(
+    url: str,
+    *,
+    token: str,
+    params: dict[str, Any] | None = None,
+    timeout: int = 30,
+    context: str = "Slack API",
+) -> dict[str, Any]:
+    """GET Slack Web API with pacing and 429/rate_limited retries."""
+    for attempt in range(SLACK_MAX_RETRIES):
+        _pace_slack_request()
+        try:
+            response = requests.get(
+                url,
+                headers=slack_headers(token),
+                params=params,
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise ValueError(f"Could not reach {context}: {exc}") from exc
+
+        if response.status_code == 429:
+            wait = _retry_after_seconds(response, attempt)
+            logger.warning(
+                "%s HTTP 429; backing off %.1fs (attempt %s/%s)",
+                context,
+                wait,
+                attempt + 1,
+                SLACK_MAX_RETRIES,
+            )
+            time.sleep(wait)
+            continue
+
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("ok"):
+            return payload
+
+        error = str(payload.get("error", "unknown_error"))
+        if error == "rate_limited" and attempt + 1 < SLACK_MAX_RETRIES:
+            wait = _retry_after_seconds(response, attempt)
+            logger.warning(
+                "%s rate_limited; backing off %.1fs (attempt %s/%s)",
+                context,
+                wait,
+                attempt + 1,
+                SLACK_MAX_RETRIES,
+            )
+            time.sleep(wait)
+            continue
+
+        raise ValueError(_format_slack_api_error(error, method=context))
+
+    raise ValueError(
+        f"{context} rate limited after {SLACK_MAX_RETRIES} retries. "
+        "Wait a minute and retry, or restrict Slack channel_ids."
+    )
 
 
 def parse_csv_ids(value: str | None) -> list[str]:
@@ -99,24 +193,12 @@ def list_accessible_channels(token: str) -> list[dict[str, Any]]:
         }
         if cursor:
             params["cursor"] = cursor
-        try:
-            response = requests.get(
-                "https://slack.com/api/conversations.list",
-                headers=slack_headers(cleaned),
-                params=params,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise ValueError(f"Could not reach Slack API: {exc}") from exc
-
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok"):
-            raise ValueError(
-                _format_slack_conversations_error(
-                    str(payload.get("error", "unknown_error"))
-                )
-            )
+        payload = _slack_api_get(
+            "https://slack.com/api/conversations.list",
+            token=cleaned,
+            params=params,
+            context="conversations.list",
+        )
 
         for raw in payload.get("channels") or []:
             if isinstance(raw, dict) and raw.get("id"):
@@ -161,26 +243,12 @@ def fetch_channel_history(
             params["oldest"] = str(oldest)
         if cursor:
             params["cursor"] = cursor
-        try:
-            response = requests.get(
-                "https://slack.com/api/conversations.history",
-                headers=slack_headers(token),
-                params=params,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise ValueError(
-                f"Could not reach Slack API for channel {channel_id}: {exc}"
-            ) from exc
-
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok"):
-            raise ValueError(
-                _format_slack_conversations_error(
-                    str(payload.get("error", "unknown_error"))
-                )
-            )
+        payload = _slack_api_get(
+            "https://slack.com/api/conversations.history",
+            token=token,
+            params=params,
+            context=f"conversations.history ({channel_id})",
+        )
 
         batch = payload.get("messages") or []
         messages.extend(batch)
@@ -244,6 +312,98 @@ def _message_is_bot(message: dict[str, Any]) -> bool:
     if message.get("bot_id") or message.get("subtype") == "bot_message":
         return True
     return bool(message.get("is_bot"))
+
+
+def _is_thread_parent_message(message: dict[str, Any]) -> bool:
+    """True when message has thread replies worth fetching via conversations.replies."""
+    if _message_is_bot(message):
+        return False
+    if (message.get("reply_count") or 0) > 0:
+        return True
+    ts = message.get("ts")
+    thread_ts = message.get("thread_ts")
+    return ts is not None and thread_ts == ts
+
+
+def _is_thread_reply_in_history(message: dict[str, Any]) -> bool:
+    thread_ts = message.get("thread_ts")
+    ts = message.get("ts")
+    return thread_ts is not None and ts is not None and thread_ts != ts
+
+
+def _is_standalone_channel_message(message: dict[str, Any]) -> bool:
+    """Top-level channel message that is not a thread parent (single-message discussion)."""
+    if _message_is_bot(message):
+        return False
+    if _is_thread_reply_in_history(message):
+        return False
+    if _is_thread_parent_message(message):
+        return False
+    return bool(message.get("ts"))
+
+
+def _collect_mentions_and_users(
+    messages: list[SlackMessageRecord],
+    user_emails: dict[str, str],
+) -> list[str]:
+    mentions: list[str] = []
+    for message in messages:
+        mentions.extend(_extract_mentions(message.text))
+        if message.user_id and message.user_id not in user_emails:
+            user_emails[message.user_id] = ""
+    return sorted(set(mentions))
+
+
+def _finalize_thread_record(
+    record: SlackThreadRecord,
+    *,
+    is_incident_channel: bool,
+) -> SlackThreadRecord:
+    resolver = is_resolved_incident_thread(
+        record,
+        is_incident_channel=is_incident_channel,
+    )
+    if resolver:
+        last_human = next(
+            (
+                message
+                for message in reversed(_human_messages(record.messages))
+                if message.user_id
+            ),
+            None,
+        )
+        record.resolved_at = (
+            _parse_ts(last_human.ts) if last_human and last_human.ts else None
+        )
+    return record
+
+
+def _build_thread_record(
+    *,
+    channel_id: str,
+    channel_name: str,
+    thread_ts: str,
+    parent_text: str,
+    messages: list[SlackMessageRecord],
+    workspace_url: str,
+    component_names: dict[str, str],
+    is_incident_channel: bool,
+    is_on_call_channel: bool,
+    user_emails: dict[str, str],
+) -> SlackThreadRecord:
+    record = SlackThreadRecord(
+        channel_id=channel_id,
+        channel_name=channel_name,
+        thread_ts=thread_ts,
+        parent_text=parent_text,
+        messages=messages,
+        component_id=_infer_component_id(channel_name, component_names),
+        is_incident_channel=is_incident_channel,
+        is_on_call_channel=is_on_call_channel,
+        mentioned_user_ids=_collect_mentions_and_users(messages, user_emails),
+        thread_url=build_thread_url(workspace_url, channel_id, thread_ts),
+    )
+    return _finalize_thread_record(record, is_incident_channel=is_incident_channel)
 
 
 def _extract_mentions(text: str) -> list[str]:
@@ -399,19 +559,12 @@ def _fetch_thread_replies(
     channel_id: str,
     thread_ts: str,
 ) -> list[dict[str, Any]]:
-    response = requests.get(
+    payload = _slack_api_get(
         "https://slack.com/api/conversations.replies",
-        headers=slack_headers(token),
+        token=token,
         params={"channel": channel_id, "ts": thread_ts, "limit": 200},
-        timeout=30,
+        context=f"conversations.replies ({channel_id})",
     )
-    response.raise_for_status()
-    payload = response.json()
-    if not payload.get("ok"):
-        raise ValueError(
-            f"Slack conversations.replies failed for {channel_id}/{thread_ts}: "
-            f"{payload.get('error', 'unknown_error')}"
-        )
     return payload.get("messages") or []
 
 
@@ -459,13 +612,13 @@ def fetch_slack_incident_threads(
     now = now or datetime.now(UTC)
     oldest = now.timestamp() - (LOOKBACK_DAYS * 86400)
     try:
-        _, incident_channels, on_call_channels, id_to_name, channels_discovered = (
+        configured, incident_channels, on_call_channels, id_to_name, channels_discovered = (
             resolve_sync_channels(config.bot_token, config)
         )
     except ValueError as exc:
         return [], {}, [str(exc)], empty_stats
 
-    target_channels = incident_channels | on_call_channels
+    target_channels = configured
     if not target_channels:
         return (
             [],
@@ -485,6 +638,8 @@ def fetch_slack_incident_threads(
 
     for channel_id in sorted(target_channels):
         channel_name = id_to_name.get(channel_id, channel_id)
+        is_incident_channel = channel_id in incident_channels
+        is_on_call_channel = channel_id in on_call_channels
         try:
             history = fetch_channel_history(
                 config.bot_token,
@@ -499,59 +654,61 @@ def fetch_slack_incident_threads(
         channels_synced += 1
         messages_ingested += len(history)
 
-        parent_messages = [
-            message
-            for message in history
-            if message.get("thread_ts") in (None, message.get("ts"))
-            and not _message_is_bot(message)
-        ]
-        for parent in parent_messages:
+        for parent in [message for message in history if _is_thread_parent_message(message)]:
             thread_ts = str(parent.get("ts", ""))
             if not thread_ts:
                 continue
-            try:
-                replies = _fetch_thread_replies(config.bot_token, channel_id, thread_ts)
-            except ValueError as exc:
-                warnings.append(str(exc))
+            parent_text = str(parent.get("text") or "")
+            if (parent.get("reply_count") or 0) > 0:
+                try:
+                    replies = _fetch_thread_replies(config.bot_token, channel_id, thread_ts)
+                except ValueError as exc:
+                    warnings.append(str(exc))
+                    replies = [parent]
+                messages_ingested += max(0, len(replies) - 1)
+            else:
                 replies = [parent]
 
-            messages_ingested += max(0, len(replies) - 1)
             messages = [_message_from_dict(row) for row in replies]
-            mentions: list[str] = []
-            for message in messages:
-                mentions.extend(_extract_mentions(message.text))
-                if message.user_id and message.user_id not in user_emails:
-                    user_emails[message.user_id] = ""
+            threads.append(
+                _build_thread_record(
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    thread_ts=thread_ts,
+                    parent_text=parent_text,
+                    messages=messages,
+                    workspace_url=config.workspace_url,
+                    component_names=component_names,
+                    is_incident_channel=is_incident_channel,
+                    is_on_call_channel=is_on_call_channel,
+                    user_emails=user_emails,
+                )
+            )
 
-            record = SlackThreadRecord(
-                channel_id=channel_id,
-                channel_name=channel_name,
-                thread_ts=thread_ts,
-                parent_text=str(parent.get("text") or ""),
-                messages=messages,
-                component_id=_infer_component_id(channel_name, component_names),
-                is_incident_channel=channel_id in incident_channels,
-                is_on_call_channel=channel_id in on_call_channels,
-                mentioned_user_ids=sorted(set(mentions)),
-                thread_url=build_thread_url(config.workspace_url, channel_id, thread_ts),
-            )
-            resolver = is_resolved_incident_thread(
-                record,
-                is_incident_channel=record.is_incident_channel,
-            )
-            if resolver:
-                last_human = next(
-                    (
-                        message
-                        for message in reversed(_human_messages(messages))
-                        if message.user_id
-                    ),
-                    None,
+        for message in history:
+            if not _is_standalone_channel_message(message):
+                continue
+            ts = str(message.get("ts", ""))
+            if not ts:
+                continue
+            text = str(message.get("text") or "")
+            if not text.strip():
+                continue
+            slack_message = _message_from_dict(message)
+            threads.append(
+                _build_thread_record(
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    thread_ts=ts,
+                    parent_text=text,
+                    messages=[slack_message],
+                    workspace_url=config.workspace_url,
+                    component_names=component_names,
+                    is_incident_channel=is_incident_channel,
+                    is_on_call_channel=is_on_call_channel,
+                    user_emails=user_emails,
                 )
-                record.resolved_at = (
-                    _parse_ts(last_human.ts) if last_human and last_human.ts else None
-                )
-            threads.append(record)
+            )
 
     sync_stats = {
         "channels_discovered": channels_discovered,

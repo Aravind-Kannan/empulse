@@ -112,7 +112,7 @@ def test_process_github_repo_sync_multi_branch_fixture(db, tenant):
         "app.services.github_repo_sync.tenant_add_data_points",
         new=AsyncMock(return_value=None),
     ), patch(
-        "app.services.github_repo_sync.tenant_add_and_cognify",
+        "app.ontology.enrichment.run_post_structured_cognify_enrichment",
         new=AsyncMock(return_value=None),
     ):
         result = asyncio.run(
@@ -147,7 +147,7 @@ def test_process_github_repo_sync_fixture(db, tenant):
         "app.services.github_repo_sync.tenant_add_data_points",
         new=AsyncMock(return_value=None),
     ), patch(
-        "app.services.github_repo_sync.tenant_add_and_cognify",
+        "app.ontology.enrichment.run_post_structured_cognify_enrichment",
         new=AsyncMock(return_value=None),
     ):
         result = asyncio.run(

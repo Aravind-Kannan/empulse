@@ -36,12 +36,17 @@ import type {
   NotionSimulationRequest,
   SimulationStreamEvent,
   IdentityReconciliationResponse,
+  ProviderMembersBundleResponse,
+  IdentitySyncRequest,
+  IdentitySyncResponse,
   EmployeeIdentityMapping,
   IdentityProvider,
   EmployeeMasterDataResponse,
   MemberRosterSyncResult,
   BulkCsvRow,
   BulkUploadResponse,
+  CogneeDatasetResetRequest,
+  CogneeDatasetResetResponse,
   EmployeeUpdateResponse,
   EmployeeDeleteResponse,
 } from "./types";
@@ -1094,6 +1099,25 @@ export async function cancelIntegrationSyncJob(
   return response.json();
 }
 
+export async function resetCogneeDataset(
+  options: CogneeDatasetResetRequest = {},
+): Promise<CogneeDatasetResetResponse> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/cognee/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      memory_only: options.memory_only ?? false,
+      clear_ledger: options.clear_ledger ?? true,
+      clear_telemetry: options.clear_telemetry ?? false,
+    }),
+    timeoutMs: 120_000,
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Cognee dataset reset failed"));
+  }
+  return response.json();
+}
+
 export async function saveAndSyncIntegration(
   id: IntegrationId,
   config: IntegrationConfigMap,
@@ -1234,10 +1258,14 @@ export async function syncMemberRoster(
 
 export async function fetchIdentityReconciliation(
   connectedProviders: IdentityProvider[],
+  options?: { includeLiveMembers?: boolean },
 ): Promise<IdentityReconciliationResponse> {
   const params = new URLSearchParams();
   for (const provider of connectedProviders) {
     params.append("connected", provider);
+  }
+  if (options?.includeLiveMembers === false) {
+    params.set("include_live_members", "false");
   }
   const query = params.toString();
   const response = await apiFetch(
@@ -1247,6 +1275,26 @@ export async function fetchIdentityReconciliation(
   if (!response.ok) {
     throw new Error(
       await parseApiError(response, "Failed to load identity reconciliation"),
+    );
+  }
+  return response.json();
+}
+
+export async function fetchProviderMembersBundle(
+  connectedProviders: IdentityProvider[],
+): Promise<ProviderMembersBundleResponse> {
+  const params = new URLSearchParams();
+  for (const provider of connectedProviders) {
+    params.append("connected", provider);
+  }
+  const query = params.toString();
+  const response = await apiFetch(
+    `${API_BASE}/api/identity/provider-members${query ? `?${query}` : ""}`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await parseApiError(response, "Failed to load provider members"),
     );
   }
   return response.json();
@@ -1263,4 +1311,22 @@ export async function saveIdentityMappings(
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Identity mapping save failed"));
   }
+}
+
+export async function syncIdentityMappings(
+  payload: IdentitySyncRequest,
+): Promise<IdentitySyncResponse> {
+  const response = await apiFetch(`${API_BASE}/api/identity/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      providers: payload.providers ?? [],
+      import_roster: payload.import_roster ?? false,
+      company: payload.company ?? null,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Identity sync failed"));
+  }
+  return response.json();
 }

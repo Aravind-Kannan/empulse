@@ -26,10 +26,16 @@ from cognee.context_global_variables import (
 from cognee.modules.pipelines.layers.resolve_authorized_user_dataset import (
     resolve_authorized_user_dataset,
 )
+from cognee.modules.pipelines.models import PipelineContext
 from cognee.modules.users.methods import get_default_user
 from cognee.tasks.storage import add_data_points
 
 from app.config import run_cognee_add_and_cognify
+from app.services.tenant_graph_purge import (
+    ensure_structured_ingest_data_item,
+    expand_ingest_with_org_anchors,
+    tag_datapoints_with_dataset,
+)
 from app.tenancy import tenant_dataset_name
 
 
@@ -83,10 +89,39 @@ async def tenant_cognee_context_for_dataset(dataset_name: str) -> AsyncIterator[
         current_dataset_id.reset(token)
 
 
-async def tenant_add_data_points(tenant_id: uuid.UUID, data_points: list) -> None:
+async def tenant_add_data_points(
+    tenant_id: uuid.UUID,
+    data_points: list,
+    *,
+    employee_nodes: dict | None = None,
+    component_nodes: dict | None = None,
+) -> None:
+    """Add structured DataPoints with dataset ledger + belongs_to_set tagging."""
+    if not data_points:
+        return
+
+    if employee_nodes is not None and component_nodes is not None:
+        data_points = expand_ingest_with_org_anchors(
+            data_points,
+            employee_nodes,
+            component_nodes,
+        )
+
     async with _tenant_cognee_lock(tenant_id):
-        async with tenant_cognee_context(tenant_id):
-            await add_data_points(data_points)
+        async with tenant_cognee_context(tenant_id) as dataset_name:
+            user, dataset = await resolve_authorized_user_dataset(
+                dataset_name,
+                user=await get_default_user(),
+            )
+            tagged_points = tag_datapoints_with_dataset(data_points, dataset_name)
+            data_item = await ensure_structured_ingest_data_item(dataset, user)
+            ctx = PipelineContext(
+                user=user,
+                dataset=dataset,
+                data_item=data_item,
+                pipeline_name="empulse_structured_ingest",
+            )
+            await add_data_points(tagged_points, ctx=ctx)
 
 
 async def tenant_add_and_cognify(

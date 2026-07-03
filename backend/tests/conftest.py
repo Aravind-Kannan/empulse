@@ -16,6 +16,15 @@ from app.models.operational import Employee
 from app.models.tenant import Tenant
 
 
+@pytest.fixture(autouse=True)
+def _clear_github_provider_member_cache():
+    from app.services.github_identity import clear_provider_member_cache
+
+    clear_provider_member_cache()
+    yield
+    clear_provider_member_cache()
+
+
 @pytest.fixture()
 def db() -> Session:
     engine = create_engine(get_settings().database_url, pool_pre_ping=True)

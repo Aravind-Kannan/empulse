@@ -1,0 +1,13 @@
+"""Standard ontology relationship names."""
+
+REL_AUTHORED = "authored"
+REL_DOCUMENTS = "documents"
+REL_MODIFIED = "modified"
+REL_ASSIGNED = "assignedTo"
+REL_BLOCKS = "blocks"
+REL_DISCUSSES = "discusses"
+REL_TOUCHES = "touches"
+REL_RESOLVES = "resolves"
+REL_REFERENCES = "references"
+REL_OWNS = "owns"
+REL_REPORTS_TO = "reportsTo"

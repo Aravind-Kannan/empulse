@@ -17,6 +17,7 @@ import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 import { IntegrationLogo } from "./IntegrationLogos";
 import { GitHubRepoSyncPanel } from "./GitHubRepoSyncPanel";
 import { RepoSyncProgress } from "./RepoSyncProgress";
+import { CognifyProgress } from "./CognifyProgress";
 import { SyncJobsPanel } from "./SyncJobsPanel";
 
 const STATUS_STYLES: Record<
@@ -140,6 +141,11 @@ export function IntegrationRow({
                       <RepoSyncProgress job={latestJob} compact />
                     </div>
                   )}
+                {isActive && latestJob?.phase === "cognifying" && (
+                  <div className="mt-1.5 w-full max-w-md">
+                    <CognifyProgress job={latestJob} compact />
+                  </div>
+                )}
                 {!isActive &&
                   latestJob?.status === "completed" &&
                   latestJob.completed_at && (

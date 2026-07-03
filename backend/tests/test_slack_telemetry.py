@@ -10,7 +10,8 @@ import pytest
 from app.models.operational import Component, Employee
 from app.schemas.integrations import SlackConfigRequest
 from app.services.integration_config_store import get_slack_config, save_slack_config
-from app.services.integration_sync import analyze_slack_payload, GraphSlackThread
+from app.ontology.datapoints import Discussion
+from app.services.integration_sync import analyze_slack_payload
 from app.services.integration_telemetry import (
     apply_slack_telemetry,
     get_slack_employee_signals,
@@ -214,8 +215,8 @@ def test_analyze_slack_payload_graph_nodes():
         threads[:1],
     )
     assert edge_count >= 1
-    assert any(isinstance(node, GraphSlackThread) for node in nodes)
-    assert "Slack incident thread" in narrative
+    assert any(isinstance(node, Discussion) for node in nodes)
+    assert "Discussion" in narrative
 
 
 def test_fetch_fixture_threads_without_token():

@@ -37,6 +37,11 @@ import {
   type IntegrationStatus,
 } from "@/lib/integrations";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
+import {
+  deriveSyncProgress,
+  isBatchComplete,
+  type SyncProgress,
+} from "@/lib/sync-progress";
 
 function integrationsStorageKey(tenantId: string | null | undefined): string | null {
   if (!tenantId) return null;
@@ -64,14 +69,6 @@ function saveConfig(tenantId: string | null | undefined, config: IntegrationConf
   const key = integrationsStorageKey(tenantId);
   if (!key) return;
   localStorage.setItem(key, JSON.stringify(config));
-}
-
-interface SyncProgress {
-  active: boolean;
-  currentSource: string | null;
-  completed: string[];
-  total: number;
-  error: string | null;
 }
 
 function mergeIntegrationConfig(
@@ -139,26 +136,6 @@ const IntegrationsContext = createContext<IntegrationsContextValue | null>(null)
 const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira", "notion", "slack"]);
 const SYNC_POLL_INTERVAL_MS = 2000;
 
-function sourceDisplayName(
-  source: string,
-  job?: IntegrationSyncJobStatusResponse,
-): string {
-  if (job?.job_kind === "github_repo" && job.repository_url) {
-    try {
-      const parts = new URL(job.repository_url).pathname.split("/").filter(Boolean);
-      if (parts.length >= 2) {
-        return `GitHub ${parts[0]}/${parts[1]}`;
-      }
-    } catch {
-      // fall through
-    }
-  }
-  return (
-    INTEGRATION_CATALOG.find((app) => app.id === source)?.name ??
-    source.charAt(0).toUpperCase() + source.slice(1)
-  );
-}
-
 function deriveStatuses(
   config: IntegrationConfigMap,
   syncJobs: IntegrationSyncJobStatusResponse[],
@@ -189,39 +166,6 @@ function deriveStatuses(
   return statuses;
 }
 
-function deriveSyncProgress(
-  syncJobs: IntegrationSyncJobStatusResponse[],
-): SyncProgress {
-  const activeJobs = syncJobs.filter(
-    (job) => job.status === "queued" || job.status === "running",
-  );
-  const completed = syncJobs
-    .filter((job) => job.status === "completed")
-    .map((job) => sourceDisplayName(job.source, job));
-  const failedJob = syncJobs.find((job) => job.status === "failed");
-
-  const currentJob = activeJobs[0];
-  const relevantJobs = syncJobs.filter(
-    (job) =>
-      job.status === "queued" ||
-      job.status === "running" ||
-      job.status === "completed" ||
-      job.status === "failed",
-  );
-  const total = Math.max(
-    relevantJobs.length,
-    completed.length + activeJobs.length,
-  );
-
-  return {
-    active: activeJobs.length > 0,
-    currentSource: currentJob ? sourceDisplayName(currentJob.source, currentJob) : null,
-    completed,
-    total,
-    error: failedJob?.error ?? null,
-  };
-}
-
 export function IntegrationsProvider({ children }: { children: ReactNode }) {
   const { activeTenant } = useAuth();
   const tenantId = activeTenant?.id ?? null;
@@ -234,6 +178,7 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     () => new Set(),
   );
   const [globalSyncPending, setGlobalSyncPending] = useState(false);
+  const [trackedBatchJobIds, setTrackedBatchJobIds] = useState<string[]>([]);
   const [disconnectingSources, setDisconnectingSources] = useState<Set<IntegrationId>>(
     () => new Set(),
   );
@@ -286,9 +231,16 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   }, [tenantId, refreshSyncJobs]);
 
   const syncProgress = useMemo(
-    () => deriveSyncProgress(syncJobs),
-    [syncJobs],
+    () => deriveSyncProgress(syncJobs, trackedBatchJobIds),
+    [syncJobs, trackedBatchJobIds],
   );
+
+  useEffect(() => {
+    if (trackedBatchJobIds.length === 0) return;
+    if (isBatchComplete(syncJobs, trackedBatchJobIds)) {
+      setTrackedBatchJobIds([]);
+    }
+  }, [syncJobs, trackedBatchJobIds]);
 
   const hasActiveSyncJobs = useMemo(
     () =>
@@ -454,7 +406,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       setPendingSyncSources((prev) => new Set(prev).add(id));
 
       try {
-        await syncIntegrationSource(id);
+        const accepted = await syncIntegrationSource(id);
+        setTrackedBatchJobIds((prev) => [...prev, accepted.job_id]);
         await refreshSyncJobs();
       } catch (err) {
         setSyncActionError(formatSyncJobError(formatFetchError(err, `${id} sync failed`)));
@@ -477,7 +430,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       setPendingSyncSources((prev) => new Set(prev).add("github"));
 
       try {
-        await syncGitHubRepository(repositoryUrl);
+        const accepted = await syncGitHubRepository(repositoryUrl);
+        setTrackedBatchJobIds((prev) => [...prev, accepted.job_id]);
         await refreshSyncJobs();
       } catch (err) {
         setSyncActionError(
@@ -534,7 +488,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     );
 
     try {
-      await syncAllIntegrations();
+      const accepted = await syncAllIntegrations();
+      setTrackedBatchJobIds(accepted.jobs.map((job) => job.job_id));
       await refreshSyncJobs();
     } catch (err) {
       setSyncActionError(formatSyncJobError(formatFetchError(err, "Global sync failed")));

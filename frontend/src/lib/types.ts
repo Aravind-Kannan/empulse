@@ -728,6 +728,23 @@ export interface IntegrationSyncJobListResponse {
   jobs: IntegrationSyncJobStatusResponse[];
 }
 
+export interface CogneeDatasetResetRequest {
+  memory_only?: boolean;
+  clear_ledger?: boolean;
+  clear_telemetry?: boolean;
+}
+
+export interface CogneeDatasetResetResponse {
+  dataset: string;
+  mode: string;
+  memory_only: boolean;
+  forget_summary: Record<string, unknown>;
+  graph_purge: Record<string, unknown>;
+  ledger_rows_removed: number;
+  telemetry_cleared: boolean;
+  message: string;
+}
+
 export interface GlobalSyncResult {
   results: IntegrationSyncResult[];
   total_nodes_created: number;
@@ -798,4 +815,28 @@ export interface IdentityReconciliationResponse {
   provider_members: Partial<Record<IdentityProvider, ProviderMember[]>>;
   connected_providers: IdentityProvider[];
   provider_warnings?: Partial<Record<IdentityProvider, string>>;
+}
+
+export interface ProviderMembersBundleResponse {
+  provider_members: Partial<Record<IdentityProvider, ProviderMember[]>>;
+  provider_warnings?: Partial<Record<IdentityProvider, string>>;
+}
+
+export interface ProviderIdentitySyncResult {
+  provider: IdentityProvider;
+  members_fetched: number;
+  mappings_created: number;
+  warning: string | null;
+}
+
+export interface IdentitySyncRequest {
+  providers?: IdentityProvider[];
+  import_roster?: boolean;
+  company?: string | null;
+}
+
+export interface IdentitySyncResponse {
+  providers: ProviderIdentitySyncResult[];
+  total_mappings_created: number;
+  roster: MemberRosterSyncResult | null;
 }

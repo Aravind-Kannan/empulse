@@ -115,7 +115,7 @@ def _github_label(node: Any) -> str:
 
 
 def _jira_key(node: Any) -> str:
-    return node.ticket_id
+    return getattr(node, "work_item_id", None) or getattr(node, "ticket_id", "")
 
 
 def _jira_version(node: Any) -> str:
@@ -123,7 +123,7 @@ def _jira_version(node: Any) -> str:
 
 
 def _jira_label(node: Any) -> str:
-    return node.ticket_id
+    return getattr(node, "work_item_id", None) or getattr(node, "ticket_id", "")
 
 
 def _notion_key(node: Any) -> str:
@@ -267,6 +267,8 @@ def record_synced_items(
 
 def count_graph_edges(data_points: list[Any]) -> int:
     """Count relationship edges on graph nodes slated for ingest."""
+    from app.ontology.datapoints import ONTOLOGY_EDGE_ATTRS
+
     edge_attrs = (
         "contributedTo",
         "modifies",
@@ -278,6 +280,7 @@ def count_graph_edges(data_points: list[Any]) -> int:
         "discussesComponent",
         "documentsComponent",
         "blameAttributedTo",
+        *ONTOLOGY_EDGE_ATTRS,
     )
     total = 0
     for node in data_points:

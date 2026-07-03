@@ -16,6 +16,13 @@ from app.models.operational import (
     GitHubOwnershipSnapshot,
     NotionDocSnapshot,
 )
+from app.ontology.datapoints import (
+    ChangeEvent,
+    CodeArtifact,
+    Discussion,
+    Document,
+    WorkItem,
+)
 from app.services.integration_sync import (
     GraphCodeFile,
     GraphJiraTicket,
@@ -29,14 +36,26 @@ from app.services.tenant_cognee import tenant_cognee_context
 logger = logging.getLogger(__name__)
 
 INTEGRATION_GRAPH_TYPES: dict[str, tuple[str, ...]] = {
-    "github": ("GraphPullRequest", "GraphCodeFile"),
-    "jira": ("GraphJiraTicket",),
-    "notion": ("GraphNotionPage",),
-    "slack": ("GraphSlackThread",),
+    "github": (
+        "ChangeEvent",
+        "CodeArtifact",
+        "GraphPullRequest",
+        "GraphCodeFile",
+    ),
+    "jira": ("WorkItem", "GraphJiraTicket"),
+    "notion": ("Document", "GraphNotionPage"),
+    "slack": ("Discussion", "GraphSlackThread"),
 }
 
 _INTEGRATION_VECTOR_COLLECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
     "github": (
+        ("ChangeEvent", "pr_number"),
+        ("ChangeEvent", "file_path"),
+        ("ChangeEvent", "branch"),
+        ("CodeArtifact", "file_path"),
+        ("CodeArtifact", "repository_url"),
+        ("CodeArtifact", "ref"),
+        ("CodeArtifact", "primary_authors"),
         ("GraphPullRequest", "pr_number"),
         ("GraphPullRequest", "file_path"),
         ("GraphPullRequest", "branch"),
@@ -46,16 +65,25 @@ _INTEGRATION_VECTOR_COLLECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
         ("GraphCodeFile", "primary_authors"),
     ),
     "jira": (
+        ("WorkItem", "work_item_id"),
+        ("WorkItem", "issue_type"),
+        ("WorkItem", "status"),
         ("GraphJiraTicket", "ticket_id"),
         ("GraphJiraTicket", "issue_type"),
         ("GraphJiraTicket", "status"),
     ),
     "notion": (
+        ("Document", "page_id"),
+        ("Document", "title"),
+        ("Document", "doc_kind"),
         ("GraphNotionPage", "page_id"),
         ("GraphNotionPage", "title"),
         ("GraphNotionPage", "page_kind"),
     ),
     "slack": (
+        ("Discussion", "thread_id"),
+        ("Discussion", "channel_name"),
+        ("Discussion", "title"),
         ("GraphSlackThread", "thread_id"),
         ("GraphSlackThread", "channel_name"),
         ("GraphSlackThread", "title"),
@@ -65,30 +93,63 @@ _INTEGRATION_VECTOR_COLLECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
 
 def external_key_to_node_id(source: str, external_key: str) -> UUID | None:
     """Map a sync-ledger external key to the deterministic Cognee node id."""
+    ids = external_key_to_node_ids(source, external_key)
+    return ids[0] if ids else None
+
+
+def external_key_to_node_ids(source: str, external_key: str) -> list[UUID]:
+    """Resolve current + legacy ontology node IDs for one ledger key."""
     normalized = source.lower().strip()
+    ids: list[UUID] = []
+
     if normalized == "github":
         if external_key.startswith("code|"):
             parts = external_key.split("|", 3)
             if len(parts) != 4:
-                return None
+                return []
             _, repository_url, file_path, ref = parts
-            return GraphCodeFile.id_for(repository_url, file_path, ref)
-        parts = external_key.split("|", 3)
-        if len(parts) != 4:
-            return None
-        repository_url, pr_number, commit_sha, file_path = parts
-        try:
-            pr_num = int(pr_number)
-        except ValueError:
-            return None
-        return GraphPullRequest.id_for(repository_url, pr_num, commit_sha, file_path)
-    if normalized == "jira":
-        return GraphJiraTicket.id_for(external_key)
-    if normalized == "notion":
-        return GraphNotionPage.id_for(external_key)
-    if normalized == "slack":
-        return GraphSlackThread.id_for(external_key)
-    return None
+            ids.extend(
+                [
+                    CodeArtifact.id_for(repository_url, file_path, ref),
+                    GraphCodeFile.id_for(repository_url, file_path, ref),
+                ]
+            )
+        else:
+            parts = external_key.split("|", 3)
+            if len(parts) != 4:
+                return []
+            repository_url, pr_number, commit_sha, file_path = parts
+            try:
+                pr_num = int(pr_number)
+            except ValueError:
+                return []
+            ids.extend(
+                [
+                    ChangeEvent.id_for(repository_url, pr_num, commit_sha, file_path),
+                    GraphPullRequest.id_for(repository_url, pr_num, commit_sha, file_path),
+                ]
+            )
+    elif normalized == "jira":
+        ids.extend([WorkItem.id_for(external_key), GraphJiraTicket.id_for(external_key)])
+    elif normalized == "notion":
+        ids.extend([Document.id_for(external_key), GraphNotionPage.id_for(external_key)])
+    elif normalized == "slack":
+        ids.extend([Discussion.id_for(external_key), GraphSlackThread.id_for(external_key)])
+
+    deduped: list[UUID] = []
+    seen: set[str] = set()
+    for node_id in ids:
+        key = str(node_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(node_id)
+    return deduped
+
+
+def _legacy_external_key_to_node_id(source: str, external_key: str) -> UUID | None:
+    ids = external_key_to_node_ids(source, external_key)
+    return ids[1] if len(ids) > 1 else None
 
 
 def _ledger_node_ids(db: Session, tenant_id: uuid.UUID, source: str) -> list[str]:
@@ -103,14 +164,12 @@ def _ledger_node_ids(db: Session, tenant_id: uuid.UUID, source: str) -> list[str
     node_ids: list[str] = []
     seen: set[str] = set()
     for (external_key,) in rows:
-        node_id = external_key_to_node_id(source, external_key)
-        if node_id is None:
-            continue
-        node_id_str = str(node_id)
-        if node_id_str in seen:
-            continue
-        seen.add(node_id_str)
-        node_ids.append(node_id_str)
+        for node_id in external_key_to_node_ids(source, external_key):
+            node_id_str = str(node_id)
+            if node_id_str in seen:
+                continue
+            seen.add(node_id_str)
+            node_ids.append(node_id_str)
     return node_ids
 
 

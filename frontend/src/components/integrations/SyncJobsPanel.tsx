@@ -3,6 +3,7 @@
 import { CheckCircle2, Clock, Loader2, RefreshCw, Square, XCircle } from "lucide-react";
 
 import { RepoSyncProgress } from "./RepoSyncProgress";
+import { CognifyProgress } from "./CognifyProgress";
 import { INTEGRATION_CATALOG, type IntegrationId } from "@/lib/integrations";
 import { formatSyncJobError } from "@/lib/sync-errors";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
@@ -102,6 +103,10 @@ function JobRow({
 
           {isActive && job.job_kind === "github_repo" && (
             <RepoSyncProgress job={job} compact={embedded || compact} />
+          )}
+
+          {isActive && job.phase === "cognifying" && (
+            <CognifyProgress job={job} compact={embedded || compact} />
           )}
 
           {phaseLabel && isActive && job.job_kind !== "github_repo" && (

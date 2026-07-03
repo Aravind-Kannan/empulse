@@ -13,6 +13,10 @@ from app.models.operational import (
     DoaFileSnapshot,
     Employee,
     EmployeeIdentity,
+    EraAlert,
+    EraDepartureOrphanBaseline,
+    EraEvidenceMitigation,
+    EraRiskSnapshot,
     FileRiskSnapshot,
     GitHubOwnershipSnapshot,
     NotionDocSnapshot,
@@ -21,6 +25,8 @@ from app.models.operational import (
 from app.schemas.org import OrgChartIngestRequest
 from app.services.employee_ids import scope_org_chart_to_tenant
 from app.services.role_utils import is_leadership_role
+from app.ontology.relations import REL_OWNS, REL_REPORTS_TO
+from app.ontology.spec import validate_relation
 from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
@@ -36,6 +42,7 @@ class GraphEmployee(DataPoint):
     directReportOf: SkipValidation[Any] = None
     manages: SkipValidation[Any] = None
     ownsComponent: SkipValidation[Any] = None
+    owns: SkipValidation[Any] = None
     metadata: dict = {"index_fields": ["name", "role", "team_name"]}
 
 
@@ -77,7 +84,10 @@ def _delete_employee_dependents(
         FileRiskSnapshot.tenant_id == tenant_id,
         FileRiskSnapshot.primary_owner_employee_id == employee_id,
     ).update(
-        {FileRiskSnapshot.primary_owner_employee_id: None},
+        {
+            FileRiskSnapshot.primary_owner_employee_id: None,
+            FileRiskSnapshot.primary_owner_doa_pct: None,
+        },
         synchronize_session=False,
     )
     db.query(NotionDocSnapshot).filter(
@@ -85,6 +95,32 @@ def _delete_employee_dependents(
         NotionDocSnapshot.owner_employee_id == employee_id,
     ).update(
         {NotionDocSnapshot.owner_employee_id: None},
+        synchronize_session=False,
+    )
+    db.query(EraEvidenceMitigation).filter(
+        EraEvidenceMitigation.tenant_id == tenant_id,
+        EraEvidenceMitigation.mitigation_assignee_id == employee_id,
+    ).update(
+        {EraEvidenceMitigation.mitigation_assignee_id: None},
+        synchronize_session=False,
+    )
+    db.query(EraEvidenceMitigation).filter(
+        EraEvidenceMitigation.tenant_id == tenant_id,
+        EraEvidenceMitigation.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(EraRiskSnapshot).filter(
+        EraRiskSnapshot.tenant_id == tenant_id,
+        EraRiskSnapshot.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(EraDepartureOrphanBaseline).filter(
+        EraDepartureOrphanBaseline.tenant_id == tenant_id,
+        EraDepartureOrphanBaseline.employee_id == employee_id,
+    ).delete(synchronize_session=False)
+    db.query(EraAlert).filter(
+        EraAlert.tenant_id == tenant_id,
+        EraAlert.employee_id == employee_id,
+    ).update(
+        {EraAlert.employee_id: None},
         synchronize_session=False,
     )
 
@@ -258,7 +294,7 @@ def assign_org_graph_edges(
         if employee.manager_id and employee.manager_id in employee_nodes:
             manager_node = employee_nodes[employee.manager_id]
             node.reportsTo = (
-                Edge(relationship_type="reportsTo"),
+                Edge(relationship_type=validate_relation(REL_REPORTS_TO)),
                 manager_node,
             )
             node.directReportOf = (
@@ -308,7 +344,11 @@ def assign_org_graph_edges(
             Edge(relationship_type="ownsComponent"),
             owned_components if len(owned_components) > 1 else owned_components[0],
         )
-        edge_count += 1
+        employee_node.owns = (
+            Edge(relationship_type=validate_relation(REL_OWNS)),
+            owned_components if len(owned_components) > 1 else owned_components[0],
+        )
+        edge_count += 2
 
     return edge_count
 

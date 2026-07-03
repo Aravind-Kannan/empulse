@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from app.models.operational import Employee, EmployeeIdentity
 from app.schemas.identity import ProviderMember
 from app.services.identity_mapping import MOCK_PROVIDER_MEMBERS, PROVIDERS
-from app.services.provider_members import find_provider_member
+from app.services.github_identity import get_cached_github_provider_members
+from app.services.provider_members import fetch_live_provider_members, find_provider_member
 
 IdentityConfidence = Literal["confirmed", "high", "medium", "low", "none"]
 ATTRIBUTABLE_CONFIDENCE: frozenset[str] = frozenset({"confirmed", "high", "medium"})
@@ -43,7 +44,28 @@ def is_identity_gating_active(db: Session, tenant_id: uuid.UUID) -> bool:
 def _find_provider_member(
     provider: str,
     provider_user_id: str,
+    *,
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> ProviderMember | None:
+    if tenant_id is not None and provider == "github":
+        cached = get_cached_github_provider_members(tenant_id)
+        if cached is not None:
+            return find_provider_member(
+                provider,
+                provider_user_id,
+                fallback_members=cached,
+            )
+
+    if db is not None and tenant_id is not None:
+        live = fetch_live_provider_members(db, tenant_id, provider)
+        if live is not None:
+            return find_provider_member(
+                provider,
+                provider_user_id,
+                fallback_members=live,
+            )
+
     return find_provider_member(
         provider,
         provider_user_id,
@@ -118,7 +140,12 @@ def resolve_employee(
     emails_to_try: list[str] = []
     if email_hint and email_hint.strip():
         emails_to_try.append(_normalize_email(email_hint))
-    member = _find_provider_member(provider, provider_user_id)
+    member = _find_provider_member(
+        provider,
+        provider_user_id,
+        db=db,
+        tenant_id=tenant_id,
+    )
     if member and member.email:
         emails_to_try.append(_normalize_email(member.email))
 
@@ -182,7 +209,12 @@ def resolve_author_employee_id(
     if should_attribute(result):
         return result.employee_id
 
-    member = _find_provider_member(provider, provider_user_id)
+    member = _find_provider_member(
+        provider,
+        provider_user_id,
+        db=db,
+        tenant_id=tenant_id,
+    )
     record_unmapped_activity(
         db,
         tenant_id,

@@ -43,6 +43,11 @@ class IdentityReconciliationResponse(BaseModel):
     total_unmapped_count: int = 0
 
 
+class ProviderMembersBundleResponse(BaseModel):
+    provider_members: dict[str, list[ProviderMember]]
+    provider_warnings: dict[str, str] = Field(default_factory=dict)
+
+
 class UnmappedActivityRecord(BaseModel):
     id: int
     provider: str
@@ -63,3 +68,33 @@ class UnmappedActivityListResponse(BaseModel):
 
 class IdentityMappingsUpdateRequest(BaseModel):
     mappings: list[EmployeeIdentityMapping]
+
+
+class ProviderIdentitySyncResult(BaseModel):
+    provider: str
+    members_fetched: int = 0
+    mappings_created: int = 0
+    warning: str | None = None
+
+
+class IdentitySyncRequest(BaseModel):
+    """Refresh provider directories and auto-map identities post-onboarding."""
+
+    providers: list[str] = Field(
+        default_factory=list,
+        description="Providers to refresh (github, jira, slack, notion). Empty = all.",
+    )
+    import_roster: bool = Field(
+        default=False,
+        description="Also merge employees from integrations into the org roster.",
+    )
+    company: str | None = Field(
+        default=None,
+        description="Company name when import_roster is true.",
+    )
+
+
+class IdentitySyncResponse(BaseModel):
+    providers: list[ProviderIdentitySyncResult]
+    total_mappings_created: int = 0
+    roster: dict | None = None

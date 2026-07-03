@@ -972,6 +972,7 @@ def fetch_employee_master_data(
     flat_hierarchy: bool = False,
     tenant_id: uuid.UUID | None = None,
     db: Session | None = None,
+    skip_failed_sources: bool = False,
 ) -> EmployeeMasterDataResponse:
     """
     Import workspace members from connected platforms.
@@ -1024,6 +1025,9 @@ def fetch_employee_master_data(
             )
         except ValueError as exc:
             source_errors.append(f"{source}: {exc}")
+
+    if source_errors and not skip_failed_sources:
+        raise ValueError("; ".join(source_errors))
 
     if not raw_records:
         if source_errors:

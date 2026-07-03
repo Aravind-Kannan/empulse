@@ -10,7 +10,8 @@ import pytest
 from app.models.operational import Assignment, Component, Employee
 from app.schemas.integrations import NotionConfigRequest
 from app.services.integration_config_store import save_notion_config
-from app.services.integration_sync import analyze_notion_payload, GraphNotionPage
+from app.ontology.datapoints import Document
+from app.services.integration_sync import analyze_notion_payload
 from app.services.integration_telemetry import (
     apply_notion_telemetry,
     get_notion_component_sources,
@@ -213,7 +214,7 @@ def test_analyze_notion_payload_creates_documented_by_edges(db, tenant):
         snapshot.docs,
     )
     assert edge_count >= 1
-    assert any(isinstance(node, GraphNotionPage) for node in data_points)
+    assert any(isinstance(node, Document) for node in data_points)
     assert "Living runbook" in narrative
 
 

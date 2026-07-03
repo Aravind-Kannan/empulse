@@ -57,6 +57,9 @@ class Settings(BaseSettings):
 
     era_v2_scoring: bool = True
 
+    # When unset, enrichment auto-skips for Ollama (local models fail Cognee summarization schema).
+    cognify_enrichment_enabled: bool | None = None
+
     model_config = SettingsConfigDict(
         env_file=str(BACKEND_ROOT / ".env"),
         env_file_encoding="utf-8",

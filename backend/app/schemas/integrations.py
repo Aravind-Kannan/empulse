@@ -199,6 +199,39 @@ class GitHubRepoSyncRequest(BaseModel):
     repository_url: str = Field(min_length=1)
 
 
+class CogneeDatasetResetRequest(BaseModel):
+    """Reset the tenant Cognee knowledge graph dataset."""
+
+    memory_only: bool = Field(
+        default=False,
+        description=(
+            "When true, delete graph nodes and vector embeddings only. "
+            "Raw dataset files remain for re-cognify."
+        ),
+    )
+    clear_ledger: bool = Field(
+        default=True,
+        description="Clear integration sync ledger so the next sync re-ingests all items.",
+    )
+    clear_telemetry: bool = Field(
+        default=False,
+        description=(
+            "Also clear Postgres DOA/ownership snapshots and in-memory integration telemetry."
+        ),
+    )
+
+
+class CogneeDatasetResetResponse(BaseModel):
+    dataset: str
+    mode: str
+    memory_only: bool
+    forget_summary: dict = Field(default_factory=dict)
+    graph_purge: dict = Field(default_factory=dict)
+    ledger_rows_removed: int = 0
+    telemetry_cleared: bool = False
+    message: str
+
+
 class GlobalSyncResponse(BaseModel):
     results: list[IntegrationSyncResponse]
     total_nodes_created: int

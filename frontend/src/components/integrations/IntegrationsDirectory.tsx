@@ -13,6 +13,8 @@ import {
 import { jobsForIntegration, latestJobPerSource } from "@/lib/sync-jobs";
 
 import { IntegrationRow } from "./IntegrationRow";
+import { GlobalSyncProgressBar } from "./GlobalSyncProgressBar";
+import { CogneeDatasetResetPanel } from "./CogneeDatasetResetPanel";
 import {
   IntegrationConfigDrawer,
   useSelectedIntegration,
@@ -46,10 +48,6 @@ export function IntegrationsDirectory({
   const latestBySource = useMemo(() => latestJobPerSource(syncJobs), [syncJobs]);
   const connectedCount = getConnectedIntegrationIds(config).length;
   const isGlobalBusy = syncProgress.active || globalSyncPending;
-  const progressPct =
-    syncProgress.total > 0
-      ? Math.round((syncProgress.completed.length / syncProgress.total) * 100)
-      : 0;
 
   return (
     <>
@@ -91,22 +89,11 @@ export function IntegrationsDirectory({
             )}
 
             {(syncProgress.active || globalSyncPending) && (
-              <div className="space-y-2 rounded-xl border border-zinc-800 bg-zinc-950/40 px-4 py-3">
-                <div className="flex items-center justify-between text-xs text-zinc-500">
-                  <span>
-                    {syncProgress.currentSource
-                      ? `Ingesting ${syncProgress.currentSource}…`
-                      : "Preparing sync jobs…"}
-                  </span>
-                  <span>{progressPct}%</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-500 ease-out"
-                    style={{ width: `${progressPct}%` }}
-                  />
-                </div>
-              </div>
+              <GlobalSyncProgressBar
+                progress={syncProgress}
+                currentJob={syncProgress.currentJob}
+                compact
+              />
             )}
           </div>
         )}
@@ -168,6 +155,10 @@ export function IntegrationsDirectory({
             })}
           </ul>
         </section>
+
+        {showSyncToolbar && (
+          <CogneeDatasetResetPanel />
+        )}
       </div>
 
       {selectedApp && (

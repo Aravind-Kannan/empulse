@@ -120,10 +120,30 @@ def _guess_mapping(
     return None
 
 
+def load_provider_members_bundle(
+    db: Session,
+    tenant_id: uuid.UUID,
+    connected_providers: list[str] | None = None,
+) -> tuple[dict[str, list[ProviderMember]], dict[str, str]]:
+    active_providers = [
+        provider for provider in (connected_providers or list(PROVIDERS)) if provider in PROVIDERS
+    ]
+    provider_members: dict[str, list[ProviderMember]] = {}
+    provider_warnings: dict[str, str] = {}
+    for provider in active_providers:
+        members, warning = load_provider_members_with_warning(provider, db, tenant_id)
+        provider_members[provider] = members
+        if warning:
+            provider_warnings[provider] = warning
+    return provider_members, provider_warnings
+
+
 def get_reconciliation(
     db: Session,
     tenant,
     connected_providers: list[str] | None = None,
+    *,
+    include_live_members: bool = True,
 ) -> IdentityReconciliationResponse:
     active_providers = [
         provider for provider in (connected_providers or list(PROVIDERS)) if provider in PROVIDERS
@@ -144,19 +164,26 @@ def get_reconciliation(
     }
 
     rows: list[EmployeeIdentityRow] = []
-    provider_members: dict[str, list[ProviderMember]] = {}
-    provider_warnings: dict[str, str] = {}
-    for provider in active_providers:
-        members, warning = load_provider_members_with_warning(provider, db, tenant.id)
-        provider_members[provider] = members
-        if warning:
-            provider_warnings[provider] = warning
+    if include_live_members:
+        provider_members, provider_warnings = load_provider_members_bundle(
+            db,
+            tenant.id,
+            active_providers,
+        )
+    else:
+        provider_members = {provider: [] for provider in active_providers}
+        provider_warnings = {}
     for employee in employees:
         mappings: dict[str, str | None] = {}
         for provider in active_providers:
             saved = mapping_index.get((employee.id, provider))
             members = provider_members.get(provider, [])
-            mappings[provider] = saved or _guess_mapping(employee, provider, members)
+            if saved:
+                mappings[provider] = saved
+            elif include_live_members:
+                mappings[provider] = _guess_mapping(employee, provider, members)
+            else:
+                mappings[provider] = None
         rows.append(
             EmployeeIdentityRow(
                 employee_id=employee.id,
