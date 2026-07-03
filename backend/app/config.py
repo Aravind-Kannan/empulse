@@ -137,6 +137,10 @@ def _apply_runtime_env(settings: Settings) -> None:
         os.environ.setdefault("COGNEE_SERVICE_URL", settings.cognee_service_url.strip())
     if settings.cognee_api_key:
         os.environ.setdefault("COGNEE_API_KEY", settings.cognee_api_key)
+    if settings.cognee_backend == "cloud" or settings.cognee_graph_db_provider.lower().strip() == "kuzu":
+        # Keep embedded Kuzu under ~512MB Render/Railway instances.
+        os.environ.setdefault("KUZU_BUFFER_POOL_SIZE", str(32 * 1024 * 1024))
+        os.environ.setdefault("KUZU_NUM_THREADS", "1")
 
 
 _apply_runtime_env(Settings())

@@ -268,6 +268,16 @@ NEXT_PUBLIC_FRONTEND_URL=https://your-app.example.com
 
 Cloud sync path: structured ingest → local Kuzu graph → `cognee.push(preserve)` → cloud vectors via `remember()`.
 
+### Render (512MB free tier)
+
+| Setting | Value |
+|---------|--------|
+| **Root Directory** | `backend` |
+| **Build Command** | `pip install -r requirements-prod.txt` |
+| **Start Command** | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+
+Cloud mode skips heavy graph/vector migrations and `remember()` provisioning at startup (runs on first sync instead). Use `requirements-prod.txt` — no Ollama/Neo4j cognee extras. If still tight on memory, bump Render plan or add a persistent disk for `.cognee_system`.
+
 ---
 
 ## Project structure

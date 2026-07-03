@@ -34,7 +34,7 @@ async def lifespan(_: FastAPI):
     setup_cognee()
     init_db()
 
-    from app.services.cognee_cloud import configure_cognee_backend
+    from app.services.cognee_cloud import bootstrap_cognee_startup_migrations, configure_cognee_backend
 
     cognee_backend = await configure_cognee_backend()
     logger.info("Cognee %s backend ready", cognee_backend)
@@ -48,9 +48,7 @@ async def lifespan(_: FastAPI):
             recovered,
         )
 
-    from cognee.run_migrations import run_migrations
-
-    migration_failures = await run_migrations()
+    migration_failures = await bootstrap_cognee_startup_migrations()
     if migration_failures:
         logger.warning(
             "Cognee startup migrations failed for: %s",
@@ -64,7 +62,8 @@ async def lifespan(_: FastAPI):
     db = SessionLocal()
     try:
         tenant = bootstrap_tenancy(db)
-        await ensure_tenant_cognee_dataset(tenant.id)
+        # Defer cloud remember() until first sync — saves memory on cold start.
+        await ensure_tenant_cognee_dataset(tenant.id, provision_cloud=False)
     finally:
         db.close()
 

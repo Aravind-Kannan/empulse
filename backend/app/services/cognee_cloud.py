@@ -210,6 +210,37 @@ async def push_tenant_ontology_graph(
     }
 
 
+async def bootstrap_cognee_startup_migrations() -> list[str]:
+    """
+    Startup migrations tuned for low-memory hosts (e.g. Render 512MB).
+
+    Cloud mode: relational SQLite schema only. Graph/vector chain runs lazily
+    on first ingest via cognee's write-path migration guards.
+    Local mode: full cognee startup migrations (relational + graph/vector).
+    """
+    if not use_cognee_cloud_backend():
+        from cognee.run_migrations import run_migrations
+
+        return await run_migrations()
+
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.migrations.startup import (
+        _relational_schema_exists,
+        run_relational_migrations,
+        run_relational_stamp,
+    )
+
+    if await _relational_schema_exists():
+        await run_relational_migrations()
+    else:
+        logger.info(
+            "Fresh Cognee relational DB (cloud mode): create_all + stamp head"
+        )
+        await get_relational_engine().create_database()
+        await run_relational_stamp("head")
+    return []
+
+
 async def configure_cognee_backend() -> Literal["local", "cloud"]:
     """
     Apply COGNEE_BACKEND=local|cloud.

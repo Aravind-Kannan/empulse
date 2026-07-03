@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from cognee.infrastructure.engine import DataPoint
 
 from app.services.cognee_cloud import (
+    bootstrap_cognee_startup_migrations,
     configure_cognee_backend,
     connect_cognee_cloud,
     ensure_cloud_tenant_dataset,
@@ -279,3 +280,49 @@ def test_tenant_add_and_cognify_uses_remember_on_cloud_backend():
     assert kwargs["custom_prompt"] == "prompt"
     assert kwargs["dataset_name"].startswith("empulse_tenant_")
     assert result["skipped"] is False
+
+
+def test_bootstrap_startup_migrations_cloud_skips_full_graph_chain():
+    create_db = AsyncMock()
+    stamp = AsyncMock()
+    relational = AsyncMock()
+    schema_exists = AsyncMock(return_value=False)
+
+    with patch(
+        "app.services.cognee_cloud.use_cognee_cloud_backend",
+        return_value=True,
+    ), patch(
+        "cognee.modules.migrations.startup._relational_schema_exists",
+        schema_exists,
+    ), patch(
+        "cognee.infrastructure.databases.relational.get_relational_engine",
+    ) as engine_mock, patch(
+        "cognee.modules.migrations.startup.run_relational_migrations",
+        relational,
+    ), patch(
+        "cognee.modules.migrations.startup.run_relational_stamp",
+        stamp,
+    ), patch("cognee.run_migrations.run_migrations") as full_migrations:
+        engine_mock.return_value.create_database = create_db
+        failed = asyncio.run(bootstrap_cognee_startup_migrations())
+
+    assert failed == []
+    create_db.assert_awaited_once()
+    stamp.assert_awaited_once_with("head")
+    relational.assert_not_awaited()
+    full_migrations.assert_not_called()
+
+
+def test_bootstrap_startup_migrations_local_runs_full_chain():
+    with patch(
+        "app.services.cognee_cloud.use_cognee_cloud_backend",
+        return_value=False,
+    ), patch(
+        "cognee.run_migrations.run_migrations",
+        new_callable=AsyncMock,
+        return_value=[],
+    ) as full_migrations:
+        failed = asyncio.run(bootstrap_cognee_startup_migrations())
+
+    assert failed == []
+    full_migrations.assert_awaited_once()

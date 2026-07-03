@@ -1,0 +1,16 @@
+# Production (Render/Railway 512MB): lean cognee install — no ollama/neo4j extras.
+# Build: pip install -r requirements-prod.txt
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic[email]>=2.6.0
+pydantic-settings>=2.2.0
+cognee>=1.2.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+requests>=2.31.0
+truststore>=0.10.0
+bcrypt>=4.1.2,<5
+python-jose[cryptography]>=3.3.0
+authlib>=1.3.0
+python-multipart>=0.0.9
+itsdangerous>=2.1.0

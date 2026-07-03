@@ -42,7 +42,11 @@ from app.tenancy import tenant_dataset_name
 logger = logging.getLogger(__name__)
 
 
-async def ensure_tenant_cognee_dataset(tenant_id: uuid.UUID) -> str:
+async def ensure_tenant_cognee_dataset(
+    tenant_id: uuid.UUID,
+    *,
+    provision_cloud: bool = True,
+) -> str:
     """Register the tenant dataset locally and provision on Cognee Cloud when enabled."""
     dataset = tenant_dataset_name(tenant_id)
     user = await get_default_user()
@@ -50,7 +54,7 @@ async def ensure_tenant_cognee_dataset(tenant_id: uuid.UUID) -> str:
 
     from app.services.cognee_cloud import ensure_cloud_tenant_dataset, use_cognee_cloud_backend
 
-    if use_cognee_cloud_backend():
+    if provision_cloud and use_cognee_cloud_backend():
         await ensure_cloud_tenant_dataset(dataset)
 
     return dataset
