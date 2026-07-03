@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.operational import Assignment, Employee
 from app.schemas.era import EraEmployeeDetailResponse, EraEvidenceItem, EraMitigationItem
 from app.schemas.exit import EmployeeOption, HandoverResponse
+from app.services.exit_service import compile_exit_handover_file
 from app.services.era.signals_builder import _undocumented_solved_incidents
 from app.services.github_file_risk import get_employee_hotspots
 from app.services.integration_config_store import get_jira_config
@@ -287,7 +288,8 @@ def _render_era_sections(
 
 def _era_header_lines(ctx: EraHandoverContext) -> list[str]:
     lines = [
-        "> Generated via Cognee knowledge graph traversal of ownership edges and operational metadata.",
+        "> Generated from ownership assignments, integration telemetry, risk scoring, "
+        "and knowledge-graph retrieval.",
         (
             f"> **ERA risk assessment** computed at {_format_datetime(ctx.computed_at)}"
             + (
@@ -302,7 +304,7 @@ def _era_header_lines(ctx: EraHandoverContext) -> list[str]:
     return lines
 
 
-def build_handover_markdown(
+async def build_handover_markdown(
     db: Session,
     employee_id: str,
     tenant,
@@ -320,30 +322,7 @@ def build_handover_markdown(
         raise ValueError(f"Employee '{employee_id}' not found.")
 
     employee_name = employee.name
-    role = employee.role
-    component_lines = []
-    task_lines = []
-    component_names = []
-
-    for assignment in employee.assignments:
-        comp = assignment.component
-        component_names.append(comp.name)
-        component_lines.append(
-            f"- **{comp.name}** ({assignment.codebase_share_pct}% codebase share) — "
-            f"{comp.description}"
-        )
-        if comp.open_tasks_count > 0:
-            task_lines.append(
-                f"- {comp.open_tasks_count} open tasks on **{comp.name}** "
-                f"({comp.unresolved_incidents} unresolved incidents)"
-            )
-
-    if not component_lines:
-        component_lines = ["- No owned components found in Cognee knowledge graph."]
-    if not task_lines:
-        task_lines = ["- No active open tasks linked to owned components."]
-
-    hotfix_lines = _hotfix_lines(employee_id, role, component_names)
+    markdown = await compile_exit_handover_file(db, employee_id, tenant.id)
 
     era_ctx: EraHandoverContext | None = None
     era_sections = ""
@@ -358,29 +337,19 @@ def build_handover_markdown(
             era_risk_score = era_ctx.risk_score
             era_computed_at = era_ctx.computed_at
 
-    header_lines = _era_header_lines(era_ctx) if era_ctx and not era_ctx.excluded else [
-        "> Generated via Cognee knowledge graph traversal of ownership edges and operational metadata."
-    ]
-
-    body_parts = [
-        f"# Employee Exit Handover — {employee_name}",
-        "\n".join(header_lines),
-    ]
     if era_sections:
-        body_parts.append(era_sections)
+        lines = markdown.splitlines()
+        insert_at = 2 if len(lines) > 1 and lines[1].startswith(">") else 1
+        preamble = lines[:insert_at]
+        remainder = lines[insert_at:]
+        markdown = "\n".join(
+            preamble + ["", era_sections, ""] + remainder
+        )
 
-    body_parts.extend(
-        [
-            "## System Components Requiring Transfer",
-            "\n".join(component_lines),
-            "## Active Open Tasks",
-            "\n".join(task_lines),
-            "## Undocumented Hotfixes Needing Writeups",
-            "\n".join(hotfix_lines),
-        ]
-    )
-
-    markdown = "\n\n".join(body_parts) + "\n"
+    if era_ctx and not era_ctx.excluded:
+        header_lines = _era_header_lines(era_ctx)
+        lines = markdown.splitlines()
+        markdown = "\n".join(lines[:1] + [""] + header_lines + lines[1:])
 
     safe_name = employee_name.lower().replace(" ", "-")
     return HandoverResponse(

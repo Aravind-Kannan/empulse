@@ -113,7 +113,16 @@ def _retry_after_seconds(response: requests.Response, attempt: int) -> float:
 
 
 def _format_slack_api_error(error: str, *, method: str) -> str:
-    if error in ("missing_scope", "invalid_auth", "token_revoked"):
+    if error in ("missing_scope",):
+        if method in {"conversations.open", "files.upload", "users.lookupByEmail"}:
+            scopes = ", ".join(DM_WRITE_SCOPES)
+            return (
+                f"Slack bot token is missing DM delivery scopes ({method}). "
+                f"Add {scopes} under OAuth & Permissions, reinstall the app, "
+                "and copy a fresh xoxb- token."
+            )
+        return _format_slack_conversations_error(error)
+    if error in ("invalid_auth", "token_revoked"):
         return _format_slack_conversations_error(error)
     if error == "rate_limited":
         return (
@@ -182,6 +191,64 @@ def _slack_api_get(
     )
 
 
+def _slack_api_post(
+    url: str,
+    *,
+    token: str,
+    data: dict[str, Any] | None = None,
+    context: str = "Slack API",
+) -> dict[str, Any]:
+    """POST Slack Web API with pacing and 429/rate_limited retries."""
+    for attempt in range(SLACK_MAX_RETRIES):
+        _pace_slack_request()
+        try:
+            response = requests.post(
+                url,
+                headers=slack_headers(token),
+                data=data or {},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise ValueError(f"Could not reach {context}: {exc}") from exc
+
+        if response.status_code == 429:
+            wait = _retry_after_seconds(response, attempt)
+            logger.warning(
+                "%s HTTP 429; backing off %.1fs (attempt %s/%s)",
+                context,
+                wait,
+                attempt + 1,
+                SLACK_MAX_RETRIES,
+            )
+            time.sleep(wait)
+            continue
+
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("ok"):
+            return payload
+
+        error = str(payload.get("error", "unknown_error"))
+        if error == "rate_limited" and attempt + 1 < SLACK_MAX_RETRIES:
+            wait = _retry_after_seconds(response, attempt)
+            logger.warning(
+                "%s rate_limited; backing off %.1fs (attempt %s/%s)",
+                context,
+                wait,
+                attempt + 1,
+                SLACK_MAX_RETRIES,
+            )
+            time.sleep(wait)
+            continue
+
+        raise ValueError(_format_slack_api_error(error, method=context))
+
+    raise ValueError(
+        f"{context} rate limited after {SLACK_MAX_RETRIES} retries. "
+        "Wait a minute and retry."
+    )
+
+
 def parse_csv_ids(value: str | None) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
@@ -203,6 +270,16 @@ CHANNEL_READ_SCOPES = (
     "channels:history",
     "groups:history",
 )
+
+DM_WRITE_SCOPES = (
+    "chat:write",
+    "im:write",
+    "files:write",
+    "users:read",
+    "users:read.email",
+)
+
+_SLACK_FILE_UPLOAD_MAX_BYTES = 1_000_000
 
 
 def _format_slack_conversations_error(error: str) -> str:
@@ -919,3 +996,66 @@ def count_on_call_incident(
         return False
     window = ON_CALL_WINDOW_HOURS * 3600
     return (timestamps[-1] - timestamps[0]).total_seconds() <= window
+
+
+def lookup_slack_user_by_email(token: str, email: str) -> str | None:
+    """Resolve a workspace member id from email (requires users:read.email)."""
+    if not email.strip():
+        return None
+    payload = _slack_api_post(
+        "https://slack.com/api/users.lookupByEmail",
+        token=token,
+        data={"email": email.strip().lower()},
+        context="users.lookupByEmail",
+    )
+    user = payload.get("user") or {}
+    user_id = user.get("id")
+    return str(user_id) if user_id else None
+
+
+def open_dm_channel(token: str, slack_user_id: str) -> str:
+    """Open (or reuse) a DM channel with one workspace user."""
+    payload = _slack_api_post(
+        "https://slack.com/api/conversations.open",
+        token=token,
+        data={"users": slack_user_id},
+        context="conversations.open",
+    )
+    channel = payload.get("channel") or {}
+    channel_id = channel.get("id")
+    if not channel_id:
+        raise ValueError("Slack did not return a DM channel id.")
+    return str(channel_id)
+
+
+def upload_markdown_to_channel(
+    token: str,
+    *,
+    channel_id: str,
+    filename: str,
+    content: str,
+    title: str,
+    initial_comment: str,
+) -> str:
+    """Upload a markdown document to a channel or DM (files.upload)."""
+    encoded = content.encode("utf-8")
+    if len(encoded) > _SLACK_FILE_UPLOAD_MAX_BYTES:
+        raise ValueError(
+            f"Handover file is {len(encoded)} bytes; Slack upload limit is "
+            f"{_SLACK_FILE_UPLOAD_MAX_BYTES} bytes. Download the .md file instead."
+        )
+    payload = _slack_api_post(
+        "https://slack.com/api/files.upload",
+        token=token,
+        data={
+            "channels": channel_id,
+            "content": content,
+            "filename": filename,
+            "title": title,
+            "initial_comment": initial_comment,
+        },
+        context="files.upload",
+    )
+    file_obj = payload.get("file") or {}
+    file_id = file_obj.get("id")
+    return str(file_id) if file_id else ""

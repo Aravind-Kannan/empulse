@@ -72,7 +72,7 @@ const STEPS = [
   {
     icon: BrainCircuit,
     title: "Act on intelligence",
-    copy: "Run ERA, KRA, incident investigation, and exit handover — all scoped to your tenant's live knowledge graph.",
+    copy: "Run ERA, KRA, incident investigation, and employee knowledge handover — all scoped to your tenant's live knowledge graph.",
   },
 ];
 
@@ -135,9 +135,9 @@ const BENTO_ITEMS = [
   {
     key: "exit",
     className: "md:col-span-1",
-    title: "Exit Handover Pack",
+    title: "Employee Knowledge Handover",
     description:
-      "Auto-assembled docs from graph context — lines type in once, then highlight cycles.",
+      "Auto-assembled knowledge handover docs from graph context — lines type in once, then highlight cycles.",
     content: <BentoExitHandover />,
   },
 ] as const;

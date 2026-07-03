@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class HandoverResponse(BaseModel):
@@ -12,6 +12,21 @@ class HandoverResponse(BaseModel):
     era_sections_included: list[str] = Field(default_factory=list)
     era_computed_at: datetime | None = None
     prefill_from_era: bool = False
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def markdown_content(self) -> str:
+        return self.markdown
+
+
+class HandoverSlackSendResponse(BaseModel):
+    employee_id: str
+    employee_name: str
+    slack_user_id: str
+    channel_id: str
+    filename: str
+    file_id: str | None = None
+    message: str
 
 
 class DashboardMetrics(BaseModel):

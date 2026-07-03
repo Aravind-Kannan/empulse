@@ -30,7 +30,7 @@ export const INTEGRATION_SETUP_GUIDES: Record<
     steps: [
       "Go to api.slack.com/apps and create a new app (From scratch).",
       "Choose your workspace, then open OAuth & Permissions.",
-      "Add Bot Token Scopes: users:read, users:read.email, channels:read, groups:read, channels:history, groups:history.",
+      "Add Bot Token Scopes: users:read, users:read.email, channels:read, groups:read, channels:history, groups:history, chat:write, im:write, files:write.",
       "If your workspace exposes org charts, enable users.profile:read for manager fields.",
       "Install the app to your workspace and copy the Bot User OAuth Token (xoxb-…).",
       "Paste your workspace URL (https://your-team.slack.com) and the bot token above.",

@@ -2,9 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.exit import DashboardMetrics, EmployeeOption, HandoverResponse
+from app.schemas.exit import (
+    DashboardMetrics,
+    EmployeeOption,
+    HandoverResponse,
+    HandoverSlackSendResponse,
+)
 from app.services.dashboard import get_dashboard_metrics
 from app.services.exit_handover import build_handover_markdown, list_exit_candidates
+from app.services.exit_slack_delivery import send_handover_slack_dm
 from app.tenancy import CurrentTenant
 
 router = APIRouter(tags=["exit"])
@@ -19,7 +25,7 @@ def get_exit_employees(
 
 
 @router.get("/api/exit/handover", response_model=HandoverResponse)
-def get_handover(
+async def get_handover(
     tenant: CurrentTenant,
     id: str = Query(..., description="Employee id"),
     prefill: str | None = Query(
@@ -29,7 +35,7 @@ def get_handover(
     db: Session = Depends(get_db),
 ) -> HandoverResponse:
     try:
-        return build_handover_markdown(
+        return await build_handover_markdown(
             db,
             id,
             tenant,
@@ -37,6 +43,29 @@ def get_handover(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/exit/handover/send-slack", response_model=HandoverSlackSendResponse)
+async def send_handover_slack(
+    tenant: CurrentTenant,
+    id: str = Query(..., description="Employee id"),
+    prefill: str | None = Query(
+        None,
+        description="When set to 'era', enrich handover with ERA evidence sections",
+    ),
+    db: Session = Depends(get_db),
+) -> HandoverSlackSendResponse:
+    try:
+        return await send_handover_slack_dm(
+            db,
+            tenant,
+            id,
+            prefill_era=prefill == "era",
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
 
 
 @router.get("/api/dashboard/metrics", response_model=DashboardMetrics)

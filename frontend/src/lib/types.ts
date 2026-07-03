@@ -721,11 +721,23 @@ export interface HandoverResponse {
   employee_id: string;
   employee_name: string;
   markdown: string;
+  /** API alias mirroring markdown for asset-pack consumers */
+  markdown_content?: string;
   filename: string;
   era_risk_score?: number | null;
   era_sections_included?: string[];
   era_computed_at?: string | null;
   prefill_from_era?: boolean;
+}
+
+export interface HandoverSlackSendResponse {
+  employee_id: string;
+  employee_name: string;
+  slack_user_id: string;
+  channel_id: string;
+  filename: string;
+  file_id?: string | null;
+  message: string;
 }
 
 export interface DashboardMetrics {

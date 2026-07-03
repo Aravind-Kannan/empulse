@@ -86,7 +86,7 @@ export function EraDetailFooter({
             className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs font-medium text-violet-200 hover:bg-violet-500/20"
           >
             <LogOut className="h-3.5 w-3.5" />
-            Start exit handover
+            Open knowledge handover
           </Link>
         ) : null}
         <button
