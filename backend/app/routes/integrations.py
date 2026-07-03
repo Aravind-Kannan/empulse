@@ -510,12 +510,20 @@ async def sync_members(
 
 
 @router.get("/sync/jobs", response_model=IntegrationSyncJobListResponse)
-def list_sync_jobs(
+async def list_sync_jobs(
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
     limit: int = Query(default=20, ge=1, le=100),
     active_only: bool = Query(default=False),
 ) -> IntegrationSyncJobListResponse:
+    from app.services.integration_sync_jobs import (
+        reconcile_stalled_sync_jobs,
+        schedule_integration_sync_job,
+    )
+
+    for job_id, tenant_id in reconcile_stalled_sync_jobs(db, tenant.id):
+        schedule_integration_sync_job(job_id, tenant_id)
+
     jobs = list_integration_sync_jobs(
         db,
         tenant.id,
@@ -528,12 +536,21 @@ def list_sync_jobs(
 
 
 @router.get("/sync/jobs/{job_id}", response_model=IntegrationSyncJobStatusResponse)
-def get_sync_job_status(
+async def get_sync_job_status(
     job_id: uuid.UUID,
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ) -> IntegrationSyncJobStatusResponse:
+    from app.services.integration_sync_jobs import (
+        reconcile_stalled_sync_jobs,
+        schedule_integration_sync_job,
+    )
+
+    for redispatch_id, tenant_id in reconcile_stalled_sync_jobs(db, tenant.id):
+        schedule_integration_sync_job(redispatch_id, tenant_id)
+
     job = get_integration_sync_job_for_tenant(db, job_id, tenant.id)
+    db.refresh(job)
     return job_to_status_response(job)
 
 

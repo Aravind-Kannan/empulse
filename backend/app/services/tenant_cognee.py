@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -37,6 +38,8 @@ from app.services.tenant_graph_purge import (
     tag_datapoints_with_dataset,
 )
 from app.tenancy import tenant_dataset_name
+
+logger = logging.getLogger(__name__)
 
 
 async def ensure_tenant_cognee_dataset(tenant_id: uuid.UUID) -> str:
@@ -130,7 +133,25 @@ async def tenant_add_and_cognify(
     *,
     custom_prompt: str | None = None,
 ) -> dict:
+    from app.ontology.enrichment import (
+        cognify_enrichment_available,
+        cognify_enrichment_skip_reason,
+    )
+
     dataset = tenant_dataset_name(tenant_id)
+    if not cognify_enrichment_available():
+        logger.info(
+            "Skipping tenant_add_and_cognify for %s — %s",
+            dataset,
+            cognify_enrichment_skip_reason(),
+        )
+        return {
+            "dataset": dataset,
+            "cognify_result": None,
+            "skipped": True,
+            "skip_reason": cognify_enrichment_skip_reason(),
+        }
+
     async with _tenant_cognee_lock(tenant_id):
         async with tenant_cognee_context(tenant_id):
             return await run_cognee_add_and_cognify(
@@ -149,6 +170,8 @@ async def tenant_write_memory_record(
     """Append structured memory to the tenant dataset and re-cognify."""
     import json
 
+    from app.ontology.enrichment import cognify_enrichment_available
+
     dataset = tenant_dataset_name(tenant_id)
     content = json.dumps(record, indent=2)
     prompt = custom_prompt or (
@@ -158,7 +181,8 @@ async def tenant_write_memory_record(
     async with _tenant_cognee_lock(tenant_id):
         async with tenant_cognee_context(tenant_id):
             await cognee.add(content, dataset_name=dataset)
-            await cognee.cognify(datasets=dataset, custom_prompt=prompt)
+            if cognify_enrichment_available():
+                await cognee.cognify(datasets=dataset, custom_prompt=prompt)
 
 
 async def tenant_graph_search(

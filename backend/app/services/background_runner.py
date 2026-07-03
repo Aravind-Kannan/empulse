@@ -34,21 +34,70 @@ def _job_semaphore() -> asyncio.Semaphore:
     return semaphore
 
 
+def is_heavy_job_queue_busy() -> bool:
+    """True when another heavy background job holds the global job semaphore."""
+    return _job_semaphore().locked()
+
+
+_current_heavy_job_label: str | None = None
+
+
+def current_heavy_job_label() -> str | None:
+    """Name of the async function currently holding the global job semaphore."""
+    return _current_heavy_job_label
+
+
+_QUEUE_WAIT_NOTIFY_SEC = 0.35
+
+
 async def run_heavy_job(
     async_fn: Callable[..., Awaitable[T]],
     *args: object,
+    on_waiting: Callable[[], None] | None = None,
     **kwargs: object,
 ) -> T:
     """Run a heavy async job on the main loop, serialized with a semaphore."""
     label = getattr(async_fn, "__name__", "background_job")
-    logger.info("Queueing background job: %s", label)
+    holder = current_heavy_job_label()
+    if holder:
+        logger.info(
+            "Queueing background job: %s (waiting — %s holds the job slot)",
+            label,
+            holder,
+        )
+    else:
+        logger.info("Queueing background job: %s", label)
 
-    async with _job_semaphore():
-        logger.info("Starting background job: %s", label)
-        try:
-            return await async_fn(*args, **kwargs)
-        finally:
-            logger.info("Finished background job: %s", label)
+    semaphore = _job_semaphore()
+    acquired = False
+    wait_notifier: asyncio.Task[None] | None = None
+
+    if on_waiting is not None:
+
+        async def _notify_if_still_waiting() -> None:
+            await asyncio.sleep(_QUEUE_WAIT_NOTIFY_SEC)
+            if not acquired:
+                on_waiting()
+
+        wait_notifier = asyncio.create_task(_notify_if_still_waiting())
+
+    global _current_heavy_job_label
+
+    try:
+        async with semaphore:
+            acquired = True
+            if wait_notifier is not None:
+                wait_notifier.cancel()
+            _current_heavy_job_label = label
+            logger.info("Starting background job: %s", label)
+            try:
+                return await async_fn(*args, **kwargs)
+            finally:
+                logger.info("Finished background job: %s", label)
+                _current_heavy_job_label = None
+    finally:
+        if wait_notifier is not None and not wait_notifier.done():
+            wait_notifier.cancel()
 
 
 # Backwards-compatible alias used by job schedulers.

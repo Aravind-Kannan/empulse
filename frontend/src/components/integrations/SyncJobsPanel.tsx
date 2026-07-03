@@ -66,6 +66,9 @@ function JobRow({
   embedded?: boolean;
 }) {
   const isActive = job.status === "queued" || job.status === "running";
+  const isQueueWaiting =
+    job.status === "queued" &&
+    (job.progress_message?.toLowerCase().includes("waiting for another") ?? false);
   const phaseLabel = job.phase ? PHASE_LABELS[job.phase] ?? job.phase : null;
 
   return (
@@ -90,7 +93,7 @@ function JobRow({
               {job.status === "completed" && <CheckCircle2 className="h-3 w-3" />}
               {job.status === "failed" && <XCircle className="h-3 w-3" />}
               {isActive && <Loader2 className="h-3 w-3 animate-spin" />}
-              {job.status}
+              {isQueueWaiting ? "waiting" : job.status}
             </span>
             <span className="text-[10px] text-zinc-600">
               {formatWhen(job.created_at)}
@@ -100,6 +103,12 @@ function JobRow({
           <p className={`text-zinc-400 ${embedded ? "mt-0.5 text-[10px]" : "mt-1 text-xs"}`}>
             {job.progress_message ?? (isActive ? "Starting…" : "No progress details")}
           </p>
+
+          {isQueueWaiting && (
+            <p className={`text-amber-400/90 ${embedded ? "mt-0.5 text-[10px]" : "mt-1 text-[11px]"}`}>
+              One sync runs at a time — this job starts when the current sync finishes.
+            </p>
+          )}
 
           {isActive && job.job_kind === "github_repo" && (
             <RepoSyncProgress job={job} compact={embedded || compact} />
