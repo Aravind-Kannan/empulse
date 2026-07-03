@@ -25,7 +25,7 @@ from app.services.integration_telemetry import (
     has_jira_sync,
     is_github_spof,
 )
-from app.services.unmapped_activity import get_unmapped_counts_by_provider
+from app.services.unmapped_activity import get_unmapped_counts_by_provider, reconcile_and_prune_unmapped_activity
 
 STALE_SYNC_HOURS = 24
 
@@ -228,6 +228,7 @@ def build_warnings(
         if now - synced > timedelta(hours=STALE_SYNC_HOURS):
             warnings.append("jira_stale")
 
+    reconcile_and_prune_unmapped_activity(db, tenant_id, commit=True)
     unmapped = build_unmapped_activity(db, tenant_id)
     if any(row.count > 0 for row in unmapped):
         warnings.append("partial_identity")

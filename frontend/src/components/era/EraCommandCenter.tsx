@@ -9,8 +9,8 @@ import { fetchEraMetrics } from "@/lib/api";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import type { EraAnalyticsResponse, EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
 
-import { EraAlertsBanner } from "./EraAlertsBanner";
 import { EraCommandHeader } from "./EraCommandHeader";
+import { EraNotificationsDrawer } from "./EraNotificationsDrawer";
 import { EraDetailDrawer } from "./EraDetailDrawer";
 import { EraEmployeePreview } from "./EraEmployeePreview";
 import { EraEvidenceFeed } from "./EraEvidenceFeed";
@@ -20,7 +20,6 @@ import { EraTeamComposition } from "./EraTeamComposition";
 import {
   buildTeamEvidenceFeed,
   connectedIntegrationCount,
-  formatEraWarning,
   totalUnmappedCount,
 } from "./era-utils";
 
@@ -37,6 +36,8 @@ export function EraCommandCenter() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [alertsRefreshKey, setAlertsRefreshKey] = useState(0);
 
   const openDrawer = useCallback(
     (employeeId: string, dimension: EraDimensionKey | null = null) => {
@@ -66,6 +67,7 @@ export function EraCommandCenter() {
     try {
       const response = await fetchEraMetrics();
       setData(response);
+      setAlertsRefreshKey((key) => key + 1);
       setSelectedId((current) => {
         if (
           current &&
@@ -214,29 +216,17 @@ export function EraCommandCenter() {
         </div>
       )}
 
-      {data.warnings.length > 0 && (
-        <div className="space-y-2">
-          {data.warnings.map((warning) => (
-            <div
-              key={warning}
-              className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
-            >
-              {formatEraWarning(warning)}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <EraAlertsBanner onUpdated={() => void load(true)} />
-
       <EraCommandHeader
         recovery={data.team_summary.estimated_recovery_weeks}
         syncFreshness={data.sync_freshness}
+        warnings={data.warnings}
         unmappedCount={unmappedCount}
+        alertsRefreshKey={alertsRefreshKey}
         employees={activeEmployees}
         highRiskCount={data.team_summary.high_risk_count}
         refreshing={refreshing}
         onRefresh={() => void load(true)}
+        onOpenNotifications={() => setNotificationsOpen(true)}
       />
 
       <EraKpiStrip
@@ -281,6 +271,19 @@ export function EraCommandCenter() {
           openDrawer(employeeId);
         }}
       />
+
+      {notificationsOpen && (
+        <EraNotificationsDrawer
+          open={notificationsOpen}
+          onClose={() => setNotificationsOpen(false)}
+          warnings={data.warnings}
+          unmappedCount={unmappedCount}
+          onUpdated={() => {
+            void load(true);
+            setAlertsRefreshKey((key) => key + 1);
+          }}
+        />
+      )}
 
       {drawerEmployeeId && data && (
         <EraDetailDrawer

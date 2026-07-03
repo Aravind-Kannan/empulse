@@ -32,7 +32,7 @@ from app.services.integration_telemetry import (
     has_jira_sync,
     is_github_spof,
 )
-from app.services.unmapped_activity import get_total_unmapped_count
+from app.services.unmapped_activity import get_total_unmapped_count, reconcile_and_prune_unmapped_activity
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,7 @@ def _evaluate_unassigned_p1(db: Session, tenant_id: uuid.UUID) -> list[AlertCand
 
 
 def _evaluate_identity_gap(db: Session, tenant_id: uuid.UUID, threshold: int) -> list[AlertCandidate]:
+    reconcile_and_prune_unmapped_activity(db, tenant_id, commit=True)
     unmapped = get_total_unmapped_count(db, tenant_id)
     if unmapped <= threshold:
         return []
@@ -367,6 +368,7 @@ def list_era_alerts(
     *,
     unacknowledged: bool = False,
 ) -> EraAlertsResponse:
+    reconcile_and_prune_unmapped_activity(db, tenant_id, commit=True)
     query = db.query(EraAlert).filter(EraAlert.tenant_id == tenant_id)
     if unacknowledged:
         query = query.filter(EraAlert.acknowledged_at.is_(None))

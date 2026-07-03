@@ -1,28 +1,34 @@
-import Link from "next/link";
 import { Download, Loader2, RefreshCw } from "lucide-react";
 
 import type { EraEmployeeMetrics, EraRecoveryEstimate } from "@/lib/types";
 
+import { EraNotificationsButton } from "./EraNotificationsButton";
 import { exportEmployeesCsv, formatSyncFreshness } from "./era-utils";
 
 interface EraCommandHeaderProps {
   recovery: EraRecoveryEstimate;
   syncFreshness: Parameters<typeof formatSyncFreshness>[0];
+  warnings: string[];
   unmappedCount: number;
+  alertsRefreshKey: number;
   employees: EraEmployeeMetrics[];
   highRiskCount: number;
   refreshing: boolean;
   onRefresh: () => void;
+  onOpenNotifications: () => void;
 }
 
 export function EraCommandHeader({
   recovery,
   syncFreshness,
+  warnings,
   unmappedCount,
+  alertsRefreshKey,
   employees,
   highRiskCount,
   refreshing,
   onRefresh,
+  onOpenNotifications,
 }: EraCommandHeaderProps) {
   const sync = formatSyncFreshness(syncFreshness);
   const syncClass =
@@ -49,14 +55,12 @@ export function EraCommandHeader({
         >
           {sync.label} {sync.tone === "ok" ? "✓" : ""}
         </span>
-        {unmappedCount > 0 && (
-          <Link
-            href="/settings/identity-mapping"
-            className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
-          >
-            ⚠ {unmappedCount} unmapped
-          </Link>
-        )}
+        <EraNotificationsButton
+          warnings={warnings}
+          unmappedCount={unmappedCount}
+          refreshKey={alertsRefreshKey}
+          onClick={onOpenNotifications}
+        />
         <button
           type="button"
           onClick={() => exportEmployeesCsv(employees)}

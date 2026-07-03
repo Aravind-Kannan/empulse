@@ -12,6 +12,7 @@ from app.services.identity_resolver import (
     resolve_employee,
     should_attribute,
 )
+from app.services.github_client import load_fixture_activities
 from app.services.integration_telemetry import apply_github_telemetry
 from app.services.unmapped_activity import get_total_unmapped_count
 
@@ -211,7 +212,8 @@ def test_github_telemetry_skips_unmapped_contractor(db, tenant):
         )
     db.commit()
 
-    ownership = apply_github_telemetry(db, tenant.id)
+    activities = load_fixture_activities()
+    ownership = apply_github_telemetry(db, tenant.id, activities)
     db.commit()
 
     all_contributors = {

@@ -27,6 +27,7 @@ from app.services.unmapped_activity import (
     get_total_unmapped_count,
     get_unmapped_counts_by_provider,
     list_unmapped_activities,
+    reconcile_and_prune_unmapped_activity,
 )
 from app.tenancy import CurrentTenant
 
@@ -138,6 +139,19 @@ async def sync_identity_mappings(
         total_mappings_created=int(result["total_mappings_created"]),
         roster=result.get("roster"),
     )
+
+
+@router.post("/reconcile-unmapped")
+def reconcile_unmapped(
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """Clear stale quarantine rows after identity mappings are saved."""
+    removed = reconcile_and_prune_unmapped_activity(db, tenant.id, commit=True)
+    return {
+        "removed_rows": removed,
+        "total_unmapped_count": get_total_unmapped_count(db, tenant.id),
+    }
 
 
 @router.get("/unmapped", response_model=UnmappedActivityListResponse)

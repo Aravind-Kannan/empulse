@@ -16,6 +16,7 @@ from app.schemas.identity import (
 from app.services.unmapped_activity import (
     get_total_unmapped_count,
     get_unmapped_counts_by_provider,
+    reconcile_and_prune_unmapped_activity,
 )
 
 PROVIDERS = ("github", "jira", "slack", "notion")
@@ -173,6 +174,9 @@ def get_reconciliation(
     else:
         provider_members = {provider: [] for provider in active_providers}
         provider_warnings = {}
+
+    reconcile_and_prune_unmapped_activity(db, tenant.id, commit=True)
+
     for employee in employees:
         mappings: dict[str, str | None] = {}
         for provider in active_providers:
@@ -264,5 +268,6 @@ def save_identity_mappings(
                 )
             )
 
+    reconcile_and_prune_unmapped_activity(db, tenant.id, commit=False)
     db.commit()
     return saved

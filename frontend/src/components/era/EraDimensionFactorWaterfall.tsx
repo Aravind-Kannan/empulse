@@ -48,8 +48,18 @@ export function EraDimensionFactorWaterfall({
             ) : (
               <div className="space-y-1.5">
                 {factors.map((factor) => (
-                  <div key={factor.key} className="flex items-center gap-2">
-                    <div className="h-1.5 flex-1 rounded-full bg-zinc-800">
+                  <div
+                    key={factor.key}
+                    className="grid grid-cols-[minmax(0,1fr)_7.5rem_1.75rem] items-center gap-x-2"
+                  >
+                    <span
+                      className="truncate text-[10px] text-zinc-400"
+                      title={`${factor.label} — ${factor.impact_points} pts`}
+                    >
+                      {factor.label}
+                      {factor.synthetic ? " (est.)" : ""}
+                    </span>
+                    <div className="h-1.5 w-full rounded-full bg-zinc-800">
                       <div
                         className={`h-full rounded-full ${colors.bar}`}
                         style={{
@@ -60,14 +70,7 @@ export function EraDimensionFactorWaterfall({
                         }}
                       />
                     </div>
-                    <span
-                      className="max-w-[12rem] truncate text-[10px] text-zinc-400"
-                      title={`${factor.label} — ${factor.impact_points} pts`}
-                    >
-                      {factor.label}
-                      {factor.synthetic ? " (est.)" : ""}
-                    </span>
-                    <span className="w-8 text-right text-[10px] tabular-nums text-zinc-500">
+                    <span className="text-right text-[10px] tabular-nums text-zinc-500">
                       {Math.round(factor.impact_points)}
                     </span>
                   </div>

@@ -142,6 +142,10 @@ async def refresh_identity_mappings(
         provider_results.append(result)
         total_created += int(result.get("mappings_created") or 0)
 
+    from app.services.unmapped_activity import reconcile_and_prune_unmapped_activity
+
+    reconcile_and_prune_unmapped_activity(db, tenant.id, commit=True)
+
     return {
         "providers": provider_results,
         "total_mappings_created": total_created,
