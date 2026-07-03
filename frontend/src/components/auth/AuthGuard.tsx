@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
 
+import { GlobalPageLoader } from "@/components/ui/GlobalPageLoader";
 import { useAuth } from "@/context/AuthContext";
 
 const PUBLIC_PATHS = ["/", "/login", "/signup"];
@@ -59,16 +59,10 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     ) {
       router.replace("/onboarding");
     }
-  }, [authStatus, isLoading, pathname, router, session?.onboarded]);
+  }, [authStatus, isLoading, isAuthenticated, pathname, router, session?.onboarded]);
 
-  // Login/signup must render immediately — don't block on session probe (backend may be slow).
   if (isLoading && !isAuthPath(pathname)) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-zinc-400">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-        Loading session…
-      </div>
-    );
+    return <GlobalPageLoader label="Verifying session" />;
   }
 
   if (
@@ -76,12 +70,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     !isPublicPath(pathname) &&
     !isAuthPath(pathname)
   ) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-zinc-400">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-        Redirecting…
-      </div>
-    );
+    return <GlobalPageLoader label="Redirecting" />;
   }
 
   return <>{children}</>;

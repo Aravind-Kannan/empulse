@@ -6,6 +6,7 @@ import { Download, FileText, Loader2, Send, UserRound } from "lucide-react";
 
 import { EmployeeSearchCombobox } from "@/components/exit/EmployeeSearchCombobox";
 import { HandoverMarkdownPreview } from "@/components/exit/HandoverMarkdownPreview";
+import { useToast } from "@/context/ToastContext";
 import { fetchExitEmployees, fetchHandover, sendHandoverSlack } from "@/lib/api";
 import type { EmployeeOption, HandoverResponse } from "@/lib/types";
 
@@ -32,8 +33,8 @@ function ExitHandoverContent() {
   const [loadingEmployees, setLoadingEmployees] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [sendingSlack, setSendingSlack] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [slackSuccess, setSlackSuccess] = useState<string | null>(null);
+  const { pushToast } = useToast();
 
   useEffect(() => {
     fetchExitEmployees()
@@ -43,9 +44,9 @@ function ExitHandoverContent() {
           setSelectedId(employeeParam);
         }
       })
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Failed to load employees"),
-      )
+      .catch(() => {
+        setEmployees([]);
+      })
       .finally(() => setLoadingEmployees(false));
   }, [employeeParam]);
 
@@ -58,18 +59,14 @@ function ExitHandoverContent() {
     let cancelled = false;
     setHandover(null);
     setGenerating(true);
-    setError(null);
     setSlackSuccess(null);
 
     fetchHandover(selectedId, { prefillEra })
       .then((data) => {
         if (!cancelled) setHandover(data);
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setHandover(null);
-          setError(err instanceof Error ? err.message : "Handover failed");
-        }
+      .catch(() => {
+        if (!cancelled) setHandover(null);
       })
       .finally(() => {
         if (!cancelled) setGenerating(false);
@@ -103,13 +100,13 @@ function ExitHandoverContent() {
   async function handleSendSlack() {
     if (!handover || !selectedId) return;
     setSendingSlack(true);
-    setError(null);
     setSlackSuccess(null);
     try {
       const result = await sendHandoverSlack(selectedId, { prefillEra });
       setSlackSuccess(result.message);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send handover to Slack");
+      pushToast(result.message, "success");
+    } catch {
+      // Global API toast handles the error message.
     } finally {
       setSendingSlack(false);
     }
@@ -164,12 +161,6 @@ function ExitHandoverContent() {
           disabled={generating}
         />
       </div>
-
-      {error ? (
-        <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-300">
-          {error}
-        </div>
-      ) : null}
 
       {slackSuccess ? (
         <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-200">

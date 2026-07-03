@@ -2,6 +2,8 @@
  * Centralized API client with auth + tenant header injection.
  */
 
+import { reportToastError } from "./toast-bus";
+
 const TOKEN_STORAGE_KEY = "empulse_access_token";
 const TENANT_STORAGE_KEY = "empulse_active_tenant_id";
 
@@ -46,7 +48,35 @@ export function clearAuthCredentials() {
 export type ApiFetchInit = RequestInit & {
   /** Client-side timeout in ms. Default 20s. Set 0 to disable. */
   timeoutMs?: number;
+  /** When true, failed responses do not emit a global error toast. */
+  skipErrorToast?: boolean;
 };
+
+async function parseResponseError(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  try {
+    const body = (await response.json()) as {
+      detail?: string | Array<{ msg?: string; loc?: string[] }>;
+      message?: string;
+    };
+    if (typeof body.detail === "string" && body.detail.trim()) {
+      return body.detail;
+    }
+    if (Array.isArray(body.detail) && body.detail.length > 0) {
+      return body.detail
+        .map((item) => item.msg ?? JSON.stringify(item))
+        .join("; ");
+    }
+    if (typeof body.message === "string" && body.message.trim()) {
+      return body.message;
+    }
+  } catch {
+    // Response body may not be JSON.
+  }
+  return `${fallback} (${response.status})`;
+}
 
 export function isFetchAbortError(error: unknown): boolean {
   if (error instanceof DOMException) {
@@ -72,7 +102,12 @@ export function formatFetchError(
 }
 
 export function apiFetch(url: string, init?: ApiFetchInit): Promise<Response> {
-  const { timeoutMs = 20_000, signal: externalSignal, ...rest } = init ?? {};
+  const {
+    timeoutMs = 20_000,
+    signal: externalSignal,
+    skipErrorToast = false,
+    ...rest
+  } = init ?? {};
   const headers = new Headers(rest.headers);
   const token = getAccessToken();
   const tenantId = getActiveTenantId();
@@ -84,31 +119,55 @@ export function apiFetch(url: string, init?: ApiFetchInit): Promise<Response> {
     headers.set("X-Tenant-ID", tenantId);
   }
 
-  if (typeof window === "undefined" || externalSignal || timeoutMs === 0) {
-    return fetch(url, {
-      credentials: "include",
-      ...rest,
-      headers,
-      signal: externalSignal,
-    });
-  }
+  const runFetch = async (): Promise<Response> => {
+    try {
+      let response: Response;
 
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => {
-    controller.abort(
-      new DOMException(
-        `Request timed out after ${timeoutMs}ms`,
-        "TimeoutError",
-      ),
-    );
-  }, timeoutMs);
+      if (typeof window === "undefined" || externalSignal || timeoutMs === 0) {
+        response = await fetch(url, {
+          credentials: "include",
+          ...rest,
+          headers,
+          signal: externalSignal,
+        });
+      } else {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => {
+          controller.abort(
+            new DOMException(
+              `Request timed out after ${timeoutMs}ms`,
+              "TimeoutError",
+            ),
+          );
+        }, timeoutMs);
 
-  return fetch(url, {
-    credentials: "include",
-    ...rest,
-    headers,
-    signal: controller.signal,
-  }).finally(() => {
-    window.clearTimeout(timeoutId);
-  });
+        try {
+          response = await fetch(url, {
+            credentials: "include",
+            ...rest,
+            headers,
+            signal: controller.signal,
+          });
+        } finally {
+          window.clearTimeout(timeoutId);
+        }
+      }
+
+      if (!response.ok) {
+        const message = await parseResponseError(
+          response.clone(),
+          "Request failed",
+        );
+        const suppressToast = skipErrorToast || response.status === 401;
+        reportToastError(message, suppressToast);
+      }
+
+      return response;
+    } catch (error) {
+      reportToastError(formatFetchError(error), skipErrorToast);
+      throw error;
+    }
+  };
+
+  return runFetch();
 }

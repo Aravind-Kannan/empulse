@@ -218,6 +218,7 @@ export async function signUpWithPassword(payload: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    skipErrorToast: true,
   });
   if (!response.ok) {
     throw new Error(await parseAuthError(response, "Sign up failed"));
@@ -240,6 +241,7 @@ export async function loginWithPassword(payload: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    skipErrorToast: true,
   });
   if (!response.ok) {
     throw new Error(await parseAuthError(response, "Login failed"));
