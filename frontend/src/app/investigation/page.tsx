@@ -2,7 +2,7 @@ import { InvestigationDashboard } from "@/components/investigation/Investigation
 
 export default function InvestigationPage() {
   return (
-    <div className="p-8">
+    <div className="min-h-0 p-8">
       <InvestigationDashboard />
     </div>
   );

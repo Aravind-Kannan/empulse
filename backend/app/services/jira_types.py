@@ -24,6 +24,12 @@ class JiraIssueActivity:
     story_points: float = 0.0
     is_subtask: bool = False
     issue_url: str | None = None
+    description_text: str = ""
+    resolution: str = ""
+    reporter_provider_user_id: str | None = None
+    reporter_email: str | None = None
+    linked_issue_keys: list[str] = field(default_factory=list)
+    recent_comments: list[str] = field(default_factory=list)
 
     @property
     def is_done(self) -> bool:

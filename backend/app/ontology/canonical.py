@@ -61,7 +61,13 @@ class CanonicalWorkItem:
     project_key: str
     summary: str = ""
     assignee: CanonicalPersonRef | None = None
+    reporter: CanonicalPersonRef | None = None
     component: CanonicalComponentRef | None = None
+    description: str = ""
+    resolution: str = ""
+    labels: tuple[str, ...] = ()
+    linked_work_item_ids: tuple[str, ...] = ()
+    comment_excerpts: tuple[str, ...] = ()
     properties: dict[str, object] = field(default_factory=dict)
 
 

@@ -11,8 +11,15 @@ from sqlalchemy.orm import Session
 from app.models.operational import Employee, EmployeeIdentity
 from app.schemas.identity import ProviderMember
 from app.services.identity_mapping import MOCK_PROVIDER_MEMBERS, PROVIDERS
-from app.services.github_identity import get_cached_github_provider_members
-from app.services.provider_members import fetch_live_provider_members, find_provider_member
+from app.services.github_identity import (
+    fetch_github_provider_members,
+    get_cached_github_provider_members,
+)
+from app.services.provider_members import (
+    fetch_live_provider_members,
+    find_provider_member,
+    get_cached_provider_members,
+)
 
 IdentityConfidence = Literal["confirmed", "high", "medium", "low", "none"]
 ATTRIBUTABLE_CONFIDENCE: frozenset[str] = frozenset({"confirmed", "high", "medium"})
@@ -48,8 +55,11 @@ def _find_provider_member(
     db: Session | None = None,
     tenant_id: uuid.UUID | None = None,
 ) -> ProviderMember | None:
-    if tenant_id is not None and provider == "github":
-        cached = get_cached_github_provider_members(tenant_id)
+    if tenant_id is not None:
+        if provider == "github":
+            cached = get_cached_github_provider_members(tenant_id)
+        else:
+            cached = get_cached_provider_members(tenant_id, provider)
         if cached is not None:
             return find_provider_member(
                 provider,

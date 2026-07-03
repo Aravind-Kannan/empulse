@@ -17,6 +17,7 @@ from requests.exceptions import ReadTimeout, RequestException
 from app.schemas.identity import ProviderMember
 from app.schemas.integrations import JiraConfigRequest
 from app.services.jira_mapper import issue_browse_url
+from app.services.jira_text import adf_to_plain_text, truncate_jira_text
 from app.services.jira_types import JiraIssueActivity
 from app.services.jira_user_email import enrich_jira_users_with_emails
 
@@ -28,6 +29,7 @@ FIXTURE_PATH = (
 
 JIRA_FIELDS = [
     "summary",
+    "description",
     "updated",
     "issuetype",
     "priority",
@@ -38,8 +40,12 @@ JIRA_FIELDS = [
     "labels",
     "project",
     "parent",
+    "resolution",
+    "issuelinks",
     "customfield_10016",
 ]
+
+JIRA_COMMENT_FETCH_LIMIT = 5
 
 # (connect_timeout_seconds, read_timeout_seconds)
 JIRA_REQUEST_TIMEOUT = (10, 90)
@@ -129,6 +135,27 @@ def issues_from_mock_feed(site_url: str = "https://acme.atlassian.net") -> list[
     return issues
 
 
+def _parse_person_ref(person: dict | None) -> tuple[str | None, str | None]:
+    if not person:
+        return None, None
+    user_id = person.get("accountId") or person.get("name")
+    email = person.get("emailAddress")
+    return (str(user_id) if user_id else None, email)
+
+
+def _parse_linked_issue_keys(fields: dict) -> list[str]:
+    linked: list[str] = []
+    for link in fields.get("issuelinks") or []:
+        if not isinstance(link, dict):
+            continue
+        for side in ("inwardIssue", "outwardIssue"):
+            issue = link.get(side) or {}
+            key = issue.get("key")
+            if key and key not in linked:
+                linked.append(str(key))
+    return linked
+
+
 def _issue_from_dict(item: dict, *, site_url: str) -> JiraIssueActivity:
     key = item["issue_key"]
     updated_raw = item.get("updated_at")
@@ -155,6 +182,16 @@ def _issue_from_dict(item: dict, *, site_url: str) -> JiraIssueActivity:
         story_points=float(item.get("story_points", 0.0) or 0.0),
         is_subtask=bool(item.get("is_subtask", False)),
         issue_url=item.get("issue_url") or issue_browse_url(site_url, key),
+        description_text=truncate_jira_text(str(item.get("description_text") or "")),
+        resolution=str(item.get("resolution") or ""),
+        reporter_provider_user_id=item.get("reporter_provider_user_id"),
+        reporter_email=item.get("reporter_email"),
+        linked_issue_keys=list(item.get("linked_issue_keys") or []),
+        recent_comments=[
+            truncate_jira_text(str(comment), max_len=400)
+            for comment in (item.get("recent_comments") or [])
+            if str(comment).strip()
+        ],
     )
 
 
@@ -167,16 +204,17 @@ def _issue_from_api_payload(issue: dict, *, site_url: str) -> JiraIssueActivity:
         (fields.get("status") or {}).get("statusCategory") or {}
     ).get("key") or "indeterminate"
     project_key = (fields.get("project") or {}).get("key") or ""
-    assignee = fields.get("assignee")
-    assignee_id = None
-    assignee_email = None
-    if assignee:
-        assignee_id = assignee.get("accountId") or assignee.get("name")
-        assignee_email = assignee.get("emailAddress")
+    assignee_id, assignee_email = _parse_person_ref(fields.get("assignee"))
+    reporter_id, reporter_email = _parse_person_ref(fields.get("reporter"))
     components = [row.get("name", "") for row in (fields.get("components") or []) if row]
     labels = list(fields.get("labels") or [])
     parent = fields.get("parent")
     story_points = fields.get("customfield_10016") or 0.0
+    resolution = ((fields.get("resolution") or {}).get("name") or "").strip()
+    description_text = truncate_jira_text(
+        adf_to_plain_text(fields.get("description")),
+    )
+    linked_issue_keys = _parse_linked_issue_keys(fields)
     key = issue.get("key") or ""
     updated_raw = fields.get("updated")
     updated_at = None
@@ -201,6 +239,11 @@ def _issue_from_api_payload(issue: dict, *, site_url: str) -> JiraIssueActivity:
         story_points=float(story_points or 0.0),
         is_subtask=bool(parent),
         issue_url=issue_browse_url(site_url, key),
+        description_text=description_text,
+        resolution=resolution,
+        reporter_provider_user_id=reporter_id,
+        reporter_email=reporter_email,
+        linked_issue_keys=linked_issue_keys,
     )
 
 
@@ -259,7 +302,40 @@ class JiraClient:
             next_page_token = payload.get("nextPageToken")
             if not next_page_token:
                 break
+        self._enrich_issue_comments(issues)
         return issues
+
+    def _enrich_issue_comments(self, issues: list[JiraIssueActivity]) -> None:
+        if self.use_fixture or not self.config.api_token.strip():
+            return
+        for issue in issues:
+            if not issue.issue_key:
+                continue
+            try:
+                response = self._request(
+                    "GET",
+                    f"/rest/api/3/issue/{issue.issue_key}/comment",
+                    params={
+                        "maxResults": JIRA_COMMENT_FETCH_LIMIT,
+                        "orderBy": "-created",
+                    },
+                )
+                payload = response.json()
+            except (JiraClientError, RequestException) as exc:
+                logger.debug(
+                    "Jira comment fetch skipped for %s: %s",
+                    issue.issue_key,
+                    exc,
+                )
+                continue
+
+            comments: list[str] = []
+            for row in payload.get("comments") or []:
+                body = adf_to_plain_text(row.get("body"))
+                cleaned = truncate_jira_text(body, max_len=400)
+                if cleaned:
+                    comments.append(cleaned)
+            issue.recent_comments = comments[:JIRA_COMMENT_FETCH_LIMIT]
 
     def fetch_incident_issues(self) -> list[JiraIssueActivity]:
         """Bugs/incidents updated recently, including Done (for investigation cards)."""
@@ -317,6 +393,7 @@ class JiraClient:
             next_page_token = payload.get("nextPageToken")
             if not next_page_token:
                 break
+        self._enrich_issue_comments(issues)
         return issues
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:

@@ -19,7 +19,11 @@ from app.services.integration_config_store import (
     save_telemetry_cache,
 )
 from app.services.jira_types import JiraEmployeeSignals, JiraIssueActivity
-from app.services.slack_types import SlackEmployeeSignals
+from app.services.slack_types import (
+    SlackEmployeeSignals,
+    SlackMessageRecord,
+    SlackThreadRecord,
+)
 
 _jira_backlog_by_employee: dict[str, int] = {}
 _jira_employee_signals: dict[str, JiraEmployeeSignals] = {}
@@ -48,6 +52,124 @@ _sync_timestamps: dict[str, str] = {}
 
 HIGH_PRIORITIES = {"High", "Critical"}
 SPOF_OWNERSHIP_THRESHOLD = 85.0
+
+
+def _parse_cache_datetime(value: object) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _jira_issue_to_cache_row(issue: JiraIssueActivity) -> dict[str, object]:
+    return {
+        "issue_key": issue.issue_key,
+        "issue_type": issue.issue_type,
+        "priority": issue.priority,
+        "status": issue.status,
+        "status_category": issue.status_category,
+        "project_key": issue.project_key,
+        "summary": issue.summary,
+        "updated_at": issue.updated_at.isoformat() if issue.updated_at else None,
+        "assignee_provider_user_id": issue.assignee_provider_user_id,
+        "assignee_email": issue.assignee_email,
+        "component_id": issue.component_id,
+        "jira_component_names": list(issue.jira_component_names),
+        "labels": list(issue.labels),
+        "story_points": issue.story_points,
+        "is_subtask": issue.is_subtask,
+        "issue_url": issue.issue_url,
+    }
+
+
+def _jira_issue_from_cache_row(row: dict[str, object]) -> JiraIssueActivity:
+    return JiraIssueActivity(
+        issue_key=str(row.get("issue_key", "")),
+        issue_type=str(row.get("issue_type", "")),
+        priority=str(row.get("priority", "")),
+        status=str(row.get("status", "")),
+        status_category=str(row.get("status_category", "")),
+        project_key=str(row.get("project_key", "")),
+        summary=str(row.get("summary", "")),
+        updated_at=_parse_cache_datetime(row.get("updated_at")),
+        assignee_provider_user_id=row.get("assignee_provider_user_id"),  # type: ignore[arg-type]
+        assignee_email=row.get("assignee_email"),  # type: ignore[arg-type]
+        component_id=row.get("component_id"),  # type: ignore[arg-type]
+        jira_component_names=[
+            str(name) for name in (row.get("jira_component_names") or [])
+        ],
+        labels=[str(label) for label in (row.get("labels") or [])],
+        story_points=float(row.get("story_points") or 0.0),
+        is_subtask=bool(row.get("is_subtask")),
+        issue_url=row.get("issue_url"),  # type: ignore[arg-type]
+    )
+
+
+def _slack_message_to_cache_row(message: SlackMessageRecord) -> dict[str, object]:
+    return {
+        "ts": message.ts,
+        "user_id": message.user_id,
+        "text": message.text,
+        "is_bot": message.is_bot,
+        "reactions": list(message.reactions),
+    }
+
+
+def _slack_message_from_cache_row(row: dict[str, object]) -> SlackMessageRecord:
+    return SlackMessageRecord(
+        ts=str(row.get("ts", "")),
+        user_id=str(row.get("user_id", "")),
+        text=str(row.get("text", "")),
+        is_bot=bool(row.get("is_bot")),
+        reactions=[str(item) for item in (row.get("reactions") or [])],
+    )
+
+
+def _slack_thread_to_cache_row(thread: SlackThreadRecord) -> dict[str, object]:
+    return {
+        "channel_id": thread.channel_id,
+        "channel_name": thread.channel_name,
+        "thread_ts": thread.thread_ts,
+        "parent_text": thread.parent_text,
+        "messages": [_slack_message_to_cache_row(msg) for msg in thread.messages],
+        "component_id": thread.component_id,
+        "is_incident_channel": thread.is_incident_channel,
+        "is_on_call_channel": thread.is_on_call_channel,
+        "mentioned_user_ids": list(thread.mentioned_user_ids),
+        "resolved_by_employee_id": thread.resolved_by_employee_id,
+        "resolved_at": thread.resolved_at.isoformat() if thread.resolved_at else None,
+        "thread_url": thread.thread_url,
+    }
+
+
+def _slack_thread_from_cache_row(row: dict[str, object]) -> SlackThreadRecord:
+    messages_raw = row.get("messages")
+    messages = [
+        _slack_message_from_cache_row(item)
+        for item in messages_raw
+        if isinstance(item, dict)
+    ] if isinstance(messages_raw, list) else []
+    return SlackThreadRecord(
+        channel_id=str(row.get("channel_id", "")),
+        channel_name=str(row.get("channel_name", "")),
+        thread_ts=str(row.get("thread_ts", "")),
+        parent_text=str(row.get("parent_text", "")),
+        messages=messages,
+        component_id=row.get("component_id"),  # type: ignore[arg-type]
+        is_incident_channel=bool(row.get("is_incident_channel")),
+        is_on_call_channel=bool(row.get("is_on_call_channel")),
+        mentioned_user_ids=[
+            str(item) for item in (row.get("mentioned_user_ids") or [])
+        ],
+        resolved_by_employee_id=row.get("resolved_by_employee_id"),  # type: ignore[arg-type]
+        resolved_at=_parse_cache_datetime(row.get("resolved_at")),
+        thread_url=str(row.get("thread_url", "")),
+    )
 
 
 @dataclass
@@ -265,6 +387,7 @@ def apply_jira_telemetry(
                 }
                 for employee_id, row in signals.items()
             },
+            "issues": [_jira_issue_to_cache_row(issue) for issue in issues],
         },
     )
     return dict(backlog)
@@ -888,38 +1011,51 @@ def hydrate_notion_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
 
 
 def _restore_jira_cache(cache: dict[str, object]) -> bool:
-    global _jira_synced, _jira_backlog_by_employee, _jira_employee_signals
+    global _jira_synced, _jira_backlog_by_employee, _jira_employee_signals, _jira_issues_cache
+
+    restored = False
+
+    issues_raw = cache.get("issues")
+    if isinstance(issues_raw, list) and issues_raw:
+        _jira_issues_cache.clear()
+        _jira_issues_cache.extend(
+            _jira_issue_from_cache_row(item)
+            for item in issues_raw
+            if isinstance(item, dict)
+        )
+        restored = True
 
     raw_signals = cache.get("employee_signals")
-    if not isinstance(raw_signals, dict) or not raw_signals:
-        return False
-
-    backlog_raw = cache.get("backlog_by_employee")
-    backlog = (
-        {str(key): int(value) for key, value in backlog_raw.items()}
-        if isinstance(backlog_raw, dict)
-        else {}
-    )
-    signals: dict[str, JiraEmployeeSignals] = {}
-    for employee_id, payload in raw_signals.items():
-        if not isinstance(payload, dict):
-            continue
-        signals[str(employee_id)] = JiraEmployeeSignals(
-            employee_id=str(payload.get("employee_id", employee_id)),
-            open_tasks=int(payload.get("open_tasks", 0)),
-            open_p1_p2=int(payload.get("open_p1_p2", 0)),
-            jira_backlog_boost=int(payload.get("jira_backlog_boost", 0)),
-            epic_owner_count=int(payload.get("epic_owner_count", 0)),
-            sprint_points=float(payload.get("sprint_points", 0.0)),
-            sample_issue_urls=list(payload.get("sample_issue_urls") or []),
+    if isinstance(raw_signals, dict) and raw_signals:
+        backlog_raw = cache.get("backlog_by_employee")
+        backlog = (
+            {str(key): int(value) for key, value in backlog_raw.items()}
+            if isinstance(backlog_raw, dict)
+            else {}
         )
+        signals: dict[str, JiraEmployeeSignals] = {}
+        for employee_id, payload in raw_signals.items():
+            if not isinstance(payload, dict):
+                continue
+            signals[str(employee_id)] = JiraEmployeeSignals(
+                employee_id=str(payload.get("employee_id", employee_id)),
+                open_tasks=int(payload.get("open_tasks", 0)),
+                open_p1_p2=int(payload.get("open_p1_p2", 0)),
+                jira_backlog_boost=int(payload.get("jira_backlog_boost", 0)),
+                epic_owner_count=int(payload.get("epic_owner_count", 0)),
+                sprint_points=float(payload.get("sprint_points", 0.0)),
+                sample_issue_urls=list(payload.get("sample_issue_urls") or []),
+            )
 
-    _jira_backlog_by_employee.clear()
-    _jira_backlog_by_employee.update(backlog)
-    _jira_employee_signals.clear()
-    _jira_employee_signals.update(signals)
-    _jira_synced = True
-    return True
+        _jira_backlog_by_employee.clear()
+        _jira_backlog_by_employee.update(backlog)
+        _jira_employee_signals.clear()
+        _jira_employee_signals.update(signals)
+        restored = True
+
+    if restored:
+        _jira_synced = True
+    return restored
 
 
 def hydrate_jira_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
@@ -932,42 +1068,58 @@ def hydrate_jira_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
 
 
 def _restore_slack_cache(cache: dict[str, object]) -> bool:
-    global _slack_synced, _slack_employee_signals, _slack_escalation_warnings
+    global _slack_synced, _slack_employee_signals, _slack_escalation_warnings, _slack_threads_cache
+
+    restored = False
+
+    threads_raw = cache.get("threads")
+    if isinstance(threads_raw, list) and threads_raw:
+        _slack_threads_cache.clear()
+        _slack_threads_cache.extend(
+            _slack_thread_from_cache_row(item)
+            for item in threads_raw
+            if isinstance(item, dict)
+        )
+        restored = True
 
     raw_signals = cache.get("employee_signals")
-    if not isinstance(raw_signals, dict) or not raw_signals:
-        return False
+    if isinstance(raw_signals, dict) and raw_signals:
+        signals: dict[str, SlackEmployeeSignals] = {}
+        for employee_id, payload in raw_signals.items():
+            if not isinstance(payload, dict):
+                continue
+            signals[str(employee_id)] = SlackEmployeeSignals(
+                employee_id=str(payload.get("employee_id", employee_id)),
+                undocumented_solved_incidents=int(
+                    payload.get("undocumented_solved_incidents", 0)
+                ),
+                on_call_incidents_30d=int(
+                    payload.get("on_call_incidents_30d", 0)
+                ),
+                incident_escalation_threads=int(
+                    payload.get("incident_escalation_threads", 0)
+                ),
+                on_call_off_hours_messages=int(
+                    payload.get("on_call_off_hours_messages", 0)
+                ),
+                sole_responder_thread_count=int(
+                    payload.get("sole_responder_thread_count", 0)
+                ),
+            )
 
-    signals: dict[str, SlackEmployeeSignals] = {}
-    for employee_id, payload in raw_signals.items():
-        if not isinstance(payload, dict):
-            continue
-        signals[str(employee_id)] = SlackEmployeeSignals(
-            employee_id=str(payload.get("employee_id", employee_id)),
-            undocumented_solved_incidents=int(
-                payload.get("undocumented_solved_incidents", 0)
-            ),
-            on_call_incidents_30d=int(payload.get("on_call_incidents_30d", 0)),
-            incident_escalation_threads=int(
-                payload.get("incident_escalation_threads", 0)
-            ),
-            on_call_off_hours_messages=int(
-                payload.get("on_call_off_hours_messages", 0)
-            ),
-            sole_responder_thread_count=int(
-                payload.get("sole_responder_thread_count", 0)
-            ),
-        )
+        _slack_employee_signals.clear()
+        _slack_employee_signals.update(signals)
+        restored = True
 
     warnings_raw = cache.get("escalation_warnings")
-    warnings = warnings_raw if isinstance(warnings_raw, list) else []
+    if isinstance(warnings_raw, list):
+        _slack_escalation_warnings.clear()
+        _slack_escalation_warnings.extend(warnings_raw)
+        restored = True
 
-    _slack_employee_signals.clear()
-    _slack_employee_signals.update(signals)
-    _slack_escalation_warnings.clear()
-    _slack_escalation_warnings.extend(warnings)
-    _slack_synced = True
-    return True
+    if restored:
+        _slack_synced = True
+    return restored
 
 
 def hydrate_slack_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
@@ -1084,6 +1236,9 @@ def apply_slack_telemetry_with_cache(
                 for employee_id, row in snapshot.employee_signals.items()
             },
             "escalation_warnings": list(snapshot.escalation_warnings),
+            "threads": [
+                _slack_thread_to_cache_row(thread) for thread in snapshot.threads
+            ],
         },
     )
     return result

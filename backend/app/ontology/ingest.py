@@ -33,6 +33,43 @@ from app.services.notion_types import NotionDocRecord
 from app.services.slack_types import SlackThreadRecord
 
 
+def _jira_work_item_narrative_line(canonical) -> str:
+    parts = [
+        (
+            f"WorkItem {canonical.work_item_id} ({canonical.issue_type}, "
+            f"{canonical.priority}, {canonical.status})"
+        ),
+        f"Summary: {canonical.summary}",
+    ]
+    if canonical.resolution:
+        parts.append(f"Resolution: {canonical.resolution}")
+    if canonical.labels:
+        parts.append(f"Labels: {', '.join(canonical.labels)}")
+    if canonical.description:
+        parts.append(f"Description: {canonical.description[:600]}")
+    if canonical.comment_excerpts:
+        joined = " | ".join(canonical.comment_excerpts[:3])
+        parts.append(f"Recent comments: {joined[:700]}")
+    assignee_name = (
+        canonical.assignee.display_name if canonical.assignee else "Unassigned"
+    )
+    reporter_name = (
+        canonical.reporter.display_name if canonical.reporter else "Unknown"
+    )
+    component_name = (
+        canonical.component.name if canonical.component else "unmapped"
+    )
+    parts.append(
+        f"Assigned to {assignee_name}, reported by {reporter_name}, "
+        f"blocks {component_name}."
+    )
+    if canonical.linked_work_item_ids:
+        parts.append(
+            "Linked issues: " + ", ".join(canonical.linked_work_item_ids[:8])
+        )
+    return " ".join(parts)
+
+
 def build_github_code_artifacts(
     snapshots: list,
     *,
@@ -167,17 +204,7 @@ def build_jira_work_items(
         )
         data_points.append(node)
         edge_count += edges
-        assignee_name = (
-            canonical.assignee.display_name if canonical.assignee else "Unassigned"
-        )
-        component_name = (
-            canonical.component.name if canonical.component else "unmapped"
-        )
-        summary_lines.append(
-            f"WorkItem {canonical.work_item_id} ({canonical.issue_type}, "
-            f"{canonical.priority}, {canonical.status}): {canonical.summary}. "
-            f"Assigned to {assignee_name}, blocks {component_name}."
-        )
+        summary_lines.append(_jira_work_item_narrative_line(canonical))
 
     return summary_lines, data_points, edge_count
 

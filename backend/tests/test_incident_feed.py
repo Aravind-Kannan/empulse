@@ -63,9 +63,9 @@ def test_fetch_incidents_uses_persisted_slack_snapshot(db, tenant):
         [
             SlackThreadRecord(
                 channel_id="CINC",
-                channel_name="incidents",
+                channel_name="incident",
                 thread_ts="1783017502.455339",
-                parent_text="prod outage in checkout",
+                parent_text="SEV1 prod outage in checkout",
                 is_incident_channel=True,
                 resolved_by_employee_id=employee.id,
             )
@@ -82,4 +82,4 @@ def test_fetch_incidents_uses_persisted_slack_snapshot(db, tenant):
     assert sources["slack"] is True
     assert len(incidents) == 1
     assert incidents[0].source == "slack"
-    assert incidents[0].channel_name == "incidents"
+    assert incidents[0].channel_name == "incident"

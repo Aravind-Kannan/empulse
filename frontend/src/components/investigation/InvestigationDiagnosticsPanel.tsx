@@ -1,7 +1,16 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Activity, AlertCircle, Loader2, RefreshCw, ShieldAlert, Zap, ChevronDown, Check } from "lucide-react";
+import {
+  Activity,
+  AlertCircle,
+  ChevronDown,
+  Check,
+  Loader2,
+  RefreshCw,
+  ShieldAlert,
+  Zap,
+} from "lucide-react";
 
 function ConfidenceSection({ score }: { score: number }) {
   const ringRadius = 28;
@@ -86,6 +95,7 @@ export function InvestigationDiagnosticsPanel({
   status,
   statusUpdating,
   analyzing,
+  graphAnalyzing = false,
   analysisMessage,
   onStatusChange,
   onRefresh,
@@ -98,6 +108,7 @@ export function InvestigationDiagnosticsPanel({
   status: string;
   statusUpdating: boolean;
   analyzing: boolean;
+  graphAnalyzing?: boolean;
   analysisMessage: string | null;
   onStatusChange: (status: string) => void;
   onRefresh?: () => void;
@@ -224,11 +235,11 @@ export function InvestigationDiagnosticsPanel({
 
         {/* Confidence Gauge Section */}
         <div className="bg-zinc-900/10 rounded-xl border border-zinc-900/40 overflow-hidden shrink-0">
-          {analyzing && confidence === null ? (
+          {graphAnalyzing && confidence === null ? (
             <div className="flex h-24 flex-col items-center justify-center gap-2 text-center py-4">
               <Loader2 className="h-5 w-5 animate-spin text-sky-400" />
               <p className="text-xs text-zinc-400 max-w-[200px] animate-pulse">
-                {analysisMessage ?? "Analyzing incident history for diagnostics…"}
+                {analysisMessage ?? "Querying knowledge graph for confidence…"}
               </p>
             </div>
           ) : analyzing && refreshing ? (
@@ -258,7 +269,7 @@ export function InvestigationDiagnosticsPanel({
             <ShieldAlert className="h-3.5 w-3.5 text-amber-500/80" />
             <span>Probable root cause</span>
           </div>
-          {analyzing && !rootCause ? (
+          {graphAnalyzing && !rootCause ? (
             <div className="rounded-xl border border-zinc-900 bg-zinc-950/40 p-4 space-y-2.5">
               <div className="h-3 animate-pulse rounded bg-zinc-800/60" />
               <div className="h-3 w-4/5 animate-pulse rounded bg-zinc-800/60" />
@@ -285,7 +296,7 @@ export function InvestigationDiagnosticsPanel({
             <Zap className="h-3.5 w-3.5 text-emerald-500/80" />
             <span>Suggested workarounds &amp; solutions</span>
           </div>
-          {analyzing && !workaround ? (
+          {graphAnalyzing && !workaround ? (
             <div className="rounded-xl border border-zinc-900 bg-zinc-950/40 p-4">
               <div className="h-3.5 animate-pulse rounded bg-zinc-800/60" />
             </div>

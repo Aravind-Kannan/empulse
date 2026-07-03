@@ -12,13 +12,22 @@ import {
   Users,
 } from "lucide-react";
 
-import type { InvestigationReference, SmeRecommendation } from "@/lib/types";
+import type {
+  InvestigationAssignmentRecord,
+  InvestigationBaseMetadata,
+  InvestigationReference,
+  SmeRecommendation,
+} from "@/lib/types";
 
 const STATUS_DOT: Record<SmeRecommendation["status"], string> = {
   online: "bg-emerald-500 ring-emerald-500/20",
   away: "bg-amber-500 ring-amber-500/20",
   offline: "bg-zinc-500 ring-zinc-500/20",
 };
+
+function isOpenableReferenceUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
 
 type ReferenceSection = {
   key: string;
@@ -63,14 +72,18 @@ export function InvestigationContextPanel({
   slackThreads,
   jiraTickets,
   notionPages,
+  baseMetadata,
   analyzing,
+  graphAnalyzing = false,
   analysisMessage,
 }: {
   smes: SmeRecommendation[];
   slackThreads: InvestigationReference[];
   jiraTickets: InvestigationReference[];
   notionPages: InvestigationReference[];
+  baseMetadata?: InvestigationBaseMetadata | null;
   analyzing: boolean;
+  graphAnalyzing?: boolean;
   analysisMessage: string | null;
 }) {
   const [query, setQuery] = useState("");
@@ -134,6 +147,10 @@ export function InvestigationContextPanel({
   }, [sections, query]);
 
   const hasReferences = sections.some((section) => section.items.length > 0);
+  const visibleSmes = smes.length > 0 ? smes : (baseMetadata?.scope_owners ?? []);
+  const assignments = baseMetadata?.assignments ?? [];
+  const showSmeSkeleton = graphAnalyzing && visibleSmes.length === 0;
+  const showReferenceSkeleton = graphAnalyzing && !hasReferences;
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-950/20 backdrop-blur-sm shadow-xl">
@@ -154,13 +171,52 @@ export function InvestigationContextPanel({
 
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-5 scrollbar-thin scrollbar-thumb-zinc-800">
+        {baseMetadata?.incident && (
+          <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/20 px-3 py-2.5">
+            <p className="text-xs font-medium text-zinc-200 truncate">
+              {baseMetadata.incident.title}
+            </p>
+            <p className="mt-0.5 text-[10px] text-zinc-500">
+              Scope: {baseMetadata.incident.system_scope}
+              {baseMetadata.incident.jira_id
+                ? ` · ${baseMetadata.incident.jira_id}`
+                : ""}
+              {" · "}
+              {baseMetadata.incident.status}
+            </p>
+          </div>
+        )}
+
+        {assignments.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              Component assignments
+            </p>
+            <div className="space-y-1.5">
+              {assignments.slice(0, 6).map((row: InvestigationAssignmentRecord) => (
+                <div
+                  key={`${row.employee_id}-${row.component_id}`}
+                  className="flex items-center justify-between rounded-lg border border-zinc-800/60 bg-zinc-950/40 px-2.5 py-2 text-[11px]"
+                >
+                  <span className="truncate text-zinc-300">
+                    {row.employee_name}
+                  </span>
+                  <span className="shrink-0 text-zinc-500">
+                    {row.component_name} · {Math.round(row.codebase_share_pct)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Recommended SMEs */}
         <div className="space-y-2">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
             Recommended SMEs
           </p>
           <div className="space-y-2">
-            {analyzing ? (
+            {showSmeSkeleton ? (
               <>
                 <p className="text-xs text-sky-400 animate-pulse">
                   {analysisMessage ?? "Finding experts…"}
@@ -181,14 +237,14 @@ export function InvestigationContextPanel({
                   </div>
                 ))}
               </>
-            ) : smes.length === 0 ? (
+            ) : visibleSmes.length === 0 ? (
               <div className="rounded-xl border border-zinc-900 bg-zinc-950/40 p-3.5 text-center">
                 <p className="text-xs text-zinc-500">
                   No subject matter experts identified in system memory for this component. Ensure team assignments and identity mappings are configured.
                 </p>
               </div>
             ) : (
-              smes.map((sme) => {
+              visibleSmes.map((sme) => {
                 const avatarColor = getAvatarColor(sme.name);
                 return (
                   <div
@@ -244,7 +300,7 @@ export function InvestigationContextPanel({
           </div>
 
           <div className="space-y-4 pt-1">
-            {analyzing ? (
+            {showReferenceSkeleton ? (
               <div className="space-y-3">
                 <p className="text-xs text-sky-400 animate-pulse">
                   {analysisMessage ?? "Pulling related references…"}
@@ -296,6 +352,7 @@ export function InvestigationContextPanel({
                         itemsToRender.map((ref) => {
                           const Icon = section.icon;
                           const isCopied = copiedId === ref.id;
+                          const canOpen = isOpenableReferenceUrl(ref.url);
                           return (
                             <div
                               key={ref.id}
@@ -310,27 +367,31 @@ export function InvestigationContextPanel({
                                   </p>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => handleCopy(e, ref.id, ref.url)}
-                                    className="p-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition"
-                                    title="Copy Link"
-                                  >
-                                    {isCopied ? (
-                                      <Check className="h-2.5 w-2.5 text-emerald-400" />
-                                    ) : (
-                                      <Copy className="h-2.5 w-2.5" />
-                                    )}
-                                  </button>
-                                  <a
-                                    href={ref.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="p-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition"
-                                    title="Open Link"
-                                  >
-                                    <ExternalLink className="h-2.5 w-2.5" />
-                                  </a>
+                                  {canOpen && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleCopy(e, ref.id, ref.url)}
+                                        className="p-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition"
+                                        title="Copy Link"
+                                      >
+                                        {isCopied ? (
+                                          <Check className="h-2.5 w-2.5 text-emerald-400" />
+                                        ) : (
+                                          <Copy className="h-2.5 w-2.5" />
+                                        )}
+                                      </button>
+                                      <a
+                                        href={ref.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="p-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition"
+                                        title="Open Link"
+                                      >
+                                        <ExternalLink className="h-2.5 w-2.5" />
+                                      </a>
+                                    </>
+                                  )}
                                 </div>
                               </div>
 
@@ -342,17 +403,19 @@ export function InvestigationContextPanel({
                               )}
 
                               {/* Link Badge */}
-                              <a
-                                href={ref.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 font-mono text-[9px] text-zinc-500 hover:text-zinc-300 transition-colors bg-zinc-950/40 border border-zinc-900/60 px-1.5 py-0.5 rounded"
-                              >
-                                <ExternalLink className="h-2 w-2 text-zinc-600" />
-                                <span className="truncate max-w-[150px]">
-                                  {ref.url.replace(/^https?:\/\/(www\.)?/, "")}
-                                </span>
-                              </a>
+                              {canOpen ? (
+                                <a
+                                  href={ref.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 font-mono text-[9px] text-zinc-500 hover:text-zinc-300 transition-colors bg-zinc-950/40 border border-zinc-900/60 px-1.5 py-0.5 rounded"
+                                >
+                                  <ExternalLink className="h-2 w-2 text-zinc-600" />
+                                  <span className="truncate max-w-[150px]">
+                                    {ref.url.replace(/^https?:\/\/(www\.)?/, "")}
+                                  </span>
+                                </a>
+                              ) : null}
                             </div>
                           );
                         })

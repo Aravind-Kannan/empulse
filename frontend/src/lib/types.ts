@@ -623,6 +623,26 @@ export interface InvestigationReference {
   snippet: string;
 }
 
+export interface InvestigationGraphHop {
+  from_node: string;
+  edge: string;
+  to: string;
+}
+
+export interface InvestigationAssignmentRecord {
+  employee_id: string;
+  employee_name: string;
+  component_id: string;
+  component_name: string;
+  codebase_share_pct: number;
+}
+
+export interface InvestigationBaseMetadata {
+  incident: IncidentSummary;
+  assignments: InvestigationAssignmentRecord[];
+  scope_owners: SmeRecommendation[];
+}
+
 export interface InvestigationDiagnostics {
   probable_root_cause: string;
   confidence_score: number;
@@ -633,6 +653,17 @@ export interface InvestigationDiagnostics {
   slack_threads: InvestigationReference[];
   jira_tickets: InvestigationReference[];
   notion_pages: InvestigationReference[];
+  graph_hops?: InvestigationGraphHop[];
+}
+
+export interface CachedInvestigationData {
+  chatHistory: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+  }>;
+  diagnostics: InvestigationDiagnostics | null;
+  baseMetadata: InvestigationBaseMetadata | null;
 }
 
 export type InvestigationAnalysisPhase =

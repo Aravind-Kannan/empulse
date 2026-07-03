@@ -751,7 +751,13 @@ async def process_external_app_sync(
     mark_sync_completed(normalized)
     record_integration_sync(db, tenant_id, normalized)
 
-    if normalized == "jira":
+    if normalized in {"jira", "slack"}:
+        if normalized == "slack":
+            from app.services.slack_client import invalidate_slack_threads_cache
+            from app.services.provider_members import invalidate_provider_members_cache
+
+            invalidate_slack_threads_cache()
+            invalidate_provider_members_cache(tenant_id, "slack")
         from app.services.incident_feed import invalidate_incident_feed_cache
 
         invalidate_incident_feed_cache(tenant_id)
