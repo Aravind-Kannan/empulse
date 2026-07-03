@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 import pytest
 
 from app.models.operational import Component, EmployeeIdentity, FileRiskSnapshot
+from app.schemas.integrations import GitHubConfigRequest
+from app.services.integration_config_store import save_github_config
 from app.services.github_file_risk import (
     build_file_risk_evidence_items,
     classify_quadrant,
@@ -131,6 +133,30 @@ def test_critical_file_persisted_and_surfaces_in_api(db, tenant):
     assert payload["quadrant_counts"].get("critical") == 1
     assert payload["files"][0]["quadrant"] == "critical"
     assert len(payload["cross_training_priority"]) == 1
+
+
+def test_github_url_uses_configured_branch_not_hardcoded_main(db, tenant):
+    _seed(db, tenant.id)
+    save_github_config(
+        db,
+        tenant.id,
+        GitHubConfigRequest(
+            repository_url="https://github.com/acme/payments-service",
+            branch_target="master",
+            personal_access_token="ghp_test_token",
+        ),
+    )
+    activities = [
+        _activity(pr, "services/payments/handler.ts")
+        for pr in (701, 702, 703)
+    ]
+    persist_file_risk_snapshots(db, tenant.id, activities, repo_path="acme/payments-service")
+    db.commit()
+
+    payload = get_kra_file_risk(db, tenant.id, component_id="comp-payments")
+    assert payload["files"][0]["github_url"] == (
+        "https://github.com/acme/payments-service/blob/master/services/payments/handler.ts"
+    )
 
 
 def test_file_risk_evidence_for_primary_owner(db, tenant):

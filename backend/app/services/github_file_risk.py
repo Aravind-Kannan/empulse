@@ -214,7 +214,19 @@ def persist_file_risk_snapshots(
     return snapshots
 
 
-def _github_blob_url(repo_path: str, file_path: str, branch: str = "main") -> str | None:
+def _resolve_github_branch(db: Session, tenant_id: uuid.UUID) -> str:
+    from app.services.integration_config_store import get_github_config
+
+    config = get_github_config(db, tenant_id)
+    if not config:
+        return "main"
+    branches = config.resolved_branch_targets()
+    if branches:
+        return branches[0]
+    return (config.branch_target or "main").strip() or "main"
+
+
+def _github_blob_url(repo_path: str, file_path: str, branch: str) -> str | None:
     if not repo_path or "/" not in repo_path:
         return None
     return f"https://github.com/{repo_path}/blob/{branch}/{file_path.lstrip('/')}"
@@ -268,6 +280,7 @@ def get_kra_file_risk(
         for row in db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
     }
 
+    branch = _resolve_github_branch(db, tenant_id)
     files = [
         _snapshot_to_dict(
             row,
@@ -277,6 +290,7 @@ def get_kra_file_risk(
                 if row.primary_owner_employee_id
                 else None
             ),
+            branch=branch,
         )
         for row in rows
     ]
@@ -328,11 +342,13 @@ def get_employee_hotspots(
     )
     owner_name = employee.name if employee else None
 
+    branch = _resolve_github_branch(db, tenant_id)
     files = [
         _snapshot_to_dict(
             row,
             component_name=components.get(row.component_id, row.component_id),
             owner_name=owner_name,
+            branch=branch,
         )
         for row in rows
     ]
