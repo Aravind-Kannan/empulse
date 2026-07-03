@@ -10,6 +10,7 @@ from app.models.operational import Component
 from app.schemas.integrations import GitHubConfigRequest, JiraConfigRequest
 from app.services.component_provisioning import (
     discover_repo_partitions,
+    parse_mapped_source_paths,
     provision_github_components_for_repo,
     provision_jira_components,
 )
@@ -41,6 +42,48 @@ def test_discover_repo_partitions_splits_monorepo_top_level_dirs():
     assert slugs == {"backend", "frontend"}
     prefixes = {partition.path_prefix for partition in partitions}
     assert prefixes == {"backend/", "frontend/"}
+
+
+def test_parse_mapped_source_paths_from_feature_readme():
+    markdown = """# Era
+
+## Mapped source paths
+
+- `backend/app/services/era/`
+- `backend/app/services/era_analytics.py`
+- `frontend/src/components/era/`
+
+## Other section
+- ignored
+"""
+    paths = parse_mapped_source_paths(markdown)
+    assert paths == [
+        "backend/app/services/era/",
+        "backend/app/services/era_analytics.py",
+        "frontend/src/components/era/",
+    ]
+
+
+def test_discover_repo_partitions_from_feature_docs():
+    paths = [
+        "docs/features/auth/login.md",
+        "docs/features/auth/session.md",
+        "docs/features/payments/checkout.md",
+        "docs/features/payments/refunds.md",
+        "README.md",
+    ]
+    partitions = discover_repo_partitions(paths)
+    assert len(partitions) == 2
+    assert {partition.slug for partition in partitions} == {"auth", "payments"}
+    assert {partition.display_name for partition in partitions} == {"Auth", "Payments"}
+
+
+def test_humanize_repo_name_prefers_architectural_suffix():
+    from app.services.component_provisioning import _humanize_repo_name
+
+    assert _humanize_repo_name("Empulse-Backend") == "Backend"
+    assert _humanize_repo_name("empulse") == "Empulse"
+    assert _humanize_repo_name("my-cool-app") == "My Cool App"
 
 
 def test_discover_repo_partitions_single_repo_when_not_monorepo():
@@ -77,7 +120,7 @@ def test_provision_github_components_for_repo_monorepo(db, tenant):
     )
     assert len(components) == 2
     names = {component.name for component in components}
-    assert names == {"acme/empulse / Backend", "acme/empulse / Frontend"}
+    assert names == {"Backend", "Frontend"}
 
     refreshed = get_github_config(db, tenant.id)
     assert refreshed is not None
@@ -107,8 +150,8 @@ def test_provision_jira_components_from_fixture(db, tenant):
         db.query(Component).filter(Component.tenant_id == tenant.id).all()
     )
     assert len(components) >= 4
-    assert any(component.name == "ENG / Authentication" for component in components)
-    assert any(component.name == "ENG / Payments" for component in components)
+    assert any(component.name == "Authentication" for component in components)
+    assert any(component.name == "Payments" for component in components)
 
     refreshed = get_jira_config(db, tenant.id)
     assert refreshed is not None

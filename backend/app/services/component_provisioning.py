@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -58,6 +59,38 @@ MONOREPO_CONTAINER_DIRS = frozenset(
     {"services", "packages", "apps", "libs", "modules", "components"}
 )
 MIN_FILES_PER_PARTITION = 5
+FEATURE_DOC_PREFIXES = (
+    "docs/features/",
+    "docs/modules/",
+    "features/",
+    "modules/",
+)
+METADATA_ROOT_FILES = ("README.md", "package.json", "pyproject.toml")
+ARCHITECTURAL_REPO_SUFFIXES = frozenset(
+    {
+        "backend",
+        "frontend",
+        "api",
+        "web",
+        "mobile",
+        "core",
+        "server",
+        "client",
+        "worker",
+        "gateway",
+        "service",
+    }
+)
+
+
+@dataclass
+class RepoTreeContext:
+    owner: str
+    repo: str
+    paths: list[str]
+    ref_sha: str
+    token: str
+    use_fixture: bool
 
 
 @dataclass
@@ -132,8 +165,204 @@ def _upsert_component(
     return "updated"
 
 
-def discover_repo_partitions(paths: list[str]) -> list[RepoPartition]:
-    """Infer monorepo sub-components from repository file paths."""
+def _normalize_map_prefix(raw: str) -> str:
+    cleaned = raw.strip().strip("`").strip()
+    if not cleaned:
+        return ""
+    cleaned = cleaned.lstrip("/")
+    if cleaned.endswith("/"):
+        return cleaned
+    if "." in cleaned.split("/")[-1]:
+        return cleaned
+    return f"{cleaned}/"
+
+
+def parse_mapped_source_paths(markdown: str) -> list[str]:
+    """Parse bullet paths under a '## Mapped source paths' heading in feature READMEs."""
+    lines = markdown.splitlines()
+    in_section = False
+    paths: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.lower().startswith("## ") and "mapped source paths" in stripped.lower():
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if not in_section:
+            continue
+        if not stripped.startswith(("-", "*")):
+            continue
+        body = stripped.lstrip("-*").strip()
+        if body.startswith("`") and "`" in body[1:]:
+            body = body[1 : body.index("`", 1)]
+        normalized = _normalize_map_prefix(body)
+        if normalized:
+            paths.append(normalized)
+    return paths
+
+
+def _workspace_repo_root():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[3]
+
+
+def _read_feature_readme_content(
+    context: RepoTreeContext,
+    readme_path: str,
+) -> str:
+    if not context.use_fixture and context.token:
+        from app.services.github_code import _fetch_file_content
+
+        session = requests.Session()
+        content, _ = _fetch_file_content(
+            session,
+            context.token,
+            context.owner,
+            context.repo,
+            readme_path,
+            context.ref_sha,
+        )
+        return content
+
+    local_path = _workspace_repo_root() / readme_path
+    if local_path.is_file():
+        return local_path.read_text(encoding="utf-8")
+    return ""
+
+
+def _apply_feature_readme_path_mappings(
+    path_map: dict[str, str],
+    tree_context: RepoTreeContext,
+    partitions: list[RepoPartition],
+    component_id_by_slug: dict[str, str],
+) -> None:
+    """Register code paths listed in feature READMEs for GitHub attribution."""
+    path_set = set(tree_context.paths)
+    for partition in partitions:
+        component_id = component_id_by_slug.get(partition.slug)
+        if not component_id:
+            continue
+        readme_path = next(
+            (
+                candidate
+                for candidate in (
+                    f"{partition.path_prefix}README.md",
+                    f"{partition.path_prefix}readme.md",
+                )
+                if candidate in path_set
+            ),
+            None,
+        )
+        if readme_path is None and not tree_context.use_fixture:
+            continue
+        if readme_path is None:
+            readme_path = f"{partition.path_prefix}README.md"
+        content = _read_feature_readme_content(tree_context, readme_path)
+        for mapped_prefix in parse_mapped_source_paths(content):
+            path_map[mapped_prefix] = component_id
+
+
+def _humanize_slug(text: str) -> str:
+    return re.sub(r"\s+", " ", text.replace("-", " ").replace("_", " ")).strip().title()
+
+
+def _humanize_repo_name(repo: str) -> str:
+    """Derive a short product name from a repository slug (no owner prefix)."""
+    slug = (repo or "").strip()
+    if not slug:
+        return "Repository"
+    tokens = [part for part in re.split(r"[-_]+", slug) if part]
+    if len(tokens) >= 2 and tokens[-1].lower() in ARCHITECTURAL_REPO_SUFFIXES:
+        return _humanize_slug(tokens[-1])
+    return _humanize_slug(slug)
+
+
+def _clean_package_name(raw_name: str) -> str | None:
+    name = (raw_name or "").strip()
+    if not name:
+        return None
+    if name.startswith("@"):
+        name = name.split("/", 1)[-1]
+    name = name.split("/")[-1]
+    if name in {".", ".."}:
+        return None
+    return _humanize_slug(name)
+
+
+def _parse_project_name_from_metadata(path: str, content: str) -> str | None:
+    if not content.strip():
+        return None
+    if path.endswith("package.json"):
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        for key in ("name", "title"):
+            cleaned = _clean_package_name(str(payload.get(key) or ""))
+            if cleaned:
+                return cleaned
+        description = str(payload.get("description") or "").strip()
+        if description:
+            return _humanize_slug(description.split(".", 1)[0][:48])
+        return None
+    if path.endswith("pyproject.toml"):
+        match = re.search(r'^\s*name\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE)
+        if match:
+            return _clean_package_name(match.group(1))
+        return None
+    if path.lower().endswith("readme.md"):
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                title = stripped[2:].strip()
+                if title and title.lower() not in {"readme", "documentation", "docs"}:
+                    return _humanize_slug(title)
+        return None
+    return None
+
+
+def _fixture_metadata_content(path: str, repo: str) -> str:
+    if path == "README.md":
+        return f"# {_humanize_repo_name(repo)}\n"
+    if path.endswith("package.json"):
+        folder = path.rsplit("/", 1)[0] if "/" in path else repo
+        return json.dumps({"name": folder.split("/")[-1]})
+    return ""
+
+
+def _discover_feature_doc_partitions(paths: list[str]) -> list[RepoPartition]:
+    """Infer feature components from docs/features or similar markdown trees."""
+    counts: dict[tuple[str, str], int] = {}
+    for raw_path in paths:
+        path = raw_path.strip().lstrip("/")
+        for prefix in FEATURE_DOC_PREFIXES:
+            if not path.startswith(prefix):
+                continue
+            remainder = path[len(prefix) :]
+            feature = remainder.split("/", 1)[0]
+            if not feature or feature in EXCLUDED_TOP_LEVEL or feature.startswith("."):
+                break
+            key = (prefix, feature)
+            counts[key] = counts.get(key, 0) + 1
+            break
+
+    partitions = [
+        RepoPartition(
+            slug=_slugify(feature),
+            display_name=_humanize_slug(feature),
+            path_prefix=f"{prefix}{feature}/",
+        )
+        for (prefix, feature), count in sorted(counts.items())
+        if count >= 1
+    ]
+    if len(partitions) >= 2:
+        return partitions
+    return []
+
+
+def _discover_monorepo_partitions(paths: list[str]) -> list[RepoPartition]:
     top_counts: dict[str, int] = {}
     nested_counts: dict[tuple[str, str], int] = {}
 
@@ -155,7 +384,7 @@ def discover_repo_partitions(paths: list[str]) -> list[RepoPartition]:
     nested_candidates = [
         RepoPartition(
             slug=_slugify(container, child),
-            display_name=child.replace("-", " ").replace("_", " ").title(),
+            display_name=_humanize_slug(child),
             path_prefix=f"{container}/{child}/",
         )
         for (container, child), count in sorted(nested_counts.items())
@@ -167,7 +396,7 @@ def discover_repo_partitions(paths: list[str]) -> list[RepoPartition]:
     top_candidates = [
         RepoPartition(
             slug=_slugify(top),
-            display_name=top.replace("-", " ").replace("_", " ").title(),
+            display_name=_humanize_slug(top),
             path_prefix=f"{top}/",
         )
         for top, count in sorted(top_counts.items())
@@ -179,26 +408,91 @@ def discover_repo_partitions(paths: list[str]) -> list[RepoPartition]:
     return []
 
 
-def _tree_paths_for_repo(
+def discover_repo_partitions(paths: list[str]) -> list[RepoPartition]:
+    """Infer feature or monorepo sub-components from repository file paths."""
+    feature_partitions = _discover_feature_doc_partitions(paths)
+    if feature_partitions:
+        return feature_partitions
+    return _discover_monorepo_partitions(paths)
+
+
+def _metadata_paths_to_fetch(paths: list[str], partition: RepoPartition | None = None) -> list[str]:
+    path_set = set(paths)
+    candidates: list[str] = []
+    if partition is None:
+        for name in METADATA_ROOT_FILES:
+            if name in path_set:
+                candidates.append(name)
+    else:
+        prefix = partition.path_prefix.rstrip("/")
+        for name in METADATA_ROOT_FILES:
+            candidate = f"{prefix}/{name}"
+            if candidate in path_set:
+                candidates.append(candidate)
+    return candidates
+
+
+def _infer_project_name(
+    context: RepoTreeContext,
+    partition: RepoPartition | None = None,
+) -> str | None:
+    for path in _metadata_paths_to_fetch(context.paths, partition):
+        if context.use_fixture or not context.token:
+            content = _fixture_metadata_content(path, context.repo)
+        else:
+            from app.services.github_code import _fetch_file_content
+
+            session = requests.Session()
+            content, _ = _fetch_file_content(
+                session,
+                context.token,
+                context.owner,
+                context.repo,
+                path,
+                context.ref_sha,
+            )
+        name = _parse_project_name_from_metadata(path, content)
+        if name:
+            return name
+    return None
+
+
+def _single_repo_component_name(context: RepoTreeContext) -> str:
+    return _infer_project_name(context) or _humanize_repo_name(context.repo)
+
+
+def _partition_component_name(context: RepoTreeContext, partition: RepoPartition) -> str:
+    return _infer_project_name(context, partition) or partition.display_name
+
+
+def _tree_context_for_repo(
     config: GitHubConfigRequest,
     repository_url: str,
     *,
     use_fixture: bool = False,
-) -> list[str]:
+) -> RepoTreeContext:
     owner, repo = parse_repository_url(repository_url)
     token = (config.personal_access_token or "").strip()
     repo_config = config.with_repository(repository_url)
     branch = (repo_config.branch_target or "main").strip() or "main"
 
     if use_fixture or not token:
+        ref_sha = f"fixture-{branch}"
         tree_files = fetch_repo_tree_files(
             token,
             owner,
             repo,
-            f"fixture-{branch}",
+            ref_sha,
             use_fixture=True,
         )
-        return [item.path for item in tree_files]
+        return RepoTreeContext(
+            owner=owner,
+            repo=repo,
+            paths=[item.path for item in tree_files],
+            ref_sha=ref_sha,
+            token=token,
+            use_fixture=True,
+        )
 
     session = requests.Session()
     try:
@@ -221,7 +515,14 @@ def _tree_paths_for_repo(
         use_fixture=False,
     )
     tree_files = fetch_repo_tree_files(token, owner, repo, ref_sha, use_fixture=False)
-    return [item.path for item in tree_files]
+    return RepoTreeContext(
+        owner=owner,
+        repo=repo,
+        paths=[item.path for item in tree_files],
+        ref_sha=ref_sha,
+        token=token,
+        use_fixture=False,
+    )
 
 
 def provision_github_components_for_repo(
@@ -236,35 +537,43 @@ def provision_github_components_for_repo(
     consolidate_duplicate_components(db, tenant_id)
     owner, repo = parse_repository_url(repository_url)
     repo_label = f"{owner}/{repo}"
-    paths = _tree_paths_for_repo(config, repository_url, use_fixture=use_fixture)
-    partitions = discover_repo_partitions(paths)
+    tree_context = _tree_context_for_repo(config, repository_url, use_fixture=use_fixture)
+    partitions = discover_repo_partitions(tree_context.paths)
     result = ProvisionResult()
     path_map = dict(config.path_component_map or {})
     repo_prefix = scope_component_id(_component_id("comp-gh", owner, repo), tenant_id)
 
     if partitions:
+        component_id_by_slug: dict[str, str] = {}
         for partition in partitions:
             component_id = scope_component_id(
                 _component_id("comp-gh", owner, repo, partition.slug),
                 tenant_id,
             )
+            component_id_by_slug[partition.slug] = component_id
             action = _upsert_component(
                 db,
                 tenant_id,
                 component_id,
-                f"{repo_label} / {partition.display_name}",
+                _partition_component_name(tree_context, partition),
                 "github",
                 f"{repo_label}:{partition.path_prefix}",
             )
             _tally_action(result, action, component_id)
             if partition.path_prefix not in path_map:
                 path_map[partition.path_prefix] = component_id
+        _apply_feature_readme_path_mappings(
+            path_map,
+            tree_context,
+            partitions,
+            component_id_by_slug,
+        )
     else:
         action = _upsert_component(
             db,
             tenant_id,
             repo_prefix,
-            repo_label,
+            _single_repo_component_name(tree_context),
             "github",
             repo_label,
         )
@@ -341,7 +650,7 @@ def provision_jira_components(
             db,
             tenant_id,
             component_id,
-            f"{project_key} / {item.name}",
+            _humanize_slug(item.name),
             "jira",
             f"{project_key}:{item.name}",
         )
@@ -370,7 +679,7 @@ def provision_jira_components(
             db,
             tenant_id,
             fallback_id,
-            f"Jira {project_key}",
+            _humanize_slug(project_key),
             "jira",
             f"project:{project_key}",
         )

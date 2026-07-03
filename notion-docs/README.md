@@ -52,6 +52,7 @@ Engineering intelligence platform documentation formatted for import into Notion
 | `backend/docs/incident-investigation-current.md` | II technical deep-dive |
 | `backend/docs/neo4j-tenant-queries.md` | Neo4j Cypher reference |
 | `cursor.md` | Agent/developer project guide |
+| `docs/features/` | Feature components + mapped source paths for GitHub attribution |
 
 ---
 
