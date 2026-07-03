@@ -19,3 +19,10 @@ def test_short_errors_pass_through():
     assert format_sync_job_error("GitHub integration is not configured.") == (
         "GitHub integration is not configured."
     )
+
+
+def test_connection_reset_is_friendly():
+    raw = "('Connection aborted.', ConnectionResetError(54, 'Connection reset by peer'))"
+    message = format_sync_job_error(raw)
+    assert "ConnectionResetError" not in message
+    assert "Retry sync" in message

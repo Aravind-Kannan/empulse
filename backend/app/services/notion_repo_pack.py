@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import requests
+from requests.exceptions import ConnectionError, ReadTimeout, RequestException
 
 from app.services.github_client import GITHUB_API, _headers, parse_repository_url
 from app.services.notion_client import match_component_for_document
@@ -18,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 NOTION_DOCS_ROOT = "notion-docs"
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_GITHUB_RETRY_DELAYS = (0.5, 1.0, 2.0)
 TITLE_FROM_FILENAME = {
     "00-platform-overview": "Platform overview",
     "01-era": "ERA — Employee Risk Assessment",
@@ -52,7 +56,35 @@ def _title_from_path(path: str) -> str:
     return cleaned.replace("-", " ").strip().title() or stem
 
 
+def _github_get(
+    session: requests.Session,
+    url: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, str] | None = None,
+    timeout: int = 30,
+) -> requests.Response:
+    """GET with retries for transient GitHub/network failures."""
+    last_exc: RequestException | None = None
+    for attempt, delay in enumerate(_GITHUB_RETRY_DELAYS):
+        try:
+            return session.get(url, headers=headers, params=params, timeout=timeout)
+        except (ConnectionError, ReadTimeout) as exc:
+            last_exc = exc
+            if attempt < len(_GITHUB_RETRY_DELAYS) - 1:
+                logger.warning(
+                    "GitHub request failed (attempt %s/%s), retrying: %s",
+                    attempt + 1,
+                    len(_GITHUB_RETRY_DELAYS),
+                    exc,
+                )
+                time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
 def _list_repo_paths(
+    session: requests.Session,
     token: str,
     owner: str,
     repo: str,
@@ -61,17 +93,17 @@ def _list_repo_paths(
     ref: str = "HEAD",
 ) -> list[str]:
     """Return file paths under prefix using the git trees API (single request)."""
-    session = requests.Session()
-    ref_resp = session.get(
+    headers = _headers(token)
+    ref_resp = _github_get(
+        session,
         f"{GITHUB_API}/repos/{owner}/{repo}/git/ref/heads/{ref}",
-        headers=_headers(token),
-        timeout=30,
+        headers=headers,
     )
     if ref_resp.status_code == 404:
-        ref_resp = session.get(
+        ref_resp = _github_get(
+            session,
             f"{GITHUB_API}/repos/{owner}/{repo}/commits/HEAD",
-            headers=_headers(token),
-            timeout=30,
+            headers=headers,
         )
         if ref_resp.status_code >= 400:
             return []
@@ -81,9 +113,10 @@ def _list_repo_paths(
     if not sha:
         return []
 
-    tree_resp = session.get(
+    tree_resp = _github_get(
+        session,
         f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{sha}",
-        headers=_headers(token),
+        headers=headers,
         params={"recursive": "1"},
         timeout=60,
     )
@@ -108,6 +141,7 @@ def _list_repo_paths(
 
 
 def _fetch_file_at_ref(
+    session: requests.Session,
     token: str,
     owner: str,
     repo: str,
@@ -115,18 +149,26 @@ def _fetch_file_at_ref(
     *,
     ref: str,
 ) -> tuple[str, str | None]:
-    session = requests.Session()
-    response = session.get(
-        f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
-        headers=_headers(token),
-        params={"ref": ref},
-        timeout=30,
-    )
+    headers = _headers(token)
+    try:
+        response = _github_get(
+            session,
+            f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
+            headers=headers,
+            params={"ref": ref},
+        )
+    except RequestException as exc:
+        logger.warning(
+            "Skipping %s/%s/%s after GitHub fetch failures: %s",
+            owner,
+            repo,
+            path,
+            exc,
+        )
+        return "", None
     if response.status_code >= 400:
         return "", None
     payload = response.json()
-    import base64
-
     raw = payload.get("content") or ""
     if payload.get("encoding") != "base64" or not raw:
         return "", payload.get("sha")
@@ -160,9 +202,24 @@ def fetch_github_notion_doc_pack(
     except ValueError:
         return []
 
-    paths = _list_repo_paths(token, owner, repo, prefix=NOTION_DOCS_ROOT, ref=branch)
-    if not paths:
-        paths = _list_repo_paths(token, owner, repo, prefix=NOTION_DOCS_ROOT, ref="HEAD")
+    session = requests.Session()
+    try:
+        paths = _list_repo_paths(
+            session, token, owner, repo, prefix=NOTION_DOCS_ROOT, ref=branch
+        )
+        if not paths:
+            paths = _list_repo_paths(
+                session, token, owner, repo, prefix=NOTION_DOCS_ROOT, ref="HEAD"
+            )
+    except RequestException as exc:
+        logger.warning(
+            "GitHub notion-docs listing failed for %s/%s: %s",
+            owner,
+            repo,
+            exc,
+        )
+        return []
+
     if not paths:
         logger.info("No notion-docs markdown files found in %s/%s", owner, repo)
         return []
@@ -170,7 +227,9 @@ def fetch_github_notion_doc_pack(
     now = datetime.now(UTC).isoformat()
     docs: list[dict[str, Any]] = []
     for path in paths:
-        content, blob_sha = _fetch_file_at_ref(token, owner, repo, path, ref=branch)
+        content, blob_sha = _fetch_file_at_ref(
+            session, token, owner, repo, path, ref=branch
+        )
         fallback_title = _title_from_path(path)
         title = _title_from_markdown(content, fallback_title) if content else fallback_title
         component_id = match_component_for_document(

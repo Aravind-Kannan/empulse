@@ -39,6 +39,12 @@ def format_sync_job_error(exc: BaseException | str | None) -> str:
             "Neo4j, or Ollama). Check integrations and that dependent services are running."
         )
 
+    if "connection reset" in lower or "connection aborted" in lower:
+        return (
+            "Network connection dropped while syncing (GitHub or Notion API). "
+            "Retry sync; if it keeps failing, check VPN/firewall or GitHub token access."
+        )
+
     if "not configured" in lower:
         return message
 
