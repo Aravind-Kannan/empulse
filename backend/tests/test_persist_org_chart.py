@@ -12,7 +12,7 @@ from app.schemas.org import (
     OrgChartIngestRequest,
 )
 from app.services.cognee_ingest import persist_org_chart
-from app.services.employee_ids import scope_employee_id
+from app.services.employee_ids import scope_component_id, scope_employee_id
 
 
 def _payload(
@@ -171,3 +171,37 @@ def test_persist_org_chart_replaces_assignments(db, tenant):
 
     assignments = db.query(Assignment).filter(Assignment.tenant_id == tenant.id).all()
     assert assignments == []
+
+
+def test_persist_org_chart_preserves_auto_provisioned_components(db, tenant):
+    employee = EmployeeSchema(
+        id="emp-a",
+        name="Alex",
+        role="Engineer",
+        email="alex@example.com",
+        tenure_years=1.0,
+    )
+    manual = ComponentSchema(
+        id="comp-manual",
+        name="Manual",
+        description="User defined",
+    )
+    db.add(
+        Component(
+            id="comp-gh-auto",
+            tenant_id=tenant.id,
+            name="acme/service",
+            description="AUTO:github:acme/service",
+        )
+    )
+    db.commit()
+
+    persist_org_chart(db, _payload([employee], components=[manual]), tenant.id)
+
+    remaining = (
+        db.query(Component).filter(Component.tenant_id == tenant.id).all()
+    )
+    assert {component.id for component in remaining} == {
+        scope_component_id("comp-manual", tenant.id),
+        "comp-gh-auto",
+    }

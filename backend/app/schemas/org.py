@@ -15,6 +15,8 @@ class ComponentSchema(BaseModel):
     id: str
     name: str
     description: str = ""
+    tags: str = ""
+    criticality: str = "tier2_core"
     open_tasks_count: int = Field(default=0, ge=0)
     unresolved_incidents: int = Field(default=0, ge=0)
 

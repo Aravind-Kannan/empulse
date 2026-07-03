@@ -21,6 +21,7 @@ from app.routes.exit import router as exit_router
 from app.routes.identity import router as identity_router
 from app.routes.org_bulk import router as org_bulk_router
 from app.routes.org_employees import router as org_employees_router
+from app.routes.org_components import router as org_components_router
 from app.routes.investigation import router as investigation_router
 from app.routes.jira import router as jira_router
 from app.routes.tenants import router as tenants_router
@@ -89,6 +90,7 @@ app.include_router(investigation_router)
 app.include_router(identity_router)
 app.include_router(org_bulk_router)
 app.include_router(org_employees_router)
+app.include_router(org_components_router)
 app.include_router(exit_router)
 app.include_router(jira_router)
 app.include_router(tenants_router)

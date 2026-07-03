@@ -12,6 +12,8 @@ export interface Component {
   id: string;
   name: string;
   description: string;
+  tags?: string;
+  criticality?: "tier1_revenue" | "tier2_core" | "tier3_support";
   open_tasks_count: number;
   unresolved_incidents: number;
 }
@@ -112,6 +114,20 @@ export interface EmployeeUpdateResponse {
 export interface EmployeeDeleteResponse {
   employee_id: string;
   direct_reports_reparented: number;
+  cognee_dataset: string;
+  graph_nodes_created: number;
+  graph_edges_created: number;
+}
+
+export interface ComponentUpdateResponse {
+  component_id: string;
+  cognee_dataset: string;
+  graph_nodes_created: number;
+  graph_edges_created: number;
+}
+
+export interface ComponentDeleteResponse {
+  component_id: string;
   cognee_dataset: string;
   graph_nodes_created: number;
   graph_edges_created: number;

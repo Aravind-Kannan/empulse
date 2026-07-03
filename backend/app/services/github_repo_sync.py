@@ -54,7 +54,14 @@ MAX_TREE_FILE_BYTES = 1_048_576
 FIXTURE_TREE_PATHS = (
     "backend/app/main.py",
     "backend/app/services/github_code.py",
+    "backend/app/services/integration_sync.py",
+    "backend/app/api/routes.py",
+    "backend/app/db/models.py",
     "frontend/src/lib/integrations.ts",
+    "frontend/src/components/App.tsx",
+    "frontend/src/pages/index.tsx",
+    "frontend/src/hooks/useAuth.ts",
+    "frontend/src/styles/globals.css",
     "README.md",
 )
 
@@ -715,6 +722,18 @@ async def process_github_repo_sync(
             f"Repository '{normalized_url}' is not in the GitHub integration config."
         )
 
+    repo_config = config.with_repository(normalized_url)
+
+    from app.services.component_provisioning import provision_github_components_for_repo
+
+    provision_github_components_for_repo(
+        db,
+        tenant_id,
+        config,
+        normalized_url,
+        use_fixture=use_fixture,
+    )
+    config = get_github_config(db, tenant_id) or config
     repo_config = config.with_repository(normalized_url)
 
     from app.services.github_identity import prepare_github_identity_context

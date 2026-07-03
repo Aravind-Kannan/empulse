@@ -122,6 +122,7 @@ class Component(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tags: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     open_tasks_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unresolved_incidents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     criticality: Mapped[str] = mapped_column(

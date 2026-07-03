@@ -22,13 +22,45 @@ from app.models.operational import (
     NotionDocSnapshot,
     RoleHistory,
 )
-from app.schemas.org import OrgChartIngestRequest
+from app.schemas.org import OrgChartIngestRequest, ComponentSchema
 from app.services.employee_ids import scope_org_chart_to_tenant
 from app.services.role_utils import is_leadership_role
 from app.ontology.relations import REL_OWNS, REL_REPORTS_TO
 from app.ontology.spec import validate_relation
 from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
+
+AUTO_COMPONENT_DESC_PREFIX = "AUTO:"
+
+
+def _merge_auto_provisioned_components(
+    db: Session,
+    tenant_id: uuid.UUID,
+    payload: OrgChartIngestRequest,
+) -> OrgChartIngestRequest:
+    """Keep integration-discovered components when the UI payload omits them."""
+    payload_ids = {component.id for component in payload.components}
+    merged = list(payload.components)
+    existing = db.query(Component).filter(Component.tenant_id == tenant_id).all()
+    for row in existing:
+        if row.id in payload_ids:
+            continue
+        if not (row.description or "").startswith(AUTO_COMPONENT_DESC_PREFIX):
+            continue
+        merged.append(
+            ComponentSchema(
+                id=row.id,
+                name=row.name,
+                description=row.description,
+                tags=getattr(row, "tags", "") or "",
+                criticality=getattr(row, "criticality", "tier2_core"),
+                open_tasks_count=row.open_tasks_count,
+                unresolved_incidents=row.unresolved_incidents,
+            )
+        )
+    if len(merged) == len(payload.components):
+        return payload
+    return payload.model_copy(update={"components": merged})
 
 
 class GraphEmployee(DataPoint):
@@ -161,6 +193,7 @@ def persist_org_chart(
     tenant_id: uuid.UUID,
 ) -> OrgChartIngestRequest:
     payload = scope_org_chart_to_tenant(payload, tenant_id)
+    payload = _merge_auto_provisioned_components(db, tenant_id, payload)
 
     new_employee_ids = {employee.id for employee in payload.employees}
     new_component_ids = {component.id for component in payload.components}
@@ -199,6 +232,8 @@ def persist_org_chart(
                     tenant_id=tenant_id,
                     name=component.name,
                     description=component.description,
+                    tags=component.tags,
+                    criticality=component.criticality,
                     open_tasks_count=component.open_tasks_count,
                     unresolved_incidents=component.unresolved_incidents,
                 )
@@ -206,6 +241,8 @@ def persist_org_chart(
             continue
         row.name = component.name
         row.description = component.description
+        row.tags = component.tags
+        row.criticality = component.criticality
         row.open_tasks_count = component.open_tasks_count
         row.unresolved_incidents = component.unresolved_incidents
 

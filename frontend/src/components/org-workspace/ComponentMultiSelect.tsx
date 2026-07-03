@@ -158,7 +158,7 @@ export function ComponentMultiSelect({
 
       <p className="text-xs text-zinc-500">
         {components.length === 0
-          ? "No components yet — connect GitHub and sync after onboarding, or add ownership later in settings."
+          ? "No components yet — sync GitHub or Jira integrations to auto-discover components, or assign ownership later in settings."
           : "Link to any number of architectural assets. Contribution % is computed dynamically by Cognee at ERA refresh."}
       </p>
     </div>

@@ -3,11 +3,12 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, FileSpreadsheet, LayoutGrid, Loader2, Network, Sparkles } from "lucide-react";
+import { ArrowLeft, Boxes, FileSpreadsheet, LayoutGrid, Loader2, Network, Sparkles } from "lucide-react";
 
 import { EmployeeEditModal } from "@/components/onboarding/EmployeeEditModal";
 import { AddEmployeeModal, type NewEmployeeDraft } from "@/components/org-workspace/AddEmployeeModal";
 import { OrgBulkCsvDialog } from "@/components/org-workspace/OrgBulkCsvDialog";
+import { OrgComponentsPanel } from "@/components/org-workspace/OrgComponentsPanel";
 import { OrgHierarchyChartView } from "@/components/org-workspace/OrgHierarchyChartView";
 import { OrgListGridView } from "@/components/org-workspace/OrgListGridView";
 import { TeamTagBar } from "@/components/org-workspace/TeamTagBar";
@@ -15,7 +16,7 @@ import { collectOrgRoles } from "@/lib/org-master-data";
 import { generateUniqueEmployeeId } from "@/lib/employee-id";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
 
-type OrgTab = "list" | "chart";
+type OrgTab = "list" | "chart" | "components";
 
 export interface OrgWorkspaceProps {
   mode: "onboarding" | "settings";
@@ -37,6 +38,19 @@ export interface OrgWorkspaceProps {
   onSave: () => Promise<void>;
   backHref?: string;
   backLabel?: string;
+  onRefreshOrgChart?: () => void | Promise<void>;
+  isRefreshingOrgChart?: boolean;
+  onUpdateComponent?: (
+    componentId: string,
+    payload: {
+      name: string;
+      tags: string;
+      criticality: "tier1_revenue" | "tier2_core" | "tier3_support";
+    },
+  ) => void | Promise<void>;
+  onDeleteComponent?: (componentId: string) => void | Promise<void>;
+  isSavingComponent?: boolean;
+  isDeletingComponent?: boolean;
 }
 
 export function OrgWorkspace({
@@ -56,6 +70,12 @@ export function OrgWorkspace({
   onSave,
   backHref,
   backLabel = "Back",
+  onRefreshOrgChart,
+  isRefreshingOrgChart = false,
+  onUpdateComponent,
+  onDeleteComponent,
+  isSavingComponent = false,
+  isDeletingComponent = false,
 }: OrgWorkspaceProps) {
   const router = useRouter();
   const [tab, setTab] = useState<OrgTab>("list");
@@ -181,26 +201,46 @@ export function OrgWorkspace({
           <button
             type="button"
             onClick={() => setTab("list")}
-            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm transition ${
+            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm transition ${
               tab === "list"
                 ? "bg-zinc-100 text-slate-950"
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
             <LayoutGrid className="h-4 w-4" />
-            List Grid View
+            List
           </button>
           <button
             type="button"
             onClick={() => setTab("chart")}
-            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm transition ${
+            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm transition ${
               tab === "chart"
                 ? "bg-zinc-100 text-slate-950"
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
             <Network className="h-4 w-4" />
-            Hierarchical Chart View
+            Chart
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTab("components");
+              if (onRefreshOrgChart) void onRefreshOrgChart();
+            }}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm transition ${
+              tab === "components"
+                ? "bg-zinc-100 text-slate-950"
+                : "text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            <Boxes className="h-4 w-4" />
+            Components
+            {orgChart.components.length > 0 ? (
+              <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-300">
+                {orgChart.components.length}
+              </span>
+            ) : null}
           </button>
         </div>
         <button
@@ -222,13 +262,15 @@ export function OrgWorkspace({
       {tab === "list" ? (
         <OrgListGridView
           employees={orgChart.employees}
+          components={orgChart.components}
+          assignments={orgChart.assignments}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
           onReparent={onReparent}
           onEditEmployee={onUpdateEmployee ? setEditingEmployee : undefined}
           onAddEmployee={onAddEmployee ? () => setAddEmployeeOpen(true) : undefined}
         />
-      ) : (
+      ) : tab === "chart" ? (
         <OrgHierarchyChartView
           employees={orgChart.employees}
           selectedIds={selectedIds}
@@ -238,6 +280,16 @@ export function OrgWorkspace({
           onAddEmployee={onAddEmployee ? () => setAddEmployeeOpen(true) : undefined}
           focusEmployeeId={focusEmployeeId}
           onFocusHandled={() => setFocusEmployeeId(null)}
+        />
+      ) : (
+        <OrgComponentsPanel
+          orgChart={orgChart}
+          isRefreshing={isRefreshingOrgChart}
+          onRefresh={onRefreshOrgChart}
+          onUpdateComponent={onUpdateComponent}
+          onDeleteComponent={onDeleteComponent}
+          isSavingComponent={isSavingComponent}
+          isDeletingComponent={isDeletingComponent}
         />
       )}
 

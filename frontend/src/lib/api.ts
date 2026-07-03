@@ -49,6 +49,8 @@ import type {
   CogneeDatasetResetResponse,
   EmployeeUpdateResponse,
   EmployeeDeleteResponse,
+  ComponentUpdateResponse,
+  ComponentDeleteResponse,
 } from "./types";
 import {
   DEFAULT_INTEGRATION_CONFIG,
@@ -113,6 +115,48 @@ export async function deleteOrgEmployee(
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Employee delete failed"));
+  }
+  return response.json();
+}
+
+export async function consolidateOrgComponents(): Promise<{ removed: number }> {
+  const response = await apiFetch(`${API_BASE}/api/org/components/consolidate`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Component consolidate failed"));
+  }
+  return response.json();
+}
+
+export async function updateOrgComponent(
+  componentId: string,
+  payload: {
+    name?: string;
+    tags?: string;
+    criticality?: "tier1_revenue" | "tier2_core" | "tier3_support";
+    description?: string;
+  },
+): Promise<ComponentUpdateResponse> {
+  const response = await apiFetch(`${API_BASE}/api/org/components/${componentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Component update failed"));
+  }
+  return response.json();
+}
+
+export async function deleteOrgComponent(
+  componentId: string,
+): Promise<ComponentDeleteResponse> {
+  const response = await apiFetch(`${API_BASE}/api/org/components/${componentId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Component delete failed"));
   }
   return response.json();
 }

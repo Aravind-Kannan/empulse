@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -46,6 +47,19 @@ JIRA_REQUEST_RETRIES = 3
 
 JIRA_PERSON_ACCOUNT_TYPES = {"atlassian", "customer"}
 JIRA_APP_ACCOUNT_TYPES = {"app"}
+
+FIXTURE_PROJECT_COMPONENTS: dict[str, list[str]] = {
+    "ENG": ["Authentication", "Payments", "Notifications"],
+    "OPS": ["Platform Operations"],
+    "PLAT": ["Platform Core"],
+}
+
+
+@dataclass(frozen=True)
+class JiraProjectComponent:
+    project_key: str
+    name: str
+    jira_id: str = ""
 
 
 class JiraClientError(ValueError):
@@ -570,6 +584,103 @@ def fetch_jira_provider_members(config: JiraConfigRequest) -> list[ProviderMembe
         )
 
     return sorted(members_by_id.values(), key=lambda member: member.label.lower())
+
+
+def fetch_jira_project_components(
+    config: JiraConfigRequest,
+    *,
+    use_fixture: bool = False,
+) -> list[JiraProjectComponent]:
+    """List Jira components for configured projects (REST + issue fallback)."""
+    project_keys = [
+        key.strip().upper()
+        for key in (config.project_keys or "").split(",")
+        if key.strip()
+    ]
+    if not project_keys:
+        return []
+
+    if use_fixture or not (config.api_token or "").strip():
+        rows: list[JiraProjectComponent] = []
+        for project_key in project_keys:
+            for index, name in enumerate(
+                FIXTURE_PROJECT_COMPONENTS.get(project_key, []),
+                start=1,
+            ):
+                rows.append(
+                    JiraProjectComponent(
+                        project_key=project_key,
+                        name=name,
+                        jira_id=f"fixture-{project_key.lower()}-{index}",
+                    )
+                )
+        return rows
+
+    site_url = _normalize_site_url(config.site_url)
+    headers = _auth_headers(config)
+    session = requests.Session()
+    discovered: list[JiraProjectComponent] = []
+    seen: set[tuple[str, str]] = set()
+
+    for project_key in project_keys:
+        try:
+            response = session.get(
+                f"{site_url}/rest/api/3/project/{project_key}/components",
+                headers=headers,
+                timeout=JIRA_REQUEST_TIMEOUT,
+            )
+            if response.status_code >= 400:
+                logger.warning(
+                    "Jira components API failed for %s (%s)",
+                    project_key,
+                    response.status_code,
+                )
+                continue
+            for row in response.json() or []:
+                name = (row.get("name") or "").strip()
+                if not name:
+                    continue
+                key = (project_key, name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                discovered.append(
+                    JiraProjectComponent(
+                        project_key=project_key,
+                        name=name,
+                        jira_id=str(row.get("id") or ""),
+                    )
+                )
+        except RequestException:
+            logger.warning(
+                "Jira components API request failed for %s",
+                project_key,
+                exc_info=True,
+            )
+
+    if discovered:
+        return discovered
+
+    for issue in JiraClient(config, use_fixture=False).fetch_open_issues():
+        project_key = (issue.project_key or "").upper()
+        if project_key not in project_keys:
+            continue
+        for name in issue.jira_component_names:
+            cleaned = name.strip()
+            if not cleaned:
+                continue
+            key = (project_key, cleaned)
+            if key in seen:
+                continue
+            seen.add(key)
+            discovered.append(
+                JiraProjectComponent(
+                    project_key=project_key,
+                    name=cleaned,
+                    jira_id="",
+                )
+            )
+    return discovered
 
 
 def fetch_jira_issues(

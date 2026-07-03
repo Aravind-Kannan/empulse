@@ -436,6 +436,39 @@ async def process_external_app_sync(
             progress(phase, message, stats)
 
     normalized = source.lower().strip()
+    config = None
+
+    if normalized == "github":
+        config = get_github_config(db, tenant_id)
+        if not config:
+            raise ValueError("GitHub integration is not configured.")
+        report("fetching", "Discovering components from GitHub repositories…")
+        from app.services.component_provisioning import provision_github_components
+
+        await asyncio.to_thread(
+            provision_github_components,
+            db,
+            tenant_id,
+            config,
+            use_fixture=use_github_fixture,
+        )
+        config = get_github_config(db, tenant_id)
+    elif normalized == "jira":
+        config = get_jira_config(db, tenant_id)
+        if not config:
+            raise ValueError("Jira integration is not configured.")
+        report("fetching", "Discovering components from Jira projects…")
+        from app.services.component_provisioning import provision_jira_components
+
+        await asyncio.to_thread(
+            provision_jira_components,
+            db,
+            tenant_id,
+            config,
+            use_fixture=use_jira_fixture,
+        )
+        config = get_jira_config(db, tenant_id)
+
     employee_nodes, component_nodes, components_by_id = _load_org_context(db, tenant_id)
     github_activities: list[GitHubPullRequestActivity] = []
     open_prs_by_login: dict[str, int] = {}
@@ -444,10 +477,8 @@ async def process_external_app_sync(
     slack_snapshot = None
     slack_sync_stats: dict[str, int] | None = None
     cognify_extra_stats: dict[str, int | str] = {}
-    config = None
 
     if normalized == "github":
-        config = get_github_config(db, tenant_id)
         if not config:
             raise ValueError("GitHub integration is not configured.")
         from app.services.github_identity import prepare_github_identity_context
@@ -500,7 +531,6 @@ async def process_external_app_sync(
         cognify_extra_stats["code_files_fetched"] = len(code_snapshots)
         report("building_graph", "Building ontology graph nodes from GitHub activity…")
     elif normalized == "jira":
-        config = get_jira_config(db, tenant_id)
         if not config:
             raise ValueError("Jira integration is not configured.")
         report("fetching", "Fetching Jira issues and assignees…")
@@ -647,6 +677,11 @@ async def process_external_app_sync(
             tenant_id,
             github_activities,
             open_prs_by_login=open_prs_by_login or None,
+        )
+        from app.services.component_management import sync_assignments_from_github_ownership
+
+        telemetry["assignments_created"] = sync_assignments_from_github_ownership(
+            db, tenant_id
         )
     elif normalized == "jira":
         high_priorities = set(config.high_priorities) if config else HIGH_PRIORITIES

@@ -149,6 +149,14 @@ def apply_schema_patches(engine: Engine) -> None:
                         "ADD COLUMN criticality VARCHAR(32) NOT NULL DEFAULT 'tier2_core'"
                     )
                 )
+            if "tags" not in component_columns:
+                logger.info("Adding tags column to components")
+                conn.execute(
+                    text(
+                        "ALTER TABLE components "
+                        "ADD COLUMN tags VARCHAR(512) NOT NULL DEFAULT ''"
+                    )
+                )
 
         if inspector.has_table("employees"):
             employee_columns = _column_names(inspector, "employees")

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { OrgWorkspace } from "@/components/org-workspace/OrgWorkspace";
-import { deleteOrgEmployee, fetchOrgChart, ingestOrgChart, updateOrgEmployee } from "@/lib/api";
+import { consolidateOrgComponents, deleteOrgEmployee, deleteOrgComponent, fetchOrgChart, ingestOrgChart, updateOrgComponent, updateOrgEmployee } from "@/lib/api";
 import { removeEmployeeFromOrgChart, wouldCreateCycle } from "@/lib/org-tree-utils";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
 import { useWorkspace } from "@/context/WorkspaceContext";
@@ -16,6 +16,30 @@ export function SettingsOrgChartPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [savingLabel, setSavingLabel] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSavingComponent, setIsSavingComponent] = useState(false);
+  const [isDeletingComponent, setIsDeletingComponent] = useState(false);
+
+  const reloadOrgChart = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await consolidateOrgComponents();
+      const fresh = await fetchOrgChart();
+      setOrgChart((prev) =>
+        prev
+          ? {
+              ...prev,
+              components: fresh.components,
+              assignments: fresh.assignments,
+            }
+          : fresh,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh org chart");
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
     void fetchOrgChart()
@@ -119,19 +143,85 @@ export function SettingsOrgChartPage() {
     });
   }, []);
 
+  const handleUpdateComponent = useCallback(
+    async (
+      componentId: string,
+      payload: {
+        name: string;
+        tags: string;
+        criticality: "tier1_revenue" | "tier2_core" | "tier3_support";
+      },
+    ) => {
+      setIsSavingComponent(true);
+      try {
+        await updateOrgComponent(componentId, payload);
+        setOrgChart((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            components: prev.components.map((component) =>
+              component.id === componentId
+                ? { ...component, ...payload }
+                : component,
+            ),
+          };
+        });
+        await refreshOperationalState();
+      } finally {
+        setIsSavingComponent(false);
+      }
+    },
+    [refreshOperationalState],
+  );
+
+  const handleDeleteComponent = useCallback(
+    async (componentId: string) => {
+      setIsDeletingComponent(true);
+      try {
+        await deleteOrgComponent(componentId);
+        setOrgChart((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            components: prev.components.filter(
+              (component) => component.id !== componentId,
+            ),
+            assignments: prev.assignments.filter(
+              (assignment) => assignment.component_id !== componentId,
+            ),
+          };
+        });
+        await refreshOperationalState();
+      } finally {
+        setIsDeletingComponent(false);
+      }
+    },
+    [refreshOperationalState],
+  );
+
   async function handleSave() {
     if (!orgChart) return;
     setIsSaving(true);
     setSavingLabel("Saving org chart…");
     setError(null);
     try {
-      await ingestOrgChart(orgChart, {
+      const fresh = await fetchOrgChart();
+      await ingestOrgChart(
+        {
+          ...orgChart,
+          components: fresh.components,
+        },
+        {
         onStatus: (status) => {
           if (status.status === "queued" || status.status === "running") {
             setSavingLabel("Syncing to Cognee…");
           }
         },
-      });
+      },
+      );
+      setOrgChart((prev) =>
+        prev ? { ...prev, components: fresh.components } : fresh,
+      );
       await refreshOperationalState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -176,6 +266,12 @@ export function SettingsOrgChartPage() {
       onSave={handleSave}
       backHref="/settings"
       backLabel="Back to Settings"
+      onRefreshOrgChart={reloadOrgChart}
+      isRefreshingOrgChart={isRefreshing}
+      onUpdateComponent={handleUpdateComponent}
+      onDeleteComponent={handleDeleteComponent}
+      isSavingComponent={isSavingComponent}
+      isDeletingComponent={isDeletingComponent}
     />
   );
 }

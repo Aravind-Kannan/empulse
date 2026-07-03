@@ -55,6 +55,8 @@ def load_org_chart(db: Session, tenant: Tenant) -> OrgChartIngestRequest:
                 id=component.id,
                 name=component.name,
                 description=component.description,
+                tags=getattr(component, "tags", "") or "",
+                criticality=getattr(component, "criticality", "tier2_core"),
                 open_tasks_count=component.open_tasks_count,
                 unresolved_incidents=component.unresolved_incidents,
             )

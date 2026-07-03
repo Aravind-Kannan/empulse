@@ -22,10 +22,12 @@ import {
   flattenTree,
   type FlatRow,
 } from "@/lib/org-tree-utils";
-import type { Employee } from "@/lib/types";
+import type { Assignment, Component, Employee } from "@/lib/types";
 
 interface OrgListGridViewProps {
   employees: Employee[];
+  components?: Component[];
+  assignments?: Assignment[];
   selectedIds: Set<string>;
   onToggleSelect: (employeeId: string) => void;
   onReparent: (employeeId: string, managerId: string | null) => void;
@@ -41,6 +43,7 @@ function DraggableRow({
   onToggleSelect,
   isDropTarget,
   onEditEmployee,
+  componentLabel,
 }: {
   row: FlatRow;
   isSelected: boolean;
@@ -49,6 +52,7 @@ function DraggableRow({
   onToggleSelect: () => void;
   isDropTarget: boolean;
   onEditEmployee?: (employee: Employee) => void;
+  componentLabel?: string;
 }) {
   const { employee, depth, hasChildren } = row;
   const {
@@ -132,6 +136,9 @@ function DraggableRow({
           "—"
         )}
       </td>
+      <td className="px-3 py-3 text-sm text-zinc-400">
+        {componentLabel ?? "—"}
+      </td>
       {onEditEmployee && (
         <td className="px-3 py-3">
           <button
@@ -170,6 +177,8 @@ function RootDropZone({ colSpan }: { colSpan: number }) {
 
 export function OrgListGridView({
   employees,
+  components = [],
+  assignments = [],
   selectedIds,
   onToggleSelect,
   onReparent,
@@ -191,7 +200,20 @@ export function OrgListGridView({
   );
 
   const activeEmployee = employees.find((employee) => employee.id === activeId);
-  const columnCount = onEditEmployee ? 6 : 5;
+  const columnCount = onEditEmployee ? 7 : 6;
+
+  const componentNamesById = useMemo(
+    () => new Map(components.map((component) => [component.id, component.name])),
+    [components],
+  );
+
+  function assignmentLabel(employeeId: string): string | undefined {
+    const names = assignments
+      .filter((assignment) => assignment.employee_id === employeeId)
+      .map((assignment) => componentNamesById.get(assignment.component_id))
+      .filter(Boolean) as string[];
+    return names.length > 0 ? names.join(", ") : undefined;
+  }
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(String(event.active.id));
@@ -249,6 +271,7 @@ export function OrgListGridView({
               <th className="px-3 py-3 font-medium text-zinc-300">Employee</th>
               <th className="px-3 py-3 font-medium text-zinc-300">Email</th>
               <th className="px-3 py-3 font-medium text-zinc-300">Team</th>
+              <th className="px-3 py-3 font-medium text-zinc-300">Components</th>
               {onEditEmployee && (
                 <th className="px-3 py-3 font-medium text-zinc-300">Edit</th>
               )}
@@ -266,6 +289,7 @@ export function OrgListGridView({
                 onToggleSelect={() => onToggleSelect(row.employee.id)}
                 isDropTarget={dropTargetId === `drop-${row.employee.id}`}
                 onEditEmployee={onEditEmployee}
+                componentLabel={assignmentLabel(row.employee.id)}
               />
             ))}
           </tbody>

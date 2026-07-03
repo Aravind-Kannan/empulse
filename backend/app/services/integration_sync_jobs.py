@@ -325,6 +325,18 @@ async def _execute_integration_sync_job(job_id: uuid.UUID, tenant_id: uuid.UUID)
             logger.exception(
                 "ERA refresh failed after integration sync job %s", job_id
             )
+
+        from app.models.tenant import Tenant
+        from app.services.component_management import finalize_org_after_integration_sync
+
+        tenant_row = db.get(Tenant, tenant_id)
+        if tenant_row:
+            try:
+                await finalize_org_after_integration_sync(db, tenant_row)
+            except Exception:
+                logger.exception(
+                    "Org chart finalize failed after integration sync job %s", job_id
+                )
     except SyncJobCancelled:
         logger.info("Integration sync job %s cancelled", job_id)
     except asyncio.CancelledError:
