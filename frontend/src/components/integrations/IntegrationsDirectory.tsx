@@ -7,9 +7,10 @@ import { useIntegrations } from "@/context/IntegrationsContext";
 import {
   INTEGRATION_CATALOG,
   getConnectedIntegrationIds,
+  githubRepoSyncBranchLabel,
   isIntegrationConnected,
 } from "@/lib/integrations";
-import { jobsBySource, latestJobPerSource } from "@/lib/sync-jobs";
+import { jobsForIntegration, latestJobPerSource } from "@/lib/sync-jobs";
 
 import { IntegrationRow } from "./IntegrationRow";
 import {
@@ -36,12 +37,13 @@ export function IntegrationsDirectory({
     getStatus,
     triggerGlobalSync,
     triggerSourceSync,
+    triggerGitHubRepoSync,
+    cancelSyncJob,
     disconnect,
   } = useIntegrations();
   const { selectedApp, open, close } = useSelectedIntegration();
 
   const latestBySource = useMemo(() => latestJobPerSource(syncJobs), [syncJobs]);
-  const allJobsBySource = useMemo(() => jobsBySource(syncJobs), [syncJobs]);
   const connectedCount = getConnectedIntegrationIds(config).length;
   const isGlobalBusy = syncProgress.active || globalSyncPending;
   const progressPct =
@@ -133,13 +135,33 @@ export function IntegrationsDirectory({
                   syncing={status === "syncing"}
                   disconnecting={disconnectingSources.has(app.id)}
                   latestJob={latestBySource.get(app.id) ?? null}
-                  sourceJobs={allJobsBySource.get(app.id) ?? []}
+                  sourceJobs={jobsForIntegration(syncJobs, app.id)}
                   onConfigure={() => open(app.id)}
                   onSync={() => {
                     void triggerSourceSync(app.id);
                   }}
                   onDisconnect={() => {
                     void disconnect(app.id);
+                  }}
+                  githubRepositoryUrls={
+                    app.id === "github"
+                      ? config.github.repositoryUrls.length > 0
+                        ? config.github.repositoryUrls
+                        : config.github.repositoryUrl
+                          ? [config.github.repositoryUrl]
+                          : []
+                      : undefined
+                  }
+                  githubBranchScopeLabel={githubRepoSyncBranchLabel(config.github)}
+                  onSyncGitHubRepo={
+                    app.id === "github"
+                      ? (repositoryUrl) => {
+                          void triggerGitHubRepoSync(repositoryUrl);
+                        }
+                      : undefined
+                  }
+                  onCancelSyncJob={(jobId) => {
+                    void cancelSyncJob(jobId);
                   }}
                 />
               );

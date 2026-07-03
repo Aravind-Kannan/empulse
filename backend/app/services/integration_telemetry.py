@@ -604,6 +604,56 @@ def apply_github_telemetry(
     return ownership
 
 
+def apply_github_blame_telemetry(
+    db: Session,
+    tenant_id: uuid.UUID,
+    snapshots: list,
+) -> dict[str, dict[str, float]]:
+    """
+    Refresh KRA/ERA ownership from full-repo git blame.
+
+    Repo sync stores rich blame in Cognee, but dashboards read PostgreSQL DOA
+    snapshots — this bridges blame line ownership into those graphs.
+    """
+    global _github_synced, _doa_available
+    global _component_bus_factor, _employee_max_doa_pct, _doa_decay_evidence
+    global _github_ownership, _github_spof_components
+
+    from app.services.github_doa import persist_doa_from_code_snapshots
+
+    if not snapshots:
+        return dict(_github_ownership)
+
+    doa_result = persist_doa_from_code_snapshots(db, tenant_id, snapshots)
+    _doa_available = bool(doa_result.snapshots)
+    _component_bus_factor.clear()
+    _component_bus_factor.update(doa_result.bus_factor_by_component)
+    _employee_max_doa_pct.clear()
+    _employee_max_doa_pct.update(doa_result.employee_max_doa_pct)
+    _doa_decay_evidence = list(doa_result.decay_evidence)
+
+    ownership = doa_result.ownership
+    spof_components = {
+        component_id
+        for component_id, bf in doa_result.bus_factor_by_component.items()
+        if bf <= 1
+    }
+    if not spof_components and ownership:
+        spof_components = {
+            component_id
+            for component_id, contributors in ownership.items()
+            if contributors and max(contributors.values()) > SPOF_OWNERSHIP_THRESHOLD
+        }
+
+    _github_ownership.clear()
+    _github_ownership.update(ownership)
+    _github_spof_components.clear()
+    _github_spof_components.update(spof_components)
+    _persist_ownership_snapshots(db, tenant_id, ownership)
+    _github_synced = True
+    return ownership
+
+
 def get_jira_backlog_boost(employee_id: str) -> int:
     return _jira_backlog_by_employee.get(employee_id, 0)
 

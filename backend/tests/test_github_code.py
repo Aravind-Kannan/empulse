@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.schemas.integrations import GitHubConfigRequest
-from app.services.github_code import collect_github_code_snapshots
+from app.services.github_code import collect_github_code_snapshots, fetch_blame_ranges
 from app.services.github_types import GitHubFileChange, GitHubPullRequestActivity
 
 
@@ -52,3 +52,52 @@ def test_collect_fixture_code_snapshots():
     assert snap.blame_ranges
     assert snap.primary_authors
     assert "new_handler" in snap.patch_preview or snap.patch_preview
+
+
+def test_fetch_blame_ranges_parses_commit_blame(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "data": {
+                    "repository": {
+                        "object": {
+                            "blame": {
+                                "ranges": [
+                                    {
+                                        "startingLine": 1,
+                                        "endingLine": 10,
+                                        "commit": {
+                                            "oid": "abc123def",
+                                            "author": {
+                                                "user": {"login": "dev1"},
+                                                "name": "Dev One",
+                                                "email": "dev@example.com",
+                                            },
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+
+    monkeypatch.setattr(
+        "app.services.github_code.requests.post",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+    ranges = fetch_blame_ranges(
+        "token",
+        "acme",
+        "repo",
+        "src/main.py",
+        "main",
+        max_ranges=None,
+    )
+    assert len(ranges) == 1
+    assert ranges[0].author_login == "dev1"
+    assert ranges[0].starting_line == 1
+    assert ranges[0].ending_line == 10

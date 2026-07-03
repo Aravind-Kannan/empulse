@@ -37,6 +37,7 @@ from app.services.integration_telemetry import (
     mark_sync_completed,
 )
 from app.services.identity_resolver import resolve_author_employee_id
+from app.services.github_doa import dominant_blame_author_login
 from app.services.tenant_cognee import tenant_add_and_cognify, tenant_add_data_points
 from app.tenancy import tenant_dataset_name
 
@@ -370,7 +371,7 @@ def analyze_github_code_payload(
             )
             edge_count += 1
 
-        top_author = snap.primary_authors[0] if snap.primary_authors else None
+        top_author = dominant_blame_author_login(snap)
         if top_author:
             employee_id = resolve_author_employee_id(
                 db,

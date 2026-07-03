@@ -6,7 +6,12 @@ import uuid
 from types import SimpleNamespace
 
 from app.models.integration_sync_record import IntegrationSyncRecord
-from app.services.sync_ledger import plan_sync_ingest, record_synced_items, LedgerItem
+from app.services.sync_ledger import (
+    _github_code_version,
+    plan_sync_ingest,
+    record_synced_items,
+    LedgerItem,
+)
 
 
 def _github_node(
@@ -89,7 +94,7 @@ def test_plan_mixed_github_pr_and_code_nodes(db, tenant):
         [
             LedgerItem(
                 external_key="code|https://github.com/acme/repo|src/a.py|abc123",
-                content_version=f"blobsha1|L1-2: dev (abc1234)|{len(content)}",
+                content_version=_github_code_version(code_node),
                 display_label="src/a.py @ abc123",
                 node=code_node,
             )
@@ -103,3 +108,15 @@ def test_plan_mixed_github_pr_and_code_nodes(db, tenant):
     assert len(plan.to_ingest) == 1
     assert plan.to_ingest[0] is pr_node
 
+
+def test_github_code_version_stays_within_ledger_limit():
+    long_blame = "; ".join(
+        f"L{i}-{i + 50}: author-with-long-name ({'a' * 12})" for i in range(1, 200, 50)
+    )
+    node = SimpleNamespace(
+        blob_sha="b" * 40,
+        blame_summary=long_blame,
+        content_preview="x" * 12_000,
+    )
+    version = _github_code_version(node)
+    assert len(version) <= 64

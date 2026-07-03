@@ -20,7 +20,8 @@ from app.schemas.integration_sync_job import (
 from app.schemas.integrations import IntegrationSyncResponse
 from app.services.background_runner import run_off_main_loop
 from app.services.integration_sync import process_external_app_sync
-from app.services.sync_job_errors import format_sync_job_error
+from app.services.github_repo_sync import process_github_repo_sync
+from app.services.sync_job_errors import SyncJobCancelled, format_sync_job_error
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,33 @@ def create_integration_sync_job(
     job = IntegrationSyncJob(
         tenant_id=tenant_id,
         source=normalized,
+        job_kind="source",
         status="queued",
         progress_message="Waiting to start…",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def create_github_repo_sync_job(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    repository_url: str,
+) -> IntegrationSyncJob:
+    normalized_url = repository_url.strip().rstrip("/")
+    if not normalized_url:
+        raise HTTPException(status_code=422, detail="repository_url is required.")
+
+    job = IntegrationSyncJob(
+        tenant_id=tenant_id,
+        source="github_repo",
+        job_kind="github_repo",
+        repository_url=normalized_url,
+        status="queued",
+        progress_message="Waiting to start repository sync…",
     )
     db.add(job)
     db.commit()
@@ -100,24 +126,37 @@ def job_to_status_response(job: IntegrationSyncJob) -> IntegrationSyncJobStatusR
         status=job.status,  # type: ignore[arg-type]
         phase=job.phase,  # type: ignore[arg-type]
         progress_message=job.progress_message,
+        progress_stats=job.progress_stats,
         error=format_sync_job_error(job.error) if job.error else None,
         result=result,
         created_at=job.created_at,
         updated_at=job.updated_at,
         completed_at=job.completed_at,
+        job_kind=job.job_kind or "source",
+        repository_url=job.repository_url,
     )
 
 
 def job_to_accepted_response(job: IntegrationSyncJob) -> IntegrationSyncJobAcceptedResponse:
+    if job.job_kind == "github_repo" and job.repository_url:
+        message = (
+            f"Repository sync queued for {job.repository_url}. "
+            "Track progress in the sync jobs panel."
+        )
+    else:
+        message = (
+            f"{job.source.title()} sync queued. "
+            "Track progress in the sync jobs panel."
+        )
+
     return IntegrationSyncJobAcceptedResponse(
         job_id=job.id,
         source=job.source,
         status="queued",
         poll_url=f"/api/integrations/sync/jobs/{job.id}",
-        message=(
-            f"{job.source.title()} sync queued. "
-            "Track progress in the sync jobs panel."
-        ),
+        message=message,
+        job_kind=job.job_kind or "source",
+        repository_url=job.repository_url,
     )
 
 
@@ -128,6 +167,7 @@ def _update_job(
     status: str | None = None,
     phase: str | None = None,
     progress_message: str | None = None,
+    progress_stats: dict | None = None,
     error: str | None = None,
     result: dict | None = None,
 ) -> None:
@@ -138,26 +178,66 @@ def _update_job(
         job.phase = phase
     if progress_message is not None:
         job.progress_message = progress_message
+    if progress_stats is not None:
+        job.progress_stats = progress_stats
     if error is not None:
         job.error = error
     if result is not None:
         job.result = result
     job.updated_at = _utcnow()
-    if status in ("completed", "failed"):
+    if status in ("completed", "failed", "cancelled"):
         job.completed_at = _utcnow()
     db.commit()
 
 
+def cancel_integration_sync_job(
+    db: Session,
+    job_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> IntegrationSyncJob:
+    job = get_integration_sync_job_for_tenant(db, job_id, tenant_id)
+    if job.status not in ("queued", "running"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel sync job with status '{job.status}'.",
+        )
+
+    job.status = "cancelled"
+    job.progress_message = "Sync cancelled."
+    job.updated_at = _utcnow()
+    job.completed_at = _utcnow()
+    db.commit()
+    db.refresh(job)
+
+    task = _RUNNING_TASKS.get(job_id)
+    if task and not task.done():
+        task.cancel()
+
+    return job
+
+
+def _raise_if_job_cancelled(db: Session, job_id: uuid.UUID) -> None:
+    job = db.query(IntegrationSyncJob).filter(IntegrationSyncJob.id == job_id).one_or_none()
+    if job and job.status == "cancelled":
+        raise SyncJobCancelled()
+
+
 def make_progress_reporter(job_id: uuid.UUID):
-    def report(phase: IntegrationSyncPhase, message: str) -> None:
+    def report(
+        phase: IntegrationSyncPhase,
+        message: str,
+        stats: dict | None = None,
+    ) -> None:
         db = SessionLocal()
         try:
+            _raise_if_job_cancelled(db, job_id)
             _update_job(
                 db,
                 job_id,
                 status="running",
                 phase=phase,
                 progress_message=message,
+                progress_stats=stats,
             )
         except Exception:
             logger.exception("Failed to update sync job %s progress", job_id)
@@ -178,22 +258,51 @@ async def _execute_integration_sync_job(job_id: uuid.UUID, tenant_id: uuid.UUID)
     db = SessionLocal()
     try:
         job = db.query(IntegrationSyncJob).filter(IntegrationSyncJob.id == job_id).one()
+        if job.status == "cancelled":
+            return
         source = job.source
-        _update_job(
-            db,
-            job_id,
-            status="running",
-            phase="fetching",
-            progress_message=f"Fetching {source} data…",
-        )
+        if job.job_kind == "github_repo":
+            if not job.repository_url:
+                raise ValueError("Repository sync job is missing repository_url.")
+            _update_job(
+                db,
+                job_id,
+                status="running",
+                phase="fetching",
+                progress_message=f"Walking {job.repository_url}…",
+            )
+            report = make_progress_reporter(job_id)
 
-        report = make_progress_reporter(job_id)
-        result = await process_external_app_sync(
-            source,
-            db,
-            tenant_id,
-            progress=report,
-        )
+            def cancel_check() -> None:
+                check_db = SessionLocal()
+                try:
+                    _raise_if_job_cancelled(check_db, job_id)
+                finally:
+                    check_db.close()
+
+            result = await process_github_repo_sync(
+                db,
+                tenant_id,
+                job.repository_url,
+                progress=report,
+                cancel_check=cancel_check,
+            )
+        else:
+            _update_job(
+                db,
+                job_id,
+                status="running",
+                phase="fetching",
+                progress_message=f"Fetching {source} data…",
+            )
+
+            report = make_progress_reporter(job_id)
+            result = await process_external_app_sync(
+                source,
+                db,
+                tenant_id,
+                progress=report,
+            )
 
         _update_job(
             db,
@@ -207,11 +316,34 @@ async def _execute_integration_sync_job(job_id: uuid.UUID, tenant_id: uuid.UUID)
         from app.services.era_snapshots import refresh_era_after_integration_sync
 
         try:
-            refresh_era_after_integration_sync(db, tenant_id)
+            await asyncio.to_thread(
+                refresh_era_after_integration_sync,
+                db,
+                tenant_id,
+            )
         except Exception:
             logger.exception(
                 "ERA refresh failed after integration sync job %s", job_id
             )
+    except SyncJobCancelled:
+        logger.info("Integration sync job %s cancelled", job_id)
+    except asyncio.CancelledError:
+        logger.info("Integration sync job %s task cancelled", job_id)
+        try:
+            job = (
+                db.query(IntegrationSyncJob)
+                .filter(IntegrationSyncJob.id == job_id)
+                .one_or_none()
+            )
+            if job and job.status not in ("cancelled", "completed", "failed"):
+                _update_job(
+                    db,
+                    job_id,
+                    status="cancelled",
+                    progress_message="Sync cancelled.",
+                )
+        except Exception:
+            logger.exception("Failed to mark integration sync job %s as cancelled", job_id)
     except Exception as exc:
         logger.exception("Integration sync job %s failed", job_id)
         try:

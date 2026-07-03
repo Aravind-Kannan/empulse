@@ -102,25 +102,32 @@ def _fetch_file_content(
     return _truncate(decoded, MAX_CONTENT_CHARS), sha
 
 
-def _fetch_blame_graphql(
+def fetch_blame_ranges(
     token: str,
     owner: str,
     repo: str,
     path: str,
     ref: str,
+    *,
+    max_ranges: int | None = MAX_BLAME_RANGES,
 ) -> list[BlameRange]:
+    """Fetch git blame line ranges via Commit.blame(path) GraphQL (not Blob)."""
     query = """
-    query ($owner: String!, $name: String!, $expression: String!) {
+    query ($owner: String!, $name: String!, $expression: String!, $path: String!) {
       repository(owner: $owner, name: $name) {
         object(expression: $expression) {
-          ... on Blob {
-            blame(first: 100) {
+          ... on Commit {
+            blame(path: $path) {
               ranges {
                 startingLine
                 endingLine
                 commit {
                   oid
-                  author { user { login } }
+                  author {
+                    user { login }
+                    name
+                    email
+                  }
                 }
               }
             }
@@ -137,43 +144,118 @@ def _fetch_blame_graphql(
             "variables": {
                 "owner": owner,
                 "name": repo,
-                "expression": f"{ref}:{path}",
+                "expression": ref,
+                "path": path,
             },
         },
         timeout=45,
     )
     if response.status_code >= 400:
-        logger.warning("GitHub GraphQL blame failed for %s: %s", path, response.text[:200])
-        return []
+        logger.warning(
+            "GitHub GraphQL blame failed for %s: %s", path, response.text[:200]
+        )
+        return _fetch_blame_commits_fallback(token, owner, repo, path, ref)
 
     data = response.json()
     if data.get("errors"):
         logger.warning("GitHub GraphQL blame errors for %s: %s", path, data["errors"])
-        return []
+        return _fetch_blame_commits_fallback(token, owner, repo, path, ref)
 
-    blob = (
+    commit = (
         data.get("data", {})
         .get("repository", {})
         .get("object")
     )
-    if not blob:
-        return []
+    if not commit:
+        return _fetch_blame_commits_fallback(token, owner, repo, path, ref)
 
     ranges: list[BlameRange] = []
-    for row in blob.get("blame", {}).get("ranges", [])[:MAX_BLAME_RANGES]:
-        commit = row.get("commit") or {}
-        author = (commit.get("author") or {}).get("user") or {}
-        login = author.get("login") or "unknown"
-        oid = commit.get("oid") or ""
+    for row in (commit.get("blame") or {}).get("ranges", []):
+        commit_payload = row.get("commit") or {}
+        author = commit_payload.get("author") or {}
+        user = author.get("user") or {}
+        login = (
+            user.get("login")
+            or author.get("name")
+            or author.get("email")
+            or "unknown"
+        )
+        oid = commit_payload.get("oid") or ""
         ranges.append(
             BlameRange(
                 starting_line=int(row.get("startingLine") or 0),
                 ending_line=int(row.get("endingLine") or 0),
-                author_login=login,
+                author_login=str(login),
                 commit_sha=oid,
             )
         )
+        if max_ranges is not None and len(ranges) >= max_ranges:
+            break
+
+    if ranges:
+        return ranges
+    return _fetch_blame_commits_fallback(token, owner, repo, path, ref)
+
+
+def _fetch_blame_commits_fallback(
+    token: str,
+    owner: str,
+    repo: str,
+    path: str,
+    ref: str,
+) -> list[BlameRange]:
+    """Approximate file authorship from recent commits when GraphQL blame is unavailable."""
+    session = requests.Session()
+    try:
+        response = session.get(
+            f"{GITHUB_API}/repos/{owner}/{repo}/commits",
+            headers=_headers(token),
+            params={"path": path, "sha": ref, "per_page": 20},
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            return []
+        rows = response.json()
+        if not isinstance(rows, list):
+            return []
+    except Exception as exc:
+        logger.warning("GitHub commits fallback failed for %s: %s", path, exc)
+        return []
+
+    ranges: list[BlameRange] = []
+    line_cursor = 1
+    for row in rows:
+        commit = row.get("commit") or {}
+        author = row.get("author") or {}
+        login = author.get("login") or (commit.get("author") or {}).get("name") or "unknown"
+        oid = row.get("sha") or ""
+        ranges.append(
+            BlameRange(
+                starting_line=line_cursor,
+                ending_line=line_cursor,
+                author_login=str(login),
+                commit_sha=oid,
+            )
+        )
+        line_cursor += 1
     return ranges
+
+
+def _fetch_blame_graphql(
+    token: str,
+    owner: str,
+    repo: str,
+    path: str,
+    ref: str,
+) -> list[BlameRange]:
+    return fetch_blame_ranges(
+        token,
+        owner,
+        repo,
+        path,
+        ref,
+        max_ranges=MAX_BLAME_RANGES,
+    )
 
 
 def _fixture_code_snapshot(

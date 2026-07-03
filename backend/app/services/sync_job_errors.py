@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 
+class SyncJobCancelled(Exception):
+    """Raised when a background sync job is cancelled by the user."""
+
+
 def format_sync_job_error(exc: BaseException | str | None) -> str:
     """Map internal exceptions to short, actionable sync failure messages."""
     if exc is None:

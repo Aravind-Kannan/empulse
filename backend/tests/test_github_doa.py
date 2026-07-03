@@ -196,3 +196,53 @@ def test_signals_use_doa_when_available(db, tenant):
     )
     assert signals.uses_doa_ownership is True
     assert signals.max_github_ownership_pct > 0
+
+
+def test_compute_doa_from_blame_snapshots(db, tenant):
+    from app.services.github_code import BlameRange, GitHubCodeFileSnapshot
+    from app.services.github_doa import (
+        compute_doa_from_code_snapshots,
+        dominant_blame_author_login,
+        persist_doa_from_code_snapshots,
+    )
+    from app.services.integration_telemetry import apply_github_blame_telemetry
+
+    _seed(db, tenant.id)
+    db.add(
+        Component(
+            id="comp-api",
+            tenant_id=tenant.id,
+            name="API",
+            description="",
+        )
+    )
+    db.commit()
+
+    snap = GitHubCodeFileSnapshot(
+        repository_url="https://github.com/acme/repo",
+        file_path="backend/app/main.py",
+        ref="abc123",
+        component_id="comp-api",
+        blame_ranges=[
+            BlameRange(1, 80, "benrivera", "sha1"),
+            BlameRange(81, 100, "carapatel", "sha2"),
+        ],
+        primary_authors=["benrivera", "carapatel"],
+    )
+
+    assert dominant_blame_author_login(snap) == "benrivera"
+
+    result = compute_doa_from_code_snapshots(db, tenant.id, [snap])
+    assert "comp-api" in result.ownership
+    assert result.ownership["comp-api"]["emp-eng-001"] > result.ownership["comp-api"]["emp-eng-002"]
+
+    persist_doa_from_code_snapshots(db, tenant.id, [snap])
+    rows = (
+        db.query(DoaFileSnapshot)
+        .filter(DoaFileSnapshot.tenant_id == tenant.id)
+        .all()
+    )
+    assert len(rows) == 2
+
+    ownership = apply_github_blame_telemetry(db, tenant.id, [snap])
+    assert ownership["comp-api"]["emp-eng-001"] > 50

@@ -17,6 +17,7 @@ from app.schemas.integrations import (
     GitHubConfigRequest,
     GitHubDiscoverRequest,
     GitHubDiscoverResponse,
+    GitHubRepoSyncRequest,
     GitHubValidateRequest,
     IntegrationConfigResponse,
     IntegrationValidateResponse,
@@ -57,6 +58,8 @@ from app.services.integration_validate import (
     validate_slack_bot_token,
 )
 from app.services.integration_sync_jobs import (
+    cancel_integration_sync_job,
+    create_github_repo_sync_job,
     create_integration_sync_job,
     get_integration_sync_job_for_tenant,
     job_to_accepted_response,
@@ -530,6 +533,59 @@ def get_sync_job_status(
 ) -> IntegrationSyncJobStatusResponse:
     job = get_integration_sync_job_for_tenant(db, job_id, tenant.id)
     return job_to_status_response(job)
+
+
+@router.post(
+    "/sync/jobs/{job_id}/cancel",
+    response_model=IntegrationSyncJobStatusResponse,
+)
+def cancel_sync_job(
+    job_id: uuid.UUID,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationSyncJobStatusResponse:
+    job = cancel_integration_sync_job(db, job_id, tenant.id)
+    return job_to_status_response(job)
+
+
+@router.post(
+    "/github/repos/sync",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=IntegrationSyncJobAcceptedResponse,
+)
+async def sync_github_repository(
+    payload: GitHubRepoSyncRequest,
+    tenant: CurrentTenant,
+    db: Session = Depends(get_db),
+) -> IntegrationSyncJobAcceptedResponse:
+    repository_url = payload.repository_url.strip().rstrip("/")
+    github_config = get_github_config(db, tenant.id)
+    if not github_config:
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub integration is not configured.",
+        )
+
+    configured_urls = {
+        url.strip().rstrip("/")
+        for url in github_config.resolved_repository_urls()
+    }
+    if repository_url not in configured_urls:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Repository '{repository_url}' is not configured. "
+                "Add it under GitHub integration settings first."
+            ),
+        )
+
+    job = create_github_repo_sync_job(
+        db,
+        tenant_id=tenant.id,
+        repository_url=repository_url,
+    )
+    schedule_integration_sync_job(job.id, tenant.id)
+    return job_to_accepted_response(job)
 
 
 @router.post(

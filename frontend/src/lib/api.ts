@@ -1004,6 +1004,21 @@ export async function syncIntegrationSource(
   return response.json();
 }
 
+export async function syncGitHubRepository(
+  repositoryUrl: string,
+): Promise<IntegrationSyncJobAcceptedResponse> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/github/repos/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repository_url: repositoryUrl }),
+    timeoutMs: 45_000,
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "GitHub repository sync failed"));
+  }
+  return response.json();
+}
+
 export async function syncAllIntegrations(): Promise<IntegrationSyncJobsAcceptedResponse> {
   const response = await apiFetch(`${API_BASE}/api/integrations/sync`, {
     method: "POST",
@@ -1041,6 +1056,19 @@ export async function fetchIntegrationSyncJobStatus(
   });
   if (!response.ok) {
     throw new Error(await parseApiError(response, "Failed to load sync job"));
+  }
+  return response.json();
+}
+
+export async function cancelIntegrationSyncJob(
+  jobId: string,
+): Promise<IntegrationSyncJobStatusResponse> {
+  const response = await apiFetch(
+    `${API_BASE}/api/integrations/sync/jobs/${jobId}/cancel`,
+    { method: "POST", timeoutMs: 15_000 },
+  );
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Failed to cancel sync job"));
   }
   return response.json();
 }

@@ -1,10 +1,11 @@
 "use client";
 
-import { CheckCircle2, Clock, Loader2, RefreshCw, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, Loader2, RefreshCw, Square, XCircle } from "lucide-react";
 
-import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
+import { RepoSyncProgress } from "./RepoSyncProgress";
 import { INTEGRATION_CATALOG, type IntegrationId } from "@/lib/integrations";
 import { formatSyncJobError } from "@/lib/sync-errors";
+import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 
 const PHASE_LABELS: Record<string, string> = {
   fetching: "Fetching data",
@@ -13,7 +14,17 @@ const PHASE_LABELS: Record<string, string> = {
   finalizing: "Finishing",
 };
 
-function sourceLabel(source: string): string {
+function sourceLabel(source: string, job?: IntegrationSyncJobStatusResponse): string {
+  if (job?.job_kind === "github_repo" && job.repository_url) {
+    try {
+      const parts = new URL(job.repository_url).pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) {
+        return `GitHub · ${parts[0]}/${parts[1]}`;
+      }
+    } catch {
+      // fall through
+    }
+  }
   return (
     INTEGRATION_CATALOG.find((app) => app.id === source)?.name ??
     source.charAt(0).toUpperCase() + source.slice(1)
@@ -28,6 +39,8 @@ function statusStyles(status: IntegrationSyncJobStatusResponse["status"]) {
       return "border-red-500/30 bg-red-500/10 text-red-400";
     case "running":
       return "border-sky-500/30 bg-sky-500/10 text-sky-400";
+    case "cancelled":
+      return "border-zinc-600/50 bg-zinc-800/40 text-zinc-400";
     default:
       return "border-zinc-700 bg-zinc-900/60 text-zinc-400";
   }
@@ -41,11 +54,13 @@ function formatWhen(iso: string | null): string {
 function JobRow({
   job,
   onRetry,
+  onCancel,
   compact = false,
   embedded = false,
 }: {
   job: IntegrationSyncJobStatusResponse;
   onRetry?: (source: IntegrationId) => void;
+  onCancel?: (jobId: string) => void;
   compact?: boolean;
   embedded?: boolean;
 }) {
@@ -65,7 +80,7 @@ function JobRow({
           <div className="flex flex-wrap items-center gap-2">
             {!embedded && (
               <p className="text-sm font-medium text-zinc-100">
-                {sourceLabel(job.source)}
+                {sourceLabel(job.source, job)}
               </p>
             )}
             <span
@@ -85,7 +100,11 @@ function JobRow({
             {job.progress_message ?? (isActive ? "Starting…" : "No progress details")}
           </p>
 
-          {phaseLabel && isActive && (
+          {isActive && job.job_kind === "github_repo" && (
+            <RepoSyncProgress job={job} compact={embedded || compact} />
+          )}
+
+          {phaseLabel && isActive && job.job_kind !== "github_repo" && (
             <p className="mt-1 text-[11px] text-zinc-500">Phase: {phaseLabel}</p>
           )}
 
@@ -134,12 +153,24 @@ function JobRow({
                   className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-sky-400 hover:text-sky-300"
                 >
                   <RefreshCw className="h-3 w-3" />
-                  Retry {sourceLabel(job.source)}
+                  Retry {sourceLabel(job.source, job)}
                 </button>
               )}
             </div>
           )}
         </div>
+
+        {isActive && onCancel && (
+          <button
+            type="button"
+            onClick={() => onCancel(job.job_id)}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-[10px] font-medium text-zinc-300 hover:border-red-500/40 hover:text-red-300"
+            title="Stop sync"
+          >
+            <Square className="h-3 w-3 fill-current" />
+            Stop
+          </button>
+        )}
       </div>
     </li>
   );
@@ -148,6 +179,7 @@ function JobRow({
 interface SyncJobsPanelProps {
   jobs: IntegrationSyncJobStatusResponse[];
   onRetrySource?: (source: IntegrationId) => void;
+  onCancelJob?: (jobId: string) => void;
   compact?: boolean;
   embedded?: boolean;
   sourceFilter?: IntegrationId;
@@ -157,13 +189,18 @@ interface SyncJobsPanelProps {
 export function SyncJobsPanel({
   jobs,
   onRetrySource,
+  onCancelJob,
   compact = false,
   embedded = false,
   sourceFilter,
   maxHistory,
 }: SyncJobsPanelProps) {
   const filtered = sourceFilter
-    ? jobs.filter((job) => job.source === sourceFilter)
+    ? jobs.filter((job) =>
+        sourceFilter === "github"
+          ? job.source === "github" || job.source === "github_repo"
+          : job.source === sourceFilter,
+      )
     : jobs;
   const sorted = [...filtered].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
@@ -174,7 +211,8 @@ export function SyncJobsPanel({
     (job) => job.status === "queued" || job.status === "running",
   );
   const pastJobs = sorted.filter(
-    (job) => job.status === "completed" || job.status === "failed",
+    (job) =>
+      job.status === "completed" || job.status === "failed" || job.status === "cancelled",
   );
 
   if (sorted.length === 0) {
@@ -244,6 +282,7 @@ export function SyncJobsPanel({
               <JobRow
                 key={job.job_id}
                 job={job}
+                onCancel={onCancelJob}
                 compact={compact}
                 embedded={embedded}
               />

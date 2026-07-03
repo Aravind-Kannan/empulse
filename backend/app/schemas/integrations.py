@@ -183,9 +183,20 @@ class IntegrationSyncResponse(BaseModel):
     items_skipped: int = 0
     skipped_preview: list[str] = Field(default_factory=list)
     already_synced_note: str = ""
+    repository_url: str = ""
+    branch: str = ""
+    ref: str = ""
+    files_discovered: int = 0
+    files_mapped_to_components: int = 0
+    branches_synced: list[str] = Field(default_factory=list)
+    branches_total: int = 0
     channels_discovered: int | None = None
     channels_synced: int | None = None
     messages_ingested: int | None = None
+
+
+class GitHubRepoSyncRequest(BaseModel):
+    repository_url: str = Field(min_length=1)
 
 
 class GlobalSyncResponse(BaseModel):

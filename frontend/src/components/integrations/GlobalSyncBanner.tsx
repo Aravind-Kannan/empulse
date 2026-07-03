@@ -68,6 +68,7 @@ export function GlobalSyncBanner() {
     globalSyncPending,
     triggerGlobalSync,
     triggerSourceSync,
+    cancelSyncJob,
   } = useIntegrations();
 
   const connectedCount = getConnectedIntegrationIds(config).length;
@@ -203,6 +204,9 @@ export function GlobalSyncBanner() {
           jobs={syncJobs}
           onRetrySource={(source) => {
             void triggerSourceSync(source);
+          }}
+          onCancelJob={(jobId) => {
+            void cancelSyncJob(jobId);
           }}
         />
       </div>

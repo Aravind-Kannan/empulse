@@ -621,13 +621,29 @@ export interface IntegrationSyncResult {
   items_skipped?: number;
   skipped_preview?: string[];
   already_synced_note?: string;
+  repository_url?: string;
+  branch?: string;
+  ref?: string;
+  files_discovered?: number;
+  files_mapped_to_components?: number;
+  branches_synced?: string[];
+  branches_total?: number;
+}
+
+export interface IntegrationSyncProgressStats {
+  branches_total?: number;
+  branches_completed?: number;
+  current_branch?: string;
+  files_total?: number;
+  files_completed?: number;
 }
 
 export type IntegrationSyncJobStatus =
   | "queued"
   | "running"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type IntegrationSyncPhase =
   | "fetching"
@@ -641,6 +657,8 @@ export interface IntegrationSyncJobAcceptedResponse {
   status: IntegrationSyncJobStatus;
   poll_url: string;
   message: string;
+  job_kind?: string;
+  repository_url?: string | null;
 }
 
 export interface IntegrationSyncJobsAcceptedResponse {
@@ -654,11 +672,14 @@ export interface IntegrationSyncJobStatusResponse {
   status: IntegrationSyncJobStatus;
   phase: IntegrationSyncPhase | null;
   progress_message: string | null;
+  progress_stats?: IntegrationSyncProgressStats | null;
   error: string | null;
   result: IntegrationSyncResult | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  job_kind?: string;
+  repository_url?: string | null;
 }
 
 export interface IntegrationSyncJobListResponse {

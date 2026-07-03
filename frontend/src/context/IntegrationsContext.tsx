@@ -15,8 +15,10 @@ import {
   deleteIntegrationConfig,
   fetchIntegrationConfig,
   fetchIntegrationSyncJobs,
+  cancelIntegrationSyncJob,
   saveAndSyncIntegration,
   syncAllIntegrations,
+  syncGitHubRepository,
   syncIntegrationSource,
 } from "@/lib/api";
 import { formatFetchError } from "@/lib/api-client";
@@ -127,6 +129,8 @@ interface IntegrationsContextValue {
   getStatus: (id: IntegrationId) => IntegrationStatus;
   triggerGlobalSync: () => Promise<void>;
   triggerSourceSync: (id: IntegrationId) => Promise<void>;
+  triggerGitHubRepoSync: (repositoryUrl: string) => Promise<void>;
+  cancelSyncJob: (jobId: string) => Promise<void>;
   refreshSyncJobs: () => Promise<void>;
 }
 
@@ -135,7 +139,20 @@ const IntegrationsContext = createContext<IntegrationsContextValue | null>(null)
 const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira", "notion", "slack"]);
 const SYNC_POLL_INTERVAL_MS = 2000;
 
-function sourceDisplayName(source: string): string {
+function sourceDisplayName(
+  source: string,
+  job?: IntegrationSyncJobStatusResponse,
+): string {
+  if (job?.job_kind === "github_repo" && job.repository_url) {
+    try {
+      const parts = new URL(job.repository_url).pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) {
+        return `GitHub ${parts[0]}/${parts[1]}`;
+      }
+    } catch {
+      // fall through
+    }
+  }
   return (
     INTEGRATION_CATALOG.find((app) => app.id === source)?.name ??
     source.charAt(0).toUpperCase() + source.slice(1)
@@ -150,7 +167,9 @@ function deriveStatuses(
   const activeSources = new Set(
     syncJobs
       .filter((job) => job.status === "queued" || job.status === "running")
-      .map((job) => job.source as IntegrationId),
+      .map((job) =>
+        job.source === "github_repo" ? ("github" as IntegrationId) : (job.source as IntegrationId),
+      ),
   );
 
   const statuses = {} as Record<IntegrationId, IntegrationStatus>;
@@ -178,7 +197,7 @@ function deriveSyncProgress(
   );
   const completed = syncJobs
     .filter((job) => job.status === "completed")
-    .map((job) => sourceDisplayName(job.source));
+    .map((job) => sourceDisplayName(job.source, job));
   const failedJob = syncJobs.find((job) => job.status === "failed");
 
   const currentJob = activeJobs[0];
@@ -196,7 +215,7 @@ function deriveSyncProgress(
 
   return {
     active: activeJobs.length > 0,
-    currentSource: currentJob ? sourceDisplayName(currentJob.source) : null,
+    currentSource: currentJob ? sourceDisplayName(currentJob.source, currentJob) : null,
     completed,
     total,
     error: failedJob?.error ?? null,
@@ -450,6 +469,46 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     [config, refreshSyncJobs],
   );
 
+  const triggerGitHubRepoSync = useCallback(
+    async (repositoryUrl: string) => {
+      if (!isIntegrationConnected("github", config)) return;
+
+      setSyncActionError(null);
+      setPendingSyncSources((prev) => new Set(prev).add("github"));
+
+      try {
+        await syncGitHubRepository(repositoryUrl);
+        await refreshSyncJobs();
+      } catch (err) {
+        setSyncActionError(
+          formatSyncJobError(formatFetchError(err, "Repository sync failed")),
+        );
+      } finally {
+        setPendingSyncSources((prev) => {
+          const next = new Set(prev);
+          next.delete("github");
+          return next;
+        });
+      }
+    },
+    [config, refreshSyncJobs],
+  );
+
+  const cancelSyncJob = useCallback(
+    async (jobId: string) => {
+      setSyncActionError(null);
+      try {
+        await cancelIntegrationSyncJob(jobId);
+        await refreshSyncJobs();
+      } catch (err) {
+        setSyncActionError(
+          formatSyncJobError(formatFetchError(err, "Failed to cancel sync")),
+        );
+      }
+    },
+    [refreshSyncJobs],
+  );
+
   const triggerGlobalSync = useCallback(async () => {
     if (globalSyncInFlight.current) return;
 
@@ -502,6 +561,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       getStatus,
       triggerGlobalSync,
       triggerSourceSync,
+      triggerGitHubRepoSync,
+      cancelSyncJob,
       refreshSyncJobs,
     }),
     [
@@ -519,6 +580,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       getStatus,
       triggerGlobalSync,
       triggerSourceSync,
+      triggerGitHubRepoSync,
+      cancelSyncJob,
       refreshSyncJobs,
     ],
   );

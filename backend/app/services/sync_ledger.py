@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -82,8 +83,18 @@ def _github_code_key(node: Any) -> str:
     return f"code|{node.repository_url}|{node.file_path}|{node.ref}"
 
 
+def _ledger_content_version(*parts: object) -> str:
+    """Stable short fingerprint for ledger change detection (fits VARCHAR(256))."""
+    payload = "|".join(str(part) for part in parts)
+    return hashlib.sha256(payload.encode()).hexdigest()[:64]
+
+
 def _github_code_version(node: Any) -> str:
-    return f"{node.blob_sha}|{node.blame_summary}|{len(node.content_preview)}"
+    return _ledger_content_version(
+        node.blob_sha,
+        node.blame_summary,
+        len(node.content_preview),
+    )
 
 
 def _github_code_label(node: Any) -> str:

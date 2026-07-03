@@ -6,7 +6,8 @@ export function jobsBySource(
 ): Map<IntegrationId, IntegrationSyncJobStatusResponse[]> {
   const bySource = new Map<IntegrationId, IntegrationSyncJobStatusResponse[]>();
   for (const job of jobs) {
-    const source = job.source as IntegrationId;
+    const source =
+      job.source === "github_repo" ? ("github" as IntegrationId) : (job.source as IntegrationId);
     const existing = bySource.get(source) ?? [];
     existing.push(job);
     bySource.set(source, existing);
@@ -14,12 +15,25 @@ export function jobsBySource(
   return bySource;
 }
 
+export function jobsForIntegration(
+  jobs: IntegrationSyncJobStatusResponse[],
+  integrationId: IntegrationId,
+): IntegrationSyncJobStatusResponse[] {
+  if (integrationId === "github") {
+    return jobs.filter(
+      (job) => job.source === "github" || job.source === "github_repo",
+    );
+  }
+  return jobs.filter((job) => job.source === integrationId);
+}
+
 export function latestJobPerSource(
   jobs: IntegrationSyncJobStatusResponse[],
 ): Map<IntegrationId, IntegrationSyncJobStatusResponse> {
   const bySource = new Map<IntegrationId, IntegrationSyncJobStatusResponse>();
   for (const job of jobs) {
-    const source = job.source as IntegrationId;
+    const source =
+      job.source === "github_repo" ? ("github" as IntegrationId) : (job.source as IntegrationId);
     const existing = bySource.get(source);
     if (
       !existing ||
@@ -29,6 +43,21 @@ export function latestJobPerSource(
     }
   }
   return bySource;
+}
+
+export function syncJobLabel(job: IntegrationSyncJobStatusResponse): string {
+  if (job.job_kind === "github_repo" && job.repository_url) {
+    try {
+      const parts = new URL(job.repository_url).pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) {
+        return `GitHub repo ${parts[0]}/${parts[1]}`;
+      }
+    } catch {
+      // fall through
+    }
+    return `GitHub repo ${job.repository_url}`;
+  }
+  return job.source.charAt(0).toUpperCase() + job.source.slice(1);
 }
 
 export function syncStatusLabel(
@@ -44,6 +73,9 @@ export function syncStatusLabel(
   }
   if (job?.status === "failed") {
     return { text: "Sync failed", className: "text-red-400" };
+  }
+  if (job?.status === "cancelled") {
+    return { text: "Cancelled", className: "text-zinc-500" };
   }
   if (!connected) {
     return { text: "Not connected", className: "text-zinc-500" };

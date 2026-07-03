@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.operational import Assignment, Component, DoaFileSnapshot, Employee
+from app.services.github_code import GitHubCodeFileSnapshot
 from app.services.github_types import GitHubPullRequestActivity
 from app.services.identity_resolver import resolve_author_employee_id
 
@@ -72,6 +73,11 @@ def _should_exclude_path(path: str) -> bool:
     if any(normalized.endswith(ext) for ext in BINARY_EXTENSIONS):
         return True
     return any(normalized.startswith(prefix) for prefix in VENDOR_PREFIXES)
+
+
+def should_exclude_repo_path(path: str) -> bool:
+    """Skip vendor trees and binary blobs during full-repository walks."""
+    return _should_exclude_path(path)
 
 
 def _fritz_doa_score(
@@ -188,6 +194,198 @@ def compute_bus_factor(authoritative_by_file: dict[str, list[str]]) -> int:
         covered |= remaining.pop(best_author)
         bus_factor += 1
     return bus_factor
+
+
+def _blame_line_weights_by_login(snap: GitHubCodeFileSnapshot) -> dict[str, int]:
+    weights: dict[str, int] = defaultdict(int)
+    for row in snap.blame_ranges:
+        login = (row.author_login or "").strip()
+        if not login or login.lower() == "unknown":
+            continue
+        lines = max(1, row.ending_line - row.starting_line + 1)
+        weights[login] += lines
+    return dict(weights)
+
+
+def dominant_blame_author_login(snap: GitHubCodeFileSnapshot) -> str | None:
+    """Author with the most blamed lines in a file snapshot."""
+    weights = _blame_line_weights_by_login(snap)
+    if not weights:
+        return snap.primary_authors[0] if snap.primary_authors else None
+    return max(weights, key=weights.get)
+
+
+def compute_doa_from_code_snapshots(
+    db: Session,
+    tenant_id: uuid.UUID,
+    snapshots: list[GitHubCodeFileSnapshot],
+) -> DoaComputationResult:
+    """Build per-file DOA from git blame line ownership (full-repo sync)."""
+    per_component_files: dict[str, dict[str, list[DoaContributorScore]]] = defaultdict(dict)
+    employee_max_doa: dict[str, float] = defaultdict(float)
+    authoritative_by_component: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    now = datetime.now(UTC)
+
+    for snap in snapshots:
+        if not snap.component_id or _should_exclude_path(snap.file_path):
+            continue
+        weights = _blame_line_weights_by_login(snap)
+        if not weights:
+            continue
+
+        total_lines = sum(weights.values()) or 1
+        scores: list[DoaContributorScore] = []
+        for login, line_count in weights.items():
+            employee_id = resolve_author_employee_id(
+                db,
+                tenant_id,
+                "github",
+                f"gh-{login}",
+                quarantine_event_type="github_blame",
+                quarantine_payload={
+                    "file_path": snap.file_path,
+                    "ref": snap.ref,
+                    "author_login": login,
+                },
+            )
+            if not employee_id:
+                continue
+            share = line_count / total_lines
+            is_author = share >= DOA_AUTHOR_THRESHOLD
+            scores.append(
+                DoaContributorScore(
+                    employee_id=employee_id,
+                    doa_score=round(share, 4),
+                    is_author=is_author,
+                    last_touch_at=now,
+                    decay_score=0.0,
+                )
+            )
+            employee_max_doa[employee_id] = max(
+                employee_max_doa[employee_id],
+                share * 100.0,
+            )
+            if is_author:
+                authoritative_by_component[snap.component_id][snap.file_path].append(
+                    employee_id
+                )
+
+        if scores:
+            per_component_files[snap.component_id][snap.file_path] = scores
+
+    ownership: dict[str, dict[str, float]] = {}
+    bus_factor_by_component: dict[str, int] = {}
+
+    for component_id, files in per_component_files.items():
+        if len(files) > MAX_FILES_PER_COMPONENT:
+            top_paths = sorted(
+                files.keys(),
+                key=lambda path: sum(score.doa_score for score in files[path]),
+                reverse=True,
+            )[:MAX_FILES_PER_COMPONENT]
+            files = {path: files[path] for path in top_paths}
+
+        contributor_weight: dict[str, float] = defaultdict(float)
+        for file_scores in files.values():
+            for score in file_scores:
+                contributor_weight[score.employee_id] += score.doa_score
+
+        total_weight = sum(contributor_weight.values()) or 1.0
+        ownership[component_id] = {
+            employee_id: round((weight / total_weight) * 100, 1)
+            for employee_id, weight in contributor_weight.items()
+        }
+
+        auth_map = {
+            path: authors
+            for path, authors in authoritative_by_component.get(component_id, {}).items()
+            if path in files
+        }
+        bus_factor_by_component[component_id] = compute_bus_factor(auth_map)
+
+    return DoaComputationResult(
+        ownership=dict(ownership),
+        bus_factor_by_component=bus_factor_by_component,
+        employee_max_doa_pct=dict(employee_max_doa),
+        decay_evidence=[],
+    )
+
+
+def persist_doa_from_code_snapshots(
+    db: Session,
+    tenant_id: uuid.UUID,
+    snapshots: list[GitHubCodeFileSnapshot],
+    *,
+    computed_at: datetime | None = None,
+) -> DoaComputationResult:
+    """Replace DOA file snapshots with blame-derived ownership from a repo walk."""
+    result = compute_doa_from_code_snapshots(db, tenant_id, snapshots)
+    valid_components = {
+        row[0]
+        for row in db.query(Component.id).filter(Component.tenant_id == tenant_id).all()
+    }
+    valid_employees = {
+        row[0]
+        for row in db.query(Employee.id).filter(Employee.tenant_id == tenant_id).all()
+    }
+    if not valid_employees:
+        valid_employees = {
+            row[0]
+            for row in db.query(Assignment.employee_id)
+            .filter(Assignment.tenant_id == tenant_id)
+            .all()
+        }
+
+    now = computed_at or datetime.now(UTC)
+    db.query(DoaFileSnapshot).filter(DoaFileSnapshot.tenant_id == tenant_id).delete(
+        synchronize_session=False
+    )
+
+    persisted: list[DoaFileSnapshot] = []
+    for snap in snapshots:
+        if not snap.component_id or snap.component_id not in valid_components:
+            continue
+        if _should_exclude_path(snap.file_path):
+            continue
+        weights = _blame_line_weights_by_login(snap)
+        if not weights:
+            continue
+        total_lines = sum(weights.values()) or 1
+        for login, line_count in weights.items():
+            employee_id = resolve_author_employee_id(
+                db,
+                tenant_id,
+                "github",
+                f"gh-{login}",
+                quarantine_event_type="github_blame",
+                quarantine_payload={
+                    "file_path": snap.file_path,
+                    "ref": snap.ref,
+                    "author_login": login,
+                },
+            )
+            if not employee_id or employee_id not in valid_employees:
+                continue
+            share = line_count / total_lines
+            row = DoaFileSnapshot(
+                tenant_id=tenant_id,
+                component_id=snap.component_id,
+                file_path=snap.file_path,
+                employee_id=employee_id,
+                doa_score=round(share, 4),
+                is_author=share >= DOA_AUTHOR_THRESHOLD,
+                last_touch_at=now,
+                decay_score=0.0,
+                computed_at=now,
+            )
+            db.add(row)
+            persisted.append(row)
+
+    db.flush()
+    result.snapshots = persisted
+    return result
 
 
 def compute_doa_from_activities(

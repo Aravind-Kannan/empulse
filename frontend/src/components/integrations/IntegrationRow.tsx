@@ -15,6 +15,8 @@ import { syncStatusLabel } from "@/lib/sync-jobs";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 
 import { IntegrationLogo } from "./IntegrationLogos";
+import { GitHubRepoSyncPanel } from "./GitHubRepoSyncPanel";
+import { RepoSyncProgress } from "./RepoSyncProgress";
 import { SyncJobsPanel } from "./SyncJobsPanel";
 
 const STATUS_STYLES: Record<
@@ -54,6 +56,10 @@ interface IntegrationRowProps {
   onConfigure: () => void;
   onSync: () => void;
   onDisconnect: () => void;
+  githubRepositoryUrls?: string[];
+  githubBranchScopeLabel?: string;
+  onSyncGitHubRepo?: (repositoryUrl: string) => void;
+  onCancelSyncJob?: (jobId: string) => void;
 }
 
 export function IntegrationRow({
@@ -67,6 +73,10 @@ export function IntegrationRow({
   onConfigure,
   onSync,
   onDisconnect,
+  githubRepositoryUrls = [],
+  githubBranchScopeLabel = "main",
+  onSyncGitHubRepo,
+  onCancelSyncJob,
 }: IntegrationRowProps) {
   const badge = STATUS_STYLES[status];
   const isConnected = status === "connected" || status === "syncing";
@@ -123,6 +133,13 @@ export function IntegrationRow({
                     · {latestJob.progress_message}
                   </span>
                 )}
+                {isActive &&
+                  latestJob?.job_kind === "github_repo" &&
+                  latestJob.progress_stats && (
+                    <div className="mt-1.5 w-full max-w-md">
+                      <RepoSyncProgress job={latestJob} compact />
+                    </div>
+                  )}
                 {!isActive &&
                   latestJob?.status === "completed" &&
                   latestJob.completed_at && (
@@ -218,6 +235,18 @@ export function IntegrationRow({
         </div>
       </div>
 
+      {app.id === "github" &&
+        connected &&
+        githubRepositoryUrls.length > 0 &&
+        onSyncGitHubRepo && (
+          <GitHubRepoSyncPanel
+            repositoryUrls={githubRepositoryUrls}
+            branchScopeLabel={githubBranchScopeLabel}
+            syncJobs={sourceJobs}
+            onSyncRepo={onSyncGitHubRepo}
+          />
+        )}
+
       {showHistory && historyOpen && (
         <div className="border-t border-zinc-800/80 bg-zinc-950/60 px-4 py-3 sm:px-5">
           <SyncJobsPanel
@@ -226,6 +255,7 @@ export function IntegrationRow({
             compact
             maxHistory={8}
             onRetrySource={() => onSync()}
+            onCancelJob={onCancelSyncJob}
           />
         </div>
       )}

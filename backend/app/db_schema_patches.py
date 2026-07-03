@@ -164,6 +164,34 @@ def apply_schema_patches(engine: Engine) -> None:
                     text("CREATE INDEX IF NOT EXISTS ix_employees_active ON employees (active)")
                 )
 
+        if inspector.has_table("integration_sync_jobs"):
+            job_columns = _column_names(inspector, "integration_sync_jobs")
+            if "job_kind" not in job_columns:
+                logger.info("Adding job_kind column to integration_sync_jobs")
+                conn.execute(
+                    text(
+                        "ALTER TABLE integration_sync_jobs "
+                        "ADD COLUMN job_kind VARCHAR(32) NOT NULL DEFAULT 'source'"
+                    )
+                )
+            if "repository_url" not in job_columns:
+                logger.info("Adding repository_url column to integration_sync_jobs")
+                conn.execute(
+                    text(
+                        "ALTER TABLE integration_sync_jobs "
+                        "ADD COLUMN repository_url VARCHAR(512)"
+                    )
+                )
+            job_columns = _column_names(inspector, "integration_sync_jobs")
+            if "progress_stats" not in job_columns:
+                logger.info("Adding progress_stats column to integration_sync_jobs")
+                conn.execute(
+                    text(
+                        "ALTER TABLE integration_sync_jobs "
+                        "ADD COLUMN progress_stats JSON"
+                    )
+                )
+
     from app.models.operational import (
         DoaFileSnapshot,
         EraAlert,

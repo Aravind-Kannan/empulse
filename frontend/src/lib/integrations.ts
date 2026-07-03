@@ -108,8 +108,8 @@ export const INTEGRATION_CATALOG: IntegrationDefinition[] = [
     syncPullItems: [
       "Merged PRs from configured repos & branches (6-month window)",
       "Per-PR file paths, LOC changes, and diff patch previews",
-      "Source file contents (up to 40 mapped files per sync)",
-      "Git blame line ranges and primary author attribution",
+      "Full-repo sync: default branch fully, other branches as diffs only",
+      "Source file contents + paginated git blame per file",
       "contributedTo, modifies, documentsComponent, and blameAttributedTo edges",
     ],
     accent: "text-zinc-100",
@@ -191,6 +191,18 @@ export function parseGitHubBranchTargets(raw: string): string[] {
     if (!branches.includes(branch)) branches.push(branch);
   }
   return branches;
+}
+
+/** Human label for which branches full-repo sync will walk. */
+export function githubRepoSyncBranchLabel(config: GitHubConfig): string {
+  if (config.syncAllBranches) return "all branches";
+  const branches =
+    config.branchTargets.length > 0
+      ? config.branchTargets
+      : config.branchTarget.trim()
+        ? [config.branchTarget.trim()]
+        : ["main"];
+  return branches.join(", ");
 }
 
 /** Returns an error message when the draft config is invalid, otherwise null. */
