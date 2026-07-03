@@ -42,6 +42,7 @@ class KraBackupAssignmentResponse(BaseModel):
 
 class KraMetricCoverage(BaseModel):
     github: Literal["confirmed", "partial", "missing"] = "missing"
+    notion: Literal["confirmed", "partial", "missing"] = "missing"
     is_partial: bool = True
 
 
@@ -61,5 +62,24 @@ class CriticalSpofResult(BaseModel):
     data_completeness: KraMetricCoverage
 
 
+class DocumentationGapComponent(BaseModel):
+    component_id: str
+    component_name: str
+    gap_reason: Literal["missing", "stale"]
+    last_doc_edit: str | None = None
+    notion_sources: list[str] = Field(default_factory=list)
+    notion_page_urls: list[str] = Field(default_factory=list)
+    days_since_activity: int | None = None
+
+
+class DocumentationCoverageResult(BaseModel):
+    coverage_pct: int | None
+    active_component_count: int
+    covered_count: int
+    gap_components: list[DocumentationGapComponent] = Field(default_factory=list)
+    data_completeness: KraMetricCoverage
+
+
 class KraSummaryResponse(BaseModel):
     critical_spof: CriticalSpofResult
+    documentation_coverage: DocumentationCoverageResult

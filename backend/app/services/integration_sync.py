@@ -559,6 +559,38 @@ async def process_external_app_sync(
             component_id: component.name
             for component_id, component in components_by_id.items()
         }
+        github_config = get_github_config(db, tenant_id)
+        path_component_map = dict(github_config.path_component_map or {}) if github_config else {}
+        repo_doc_pages: list[dict] = []
+        from app.services.notion_repo_pack import (
+            fetch_github_notion_doc_pack,
+            fetch_local_notion_doc_pack,
+        )
+
+        if github_config and github_config.personal_access_token:
+            repo_urls = [
+                url.strip()
+                for url in (github_config.repository_urls or [])
+                if url.strip()
+            ]
+            if not repo_urls and github_config.repository_url:
+                repo_urls = [github_config.repository_url.strip()]
+            branch = (github_config.branch_target or "main").strip() or "main"
+            for repo_url in repo_urls:
+                repo_doc_pages.extend(
+                    fetch_github_notion_doc_pack(
+                        github_config.personal_access_token,
+                        repo_url,
+                        component_names=component_names,
+                        path_component_map=path_component_map,
+                        branch=branch,
+                    )
+                )
+        if not repo_doc_pages:
+            repo_doc_pages = fetch_local_notion_doc_pack(
+                component_names=component_names,
+                path_component_map=path_component_map,
+            )
         if use_notion_fixture:
             pages, people_expertise = load_fixture_document_inventory()
         else:
@@ -567,6 +599,8 @@ async def process_external_app_sync(
                 config.integration_token,
                 config.database_ids or None,
                 component_names=component_names,
+                path_component_map=path_component_map,
+                repo_doc_pages=repo_doc_pages,
             )
         employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
         email_to_employee = {employee.email.lower(): employee.id for employee in employees}

@@ -233,3 +233,29 @@ def test_notion_config_round_trip(db, tenant):
     config = get_notion_config(db, tenant.id)
     assert config is not None
     assert config.integration_token == "secret_test_token"
+
+
+def test_compute_notion_telemetry_accepts_naive_db_datetimes(db, tenant):
+    _seed(db, tenant.id)
+    from app.models.operational import NotionDocSnapshot
+    from app.services.integration_telemetry import hydrate_notion_telemetry_from_db, reset_telemetry_for_tests
+
+    db.add(
+        NotionDocSnapshot(
+            tenant_id=tenant.id,
+            page_id="page-naive",
+            title="Payment Gateway Runbook",
+            page_url="https://notion.so/page-naive",
+            component_id="comp-payments",
+            page_kind="runbook",
+            last_edited_at=datetime(2026, 6, 1),
+            is_stale=False,
+            is_archived=False,
+            computed_at=datetime(2026, 7, 1),
+        )
+    )
+    db.commit()
+
+    reset_telemetry_for_tests()
+    assert hydrate_notion_telemetry_from_db(db, tenant.id) is True
+    assert has_notion_sync()

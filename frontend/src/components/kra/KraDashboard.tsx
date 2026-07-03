@@ -18,7 +18,7 @@ import type {
 import { FileRiskMatrix } from "./FileRiskMatrix";
 import { KraComponentDrawer } from "./KraComponentDrawer";
 import { KraGraph } from "./KraGraph";
-import { KraKpiStrip } from "./KraKpiStrip";
+import { KraKpiStrip, KraDocGapPanel } from "./KraKpiStrip";
 
 export function KraDashboard() {
   const searchParams = useSearchParams();
@@ -31,6 +31,7 @@ export function KraDashboard() {
   const [criticalSpofFilter, setCriticalSpofFilter] = useState(
     filterParam === "spof",
   );
+  const [docGapPanelOpen, setDocGapPanelOpen] = useState(false);
   const [selectedComponent, setSelectedComponent] = useState<KraNode | null>(
     null,
   );
@@ -252,9 +253,28 @@ export function KraDashboard() {
 
       <KraKpiStrip
         criticalSpof={summary?.critical_spof ?? null}
+        documentationCoverage={summary?.documentation_coverage ?? null}
         loading={summaryLoading}
         filterActive={criticalSpofFilter}
         onToggleFilter={() => setCriticalSpofFilter((active) => !active)}
+        gapPanelOpen={docGapPanelOpen}
+        onToggleGapPanel={() => setDocGapPanelOpen((open) => !open)}
+      />
+
+      <KraDocGapPanel
+        gaps={summary?.documentation_coverage?.gap_components ?? []}
+        open={docGapPanelOpen}
+        onClose={() => setDocGapPanelOpen(false)}
+        onSelectComponent={(gap) => {
+          const node = graph.nodes.find(
+            (entry) => entry.id === gap.component_id && entry.type === "component",
+          );
+          if (node) {
+            setSelectedComponent(node);
+            setMatrixComponentId(node.id);
+            setDocGapPanelOpen(false);
+          }
+        }}
       />
 
       {graph.nodes.length === 0 ? (

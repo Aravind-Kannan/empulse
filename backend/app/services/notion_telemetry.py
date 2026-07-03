@@ -25,13 +25,20 @@ LIVING_RUNBOOK_SECTIONS = (
 )
 
 
+def utc_dt(value: datetime | None) -> datetime | None:
+    """Normalize DB/API datetimes to timezone-aware UTC for comparisons."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
+    return utc_dt(parsed)
 
 
 def _component_has_github_activity(
@@ -114,6 +121,9 @@ def compute_notion_telemetry(
     for doc in docs:
         if doc.is_archived:
             continue
+        doc.last_edited_at = utc_dt(doc.last_edited_at) or now
+        if doc.last_verified_at is not None:
+            doc.last_verified_at = utc_dt(doc.last_verified_at)
         if doc.owner_employee_id:
             docs_by_owner[doc.owner_employee_id].append(doc)
         if doc.component_id:
@@ -230,6 +240,8 @@ def persist_notion_snapshots(
     for doc in snapshot.docs:
         if doc.is_archived:
             continue
+        edited_at = utc_dt(doc.last_edited_at) or now
+        verified_at = utc_dt(doc.last_verified_at)
         row = NotionDocSnapshot(
             tenant_id=tenant_id,
             page_id=doc.page_id,
@@ -238,9 +250,9 @@ def persist_notion_snapshots(
             component_id=doc.component_id,
             owner_employee_id=doc.owner_employee_id,
             page_kind=doc.page_kind,
-            last_edited_at=doc.last_edited_at,
-            last_verified_at=doc.last_verified_at,
-            is_stale=doc.last_edited_at < stale_cutoff,
+            last_edited_at=edited_at.replace(tzinfo=None),
+            last_verified_at=verified_at.replace(tzinfo=None) if verified_at else None,
+            is_stale=edited_at < stale_cutoff,
             is_archived=doc.is_archived,
             expertise_tags=doc.expertise_tags,
             computed_at=now,

@@ -495,6 +495,7 @@ export interface KraAnalyticsResponse {
 
 export interface KraMetricCoverage {
   github: "confirmed" | "partial" | "missing";
+  notion: "confirmed" | "partial" | "missing";
   is_partial: boolean;
 }
 
@@ -514,8 +515,27 @@ export interface CriticalSpofResult {
   data_completeness: KraMetricCoverage;
 }
 
+export interface DocumentationGapComponent {
+  component_id: string;
+  component_name: string;
+  gap_reason: "missing" | "stale";
+  last_doc_edit: string | null;
+  notion_sources: string[];
+  notion_page_urls: string[];
+  days_since_activity: number | null;
+}
+
+export interface DocumentationCoverageResult {
+  coverage_pct: number | null;
+  active_component_count: number;
+  covered_count: number;
+  gap_components: DocumentationGapComponent[];
+  data_completeness: KraMetricCoverage;
+}
+
 export interface KraSummaryResponse {
   critical_spof: CriticalSpofResult;
+  documentation_coverage: DocumentationCoverageResult;
 }
 
 export interface KraBackupAssignmentResponse {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import requests
@@ -402,6 +403,114 @@ OWNER_FIELD_HINTS = ("owner", "author", "maintainer", "doc owner")
 VERIFIED_FIELD_HINTS = ("last verified", "last_verified", "verified", "last reviewed")
 OWNERSHIP_TEMPLATE_HINTS = ("ownership transfer", "living runbook", "handover pack")
 
+# Design-doc titles → match partition suffix / path prefix when full component name won't hit.
+TITLE_TOPIC_HINTS: dict[str, tuple[str, ...]] = {
+    "kra": ("design docs", "design-docs", "design"),
+    "era": ("design docs", "design-docs", "design"),
+    "incident": ("design docs", "design-docs", "backend"),
+    "dashboard": ("design docs", "design-docs", "frontend"),
+    "integration": ("design docs", "design-docs", "backend"),
+    "onboarding": ("design docs", "design-docs", "frontend"),
+    "platform overview": ("design docs", "design-docs"),
+    "neo4j": ("backend", "design docs"),
+    "cognee": ("backend", "design docs"),
+    "local development": ("backend", "design docs"),
+    "troubleshooting": ("backend", "design docs"),
+    "runbook": ("backend", "design docs"),
+}
+
+
+def _extended_path_component_map(path_component_map: dict[str, str] | None) -> dict[str, str]:
+    if not path_component_map:
+        return {}
+    extended = dict(path_component_map)
+    design_id = path_component_map.get("design-docs/") or path_component_map.get("design-docs")
+    backend_id = path_component_map.get("backend/")
+    if design_id:
+        extended.setdefault("notion-docs/design/", design_id)
+        extended.setdefault("notion-docs/", design_id)
+    if backend_id:
+        extended.setdefault("notion-docs/runbooks/", backend_id)
+    return extended
+
+
+def _component_match_entries(
+    component_names: dict[str, str],
+    path_component_map: dict[str, str] | None = None,
+) -> list[tuple[int, str, str]]:
+    """Return (priority, needle, component_id) sorted highest priority first."""
+    entries: list[tuple[int, str, str]] = []
+    suffix_to_ids: dict[str, list[str]] = {}
+
+    for component_id, name in component_names.items():
+        name_lower = name.lower().strip()
+        if name_lower:
+            entries.append((len(name_lower), name_lower, component_id))
+        if " / " in name:
+            suffix = name.rsplit(" / ", 1)[-1].strip().lower()
+            if suffix:
+                suffix_to_ids.setdefault(suffix, []).append(component_id)
+                entries.append((len(suffix) + 200, suffix, component_id))
+
+    for suffix, ids in suffix_to_ids.items():
+        slug = re.sub(r"[^a-z0-9]+", "-", suffix).strip("-")
+        if slug and slug != suffix:
+            for component_id in ids:
+                entries.append((len(slug) + 150, slug, component_id))
+
+    for prefix, component_id in _extended_path_component_map(path_component_map).items():
+        norm = prefix.strip("/").lower()
+        if not norm:
+            continue
+        entries.append((len(norm) + 180, norm, component_id))
+        entries.append((len(norm) + 170, norm.replace("-", " "), component_id))
+        entries.append((len(norm) + 160, norm.replace("/", " "), component_id))
+
+    entries.sort(key=lambda row: row[0], reverse=True)
+    return entries
+
+
+def match_component_for_document(
+    title: str,
+    *,
+    path_hint: str = "",
+    component_names: dict[str, str],
+    path_component_map: dict[str, str] | None = None,
+) -> str | None:
+    """Resolve a Notion page or repo doc path to an org component id."""
+    haystack = f"{path_hint} {title}".lower().replace("_", " ").replace("-", " ")
+
+    extended_map = _extended_path_component_map(path_component_map)
+    if path_hint:
+        normalized_path = path_hint.strip().lstrip("/").lower()
+        best: tuple[int, str] | None = None
+        for prefix, component_id in extended_map.items():
+            norm_prefix = prefix.strip("/").lower()
+            if not norm_prefix:
+                continue
+            if normalized_path == norm_prefix or normalized_path.startswith(f"{norm_prefix}/"):
+                if best is None or len(norm_prefix) > best[0]:
+                    best = (len(norm_prefix), component_id)
+        if best:
+            return best[1]
+
+    for priority, needle, component_id in _component_match_entries(
+        component_names,
+        path_component_map,
+    ):
+        if needle and needle in haystack:
+            return component_id
+
+    for topic, hints in TITLE_TOPIC_HINTS.items():
+        if topic not in haystack:
+            continue
+        for hint in hints:
+            for component_id, name in component_names.items():
+                if hint in name.lower():
+                    return component_id
+
+    return None
+
 
 def _prop_multi_select(prop: dict | None) -> list[str]:
     if not prop or prop.get("type") != "multi_select":
@@ -460,18 +569,18 @@ def parse_document_pages(
     pages: list[dict[str, Any]],
     *,
     component_names: dict[str, str],
+    path_component_map: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Normalize wiki pages and database rows into doc inventory dicts."""
-    normalized_names = {name.lower(): cid for cid, name in component_names.items()}
     docs: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
 
     def add_page(page: dict[str, Any], *, default_kind: str = "runbook") -> None:
-        page_id = str(page.get("id", ""))
+        page_id = str(page.get("id", "") or page.get("page_id", ""))
         if not page_id or page_id in seen_ids or _is_archived(page):
             return
         props = page.get("properties") or {}
-        title = _page_title(page)
+        title = _page_title(page) if page.get("object") else str(page.get("title") or "")
         if not title and page.get("object") == "page":
             parent = page.get("parent") or {}
             if parent.get("type") == "database_id":
@@ -479,18 +588,21 @@ def parse_document_pages(
         if not title:
             return
 
-        component_id: str | None = None
+        component_id: str | None = page.get("component_id")
         component_prop = _find_property(props, *COMPONENT_FIELD_HINTS)
         relation_ids = _prop_relation_ids(component_prop)
         if relation_ids:
             component_id = relation_ids[0]
 
         title_lower = title.lower()
+        path_hint = str(page.get("repo_path") or "")
         if not component_id:
-            for name_lower, cid in normalized_names.items():
-                if name_lower in title_lower:
-                    component_id = cid
-                    break
+            component_id = match_component_for_document(
+                title,
+                path_hint=path_hint,
+                component_names=component_names,
+                path_component_map=path_component_map,
+            )
 
         owner_prop = _find_property(props, *OWNER_FIELD_HINTS)
         owner_emails = _prop_people_emails(owner_prop)
@@ -531,6 +643,8 @@ def fetch_notion_document_inventory(
     database_ids: str | None,
     *,
     component_names: dict[str, str],
+    path_component_map: dict[str, str] | None = None,
+    repo_doc_pages: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Return (document_pages, people_expertise_rows).
@@ -560,8 +674,9 @@ def fetch_notion_document_inventory(
         search_pages = []
 
     docs = parse_document_pages(
-        search_pages + db_rows,
+        search_pages + db_rows + list(repo_doc_pages or []),
         component_names=component_names,
+        path_component_map=path_component_map,
     )
     expertise = parse_people_expertise_rows(db_rows)
     return docs, expertise

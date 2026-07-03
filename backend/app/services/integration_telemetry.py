@@ -831,7 +831,7 @@ def hydrate_notion_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
         return True
 
     from app.models.operational import NotionDocSnapshot
-    from app.services.notion_telemetry import compute_notion_telemetry
+    from app.services.notion_telemetry import compute_notion_telemetry, utc_dt
     from app.services.notion_types import NotionDocRecord
 
     rows = (
@@ -840,6 +840,20 @@ def hydrate_notion_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
         .all()
     )
     if not rows:
+        from app.services.integration_config_store import (
+            get_integration_last_synced,
+            get_notion_config,
+        )
+
+        if (
+            get_notion_config(db, tenant_id) is not None
+            and get_integration_last_synced(db, tenant_id, "notion")
+        ):
+            _notion_component_sources.clear()
+            _notion_employee_signals.clear()
+            _notion_expertise_warnings.clear()
+            _notion_synced = True
+            return True
         return False
 
     docs = [
@@ -847,12 +861,12 @@ def hydrate_notion_telemetry_from_db(db: Session, tenant_id: uuid.UUID) -> bool:
             page_id=row.page_id,
             title=row.title,
             page_url=row.page_url,
-            last_edited_at=row.last_edited_at or datetime.now(UTC),
+            last_edited_at=utc_dt(row.last_edited_at) or datetime.now(UTC),
             component_id=row.component_id,
             owner_employee_id=row.owner_employee_id,
             page_kind=row.page_kind,
             is_archived=row.is_archived,
-            last_verified_at=row.last_verified_at,
+            last_verified_at=utc_dt(row.last_verified_at),
             expertise_tags=list(row.expertise_tags or []),
         )
         for row in rows
