@@ -1,44 +1,143 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { Bot, Loader2, Send, User, Sparkles } from "lucide-react";
 
 import { streamInvestigationChat } from "@/lib/api";
 import type { InvestigationAnalysisStatus } from "@/lib/types";
-import type { InvestigationChatMessage } from "@/hooks/useIncidentInvestigation";
+import {
+  INVESTIGATION_CHAT_STOPPED_SWITCH_MESSAGE,
+  type InvestigationChatMessage,
+} from "@/hooks/useIncidentInvestigation";
 
 import { InvestigationAnalysisProgress } from "./InvestigationAnalysisProgress";
+
+export interface InvestigationChatPanelHandle {
+  finalizeInterruptedStream: () => boolean;
+}
 
 interface InvestigationChatPanelProps {
   incidentId: string | null;
   activeIncidentTitle: string | null;
   suggestions: string[];
   messages: InvestigationChatMessage[];
-  onMessagesChange: (messages: InvestigationChatMessage[]) => void;
+  onMessagesChange: (
+    messages: InvestigationChatMessage[],
+    forIncidentId: string,
+  ) => void;
 }
 
-export function InvestigationChatPanel({
-  incidentId,
-  activeIncidentTitle,
-  suggestions,
-  messages,
-  onMessagesChange,
-}: InvestigationChatPanelProps) {
+function patchAssistantMessage(
+  baseMessages: InvestigationChatMessage[],
+  assistantId: string,
+  content: string,
+) {
+  return baseMessages.map((msg) =>
+    msg.id === assistantId ? { ...msg, content } : msg,
+  );
+}
+
+export const InvestigationChatPanel = forwardRef<
+  InvestigationChatPanelHandle,
+  InvestigationChatPanelProps
+>(function InvestigationChatPanel(
+  {
+    incidentId,
+    activeIncidentTitle,
+    suggestions,
+    messages,
+    onMessagesChange,
+  },
+  ref,
+) {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [analysisStatus, setAnalysisStatus] =
     useState<InvestigationAnalysisStatus | null>(null);
   const streamIdRef = useRef<string | null>(null);
   const assistantContentRef = useRef("");
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const streamIncidentRef = useRef<string | null>(null);
+  const incidentIdRef = useRef(incidentId);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const messagesRef = useRef(messages);
+  const onMessagesChangeRef = useRef(onMessagesChange);
+  const shouldAutoScrollRef = useRef(true);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  messagesRef.current = messages;
+  onMessagesChangeRef.current = onMessagesChange;
+  incidentIdRef.current = incidentId;
+
+  const finalizeInterruptedStream = useCallback((): boolean => {
+    const streamIncident = streamIncidentRef.current;
+    const assistantId = streamIdRef.current;
+    if (!streamIncident || !assistantId) return false;
+
+    const currentMessages = messagesRef.current;
+    const hasAssistant = currentMessages.some((msg) => msg.id === assistantId);
+    if (!hasAssistant) return false;
+
+    const partial = assistantContentRef.current.trim();
+    const stoppedContent = partial
+      ? `${partial}\n\n—\n${INVESTIGATION_CHAT_STOPPED_SWITCH_MESSAGE}`
+      : INVESTIGATION_CHAT_STOPPED_SWITCH_MESSAGE;
+
+    onMessagesChangeRef.current(
+      patchAssistantMessage(currentMessages, assistantId, stoppedContent),
+      streamIncident,
+    );
+
+    streamIncidentRef.current = null;
+    streamIdRef.current = null;
+    assistantContentRef.current = "";
+    setStreaming(false);
+    setAnalysisStatus(null);
+    return true;
+  }, []);
+
+  useImperativeHandle(ref, () => ({ finalizeInterruptedStream }), [
+    finalizeInterruptedStream,
+  ]);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior });
+  }, []);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, streaming, analysisStatus]);
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const onScroll = () => {
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      shouldAutoScrollRef.current = distanceFromBottom < 80;
+    };
+
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return;
+    scrollToBottom(streaming ? "auto" : "smooth");
+  }, [messages, streaming, analysisStatus, scrollToBottom]);
+
+  useEffect(() => {
+    if (
+      streamIncidentRef.current &&
+      streamIncidentRef.current !== incidentId
+    ) {
+      finalizeInterruptedStream();
+    }
+  }, [incidentId, finalizeInterruptedStream]);
 
   useEffect(() => {
     setInput("");
@@ -46,21 +145,16 @@ export function InvestigationChatPanel({
     setAnalysisStatus(null);
     streamIdRef.current = null;
     assistantContentRef.current = "";
+    streamIncidentRef.current = null;
+    shouldAutoScrollRef.current = true;
   }, [incidentId]);
-
-  function patchAssistantMessage(
-    baseMessages: InvestigationChatMessage[],
-    assistantId: string,
-    content: string,
-  ) {
-    return baseMessages.map((msg) =>
-      msg.id === assistantId ? { ...msg, content } : msg,
-    );
-  }
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || streaming) return;
+    if (!trimmed || streaming || !incidentId) return;
+
+    const streamForIncident = incidentId;
+    streamIncidentRef.current = streamForIncident;
 
     const userMsg: InvestigationChatMessage = {
       id: `user-${Date.now()}`,
@@ -74,7 +168,8 @@ export function InvestigationChatPanel({
       { id: assistantId, role: "assistant", content: "" },
     ];
 
-    onMessagesChange(baseMessages);
+    shouldAutoScrollRef.current = true;
+    onMessagesChange(baseMessages, streamForIncident);
     setInput("");
     setStreaming(true);
     setAnalysisStatus(null);
@@ -86,6 +181,12 @@ export function InvestigationChatPanel({
         trimmed,
         incidentId,
         (token) => {
+          if (
+            incidentIdRef.current !== streamForIncident ||
+            streamIncidentRef.current !== streamForIncident
+          ) {
+            return;
+          }
           assistantContentRef.current += token;
           onMessagesChange(
             patchAssistantMessage(
@@ -93,34 +194,43 @@ export function InvestigationChatPanel({
               assistantId,
               assistantContentRef.current,
             ),
+            streamForIncident,
           );
         },
         (status) => {
-          setAnalysisStatus(status);
+          if (streamIncidentRef.current === streamForIncident) {
+            setAnalysisStatus(status);
+          }
         },
       );
     } catch (err) {
-      onMessagesChange(
-        patchAssistantMessage(
-          baseMessages,
-          assistantId,
-          err instanceof Error
-            ? `Could not complete analysis: ${err.message}`
-            : "Could not complete analysis.",
-        ),
-      );
+      if (streamIncidentRef.current === streamForIncident) {
+        onMessagesChange(
+          patchAssistantMessage(
+            baseMessages,
+            assistantId,
+            err instanceof Error
+              ? `Could not complete analysis: ${err.message}`
+              : "Could not complete analysis.",
+          ),
+          streamForIncident,
+        );
+      }
     } finally {
-      setStreaming(false);
-      setAnalysisStatus(null);
-      streamIdRef.current = null;
-      assistantContentRef.current = "";
+      if (streamIncidentRef.current === streamForIncident) {
+        setStreaming(false);
+        setAnalysisStatus(null);
+        streamIdRef.current = null;
+        assistantContentRef.current = "";
+        streamIncidentRef.current = null;
+      }
     }
   }
 
   return (
-    <div className="flex h-full flex-col rounded-xl border border-zinc-800 bg-zinc-950/20 backdrop-blur-sm shadow-xl">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-zinc-800 bg-zinc-950/20 backdrop-blur-sm shadow-xl">
       {/* Header */}
-      <div className="flex items-center gap-2.5 border-b border-zinc-800/80 px-4 py-3.5 bg-zinc-900/10">
+      <div className="flex shrink-0 items-center gap-2.5 border-b border-zinc-800/80 px-4 py-3.5 bg-zinc-900/10">
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
           <Bot className="h-4 w-4" />
         </div>
@@ -135,7 +245,10 @@ export function InvestigationChatPanel({
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-zinc-800">
+      <div
+        ref={messagesContainerRef}
+        className="min-h-0 flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-zinc-800"
+      >
         {messages.map((msg) => {
           const isUser = msg.role === "user";
           return (
@@ -202,11 +315,10 @@ export function InvestigationChatPanel({
             </div>
           );
         })}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Footer / Input Area */}
-      <div className="border-t border-zinc-800/80 p-4 bg-zinc-900/10">
+      <div className="shrink-0 border-t border-zinc-800/80 p-4 bg-zinc-900/10">
         {/* Suggestions */}
         {suggestions.length > 0 && (
           <div className="mb-3.5">
@@ -264,4 +376,4 @@ export function InvestigationChatPanel({
       </div>
     </div>
   );
-}
+});

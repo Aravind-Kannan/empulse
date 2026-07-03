@@ -231,6 +231,13 @@ export function InvestigationDiagnosticsPanel({
                 {analysisMessage ?? "Analyzing incident history for diagnostics…"}
               </p>
             </div>
+          ) : analyzing && refreshing ? (
+            <div className="flex h-24 flex-col items-center justify-center gap-2 text-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin text-sky-400" />
+              <p className="text-xs text-zinc-400 max-w-[220px] animate-pulse">
+                {analysisMessage ?? "Refreshing from knowledge graph…"}
+              </p>
+            </div>
           ) : confidence !== null ? (
             <div className="p-1">
               <ConfidenceSection score={confidence} />
@@ -255,6 +262,13 @@ export function InvestigationDiagnosticsPanel({
             <div className="rounded-xl border border-zinc-900 bg-zinc-950/40 p-4 space-y-2.5">
               <div className="h-3 animate-pulse rounded bg-zinc-800/60" />
               <div className="h-3 w-4/5 animate-pulse rounded bg-zinc-800/60" />
+            </div>
+          ) : analyzing && refreshing ? (
+            <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 space-y-2.5">
+              <div className="flex items-center gap-2 text-xs text-sky-300">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>{analysisMessage ?? "Re-querying knowledge graph…"}</span>
+              </div>
             </div>
           ) : (
             <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/20 p-4 shadow-inner">

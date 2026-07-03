@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -38,11 +40,14 @@ from app.services.integration_telemetry import (
     get_cached_jira_issues,
     get_cached_slack_threads,
 )
+from app.services.jira_types import JiraIssueActivity
 from app.services.tenant_cognee import (
     tenant_cognee_context,
     tenant_write_memory_record,
 )
 from app.tenancy import tenant_dataset_name
+
+logger = logging.getLogger(__name__)
 
 _BRIEFING_CACHE_TTL_SECONDS = 1800.0
 _briefing_cache: dict[tuple[str, str], tuple[float, InvestigationDiagnostics]] = {}
@@ -118,6 +123,66 @@ _QUERY_ECHO_PHRASES = (
     "impact owners escalation",
     "postmortem runbook",
 )
+
+_TITLE_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "also",
+        "bug",
+        "from",
+        "have",
+        "incident",
+        "into",
+        "issue",
+        "that",
+        "this",
+        "ticket",
+        "with",
+        "when",
+        "where",
+        "which",
+    }
+)
+
+
+@contextmanager
+def _investigation_span(phase: str, *, incident_id: str | None = None, **fields: Any):
+    label = incident_id or "-"
+    detail = " ".join(f"{key}={value!r}" for key, value in fields.items())
+    started = time.perf_counter()
+    logger.info("investigation %s start incident=%s %s", phase, label, detail)
+    try:
+        yield
+    except asyncio.TimeoutError:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        logger.warning(
+            "investigation %s timeout incident=%s elapsed_ms=%.0f %s",
+            phase,
+            label,
+            elapsed_ms,
+            detail,
+        )
+        raise
+    except Exception:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        logger.exception(
+            "investigation %s failed incident=%s elapsed_ms=%.0f %s",
+            phase,
+            label,
+            elapsed_ms,
+            detail,
+        )
+        raise
+    else:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        logger.info(
+            "investigation %s done incident=%s elapsed_ms=%.0f %s",
+            phase,
+            label,
+            elapsed_ms,
+            detail,
+        )
 
 
 @dataclass
@@ -713,7 +778,20 @@ async def _fetch_cognee_root_cause_narrative(
 
     try:
         results = await asyncio.wait_for(_run(), timeout=timeout_seconds)
-    except (asyncio.TimeoutError, Exception):
+    except asyncio.TimeoutError:
+        logger.warning(
+            "investigation cognee_root_cause timeout incident=%s tenant=%s",
+            incident.id,
+            tenant_id,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "investigation cognee_root_cause error incident=%s tenant=%s err=%s",
+            incident.id,
+            tenant_id,
+            exc,
+        )
         return None
 
     for item in results[:3]:
@@ -855,7 +933,20 @@ async def _fetch_cognee_solutions_narrative(
 
     try:
         results = await asyncio.wait_for(_run(), timeout=timeout_seconds)
-    except (asyncio.TimeoutError, Exception):
+    except asyncio.TimeoutError:
+        logger.warning(
+            "investigation cognee_solutions timeout incident=%s tenant=%s",
+            incident.id if incident else "-",
+            tenant_id,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "investigation cognee_solutions error incident=%s tenant=%s err=%s",
+            incident.id if incident else "-",
+            tenant_id,
+            exc,
+        )
         return None
 
     for item in results[:3]:
@@ -880,8 +971,10 @@ async def _resolve_workaround(
     cognee_solutions = await _fetch_cognee_solutions_narrative(incident, tenant_id)
     graph_solutions = _analyze_solutions_from_graph(hits, incident)
     synthesized = _synthesize_workaround(search_texts, incident)
+    resolved_jira = _workaround_from_resolved_jira(incident)
 
     for candidate in (
+        resolved_jira,
         cognee_solutions,
         graph_solutions,
         platform_workaround,
@@ -969,17 +1062,203 @@ def _lookup_jira_issue(
             return issue
     if db is not None and tenant_id is not None:
         from app.services.integration_config_store import get_jira_config
-        from app.services.jira_client import fetch_jira_issues
+        from app.services.jira_client import fetch_jira_incident_issues
 
         config = get_jira_config(db, tenant_id)
         if config:
             try:
-                for issue in fetch_jira_issues(config):
+                for issue in fetch_jira_incident_issues(config):
                     if issue.issue_key == issue_key:
                         return issue
             except Exception:
                 return None
     return None
+
+
+def _title_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) > 3 and token not in _TITLE_STOPWORDS
+    }
+
+
+def _jira_key_from_reference(ref: InvestigationReference) -> str | None:
+    for field in (ref.title, ref.snippet, ref.url or "", ref.id):
+        match = _parse_jira_id(field)
+        if match:
+            return match.upper()
+    url = (ref.url or "").strip()
+    if url.lower().startswith("jira://"):
+        key = url[7:].strip().upper()
+        if key:
+            return key
+    return None
+
+
+def _is_synthetic_active_jira_ref(ref: InvestigationReference) -> bool:
+    blob = f"{ref.title} {ref.snippet}".lower()
+    return "linked to active incident" in blob
+
+
+def _jira_reference_quality(ref: InvestigationReference) -> int:
+    if _is_synthetic_active_jira_ref(ref):
+        return -100
+    score = 0
+    title = ref.title or ""
+    if _JIRA_PATTERN.search(title) and ":" in title:
+        score += 50
+    if ref.url and ref.url.startswith("http"):
+        score += 40
+    elif ref.url and ref.url.startswith("jira://"):
+        score += 20
+    if ref.id.startswith("jira-related-"):
+        score += 30
+    if len((ref.snippet or "").strip()) > 24:
+        score += 10
+    return score
+
+
+def _finalize_jira_references(
+    refs: list[InvestigationReference],
+    *,
+    active_jira_id: str | None,
+    limit: int = 6,
+) -> list[InvestigationReference]:
+    """Drop active ticket, synthetic placeholders, and duplicate keys."""
+    active = (active_jira_id or "").upper()
+    by_key: dict[str, InvestigationReference] = {}
+
+    for ref in refs:
+        if ref.type != "jira":
+            continue
+        if _is_synthetic_active_jira_ref(ref):
+            continue
+        key = _jira_key_from_reference(ref)
+        if not key:
+            continue
+        if active and key == active:
+            continue
+
+        existing = by_key.get(key)
+        if not existing or _jira_reference_quality(ref) > _jira_reference_quality(
+            existing
+        ):
+            by_key[key] = ref
+
+    return sorted(by_key.values(), key=_jira_reference_quality, reverse=True)[:limit]
+
+
+def _jira_issues_catalog(
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
+) -> list[JiraIssueActivity]:
+    issues = list(get_cached_jira_issues())
+    if issues:
+        return issues
+    if db is None or tenant_id is None:
+        return []
+
+    from app.services.integration_config_store import get_jira_config
+    from app.services.jira_client import fetch_jira_incident_issues
+
+    config = get_jira_config(db, tenant_id)
+    if not config:
+        return []
+    try:
+        return fetch_jira_incident_issues(config)
+    except Exception:
+        logger.warning(
+            "investigation jira_catalog_fetch failed tenant=%s",
+            tenant_id,
+        )
+        return []
+
+
+def _related_jira_overlap_score(
+    incident: IncidentSummary,
+    issue: JiraIssueActivity,
+) -> float:
+    if not issue.is_bug_or_incident:
+        return 0.0
+    active_key = (incident.jira_id or "").upper()
+    if issue.issue_key.upper() == active_key:
+        return 0.0
+
+    query_tokens = _title_tokens(incident.title)
+    query_tokens |= _title_tokens(incident.system_scope)
+    issue_tokens = _title_tokens(issue.summary or issue.issue_key)
+    overlap = query_tokens & issue_tokens
+    if not overlap:
+        return 0.0
+    if len(overlap) >= 2:
+        score = len(overlap) * 22.0
+    elif any(len(token) >= 6 for token in overlap):
+        score = 18.0
+    else:
+        return 0.0
+    if issue.is_done:
+        score += 18.0
+    return score
+
+
+def _find_related_jira_tickets(
+    incident: IncidentSummary | None,
+    *,
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
+    limit: int = 6,
+) -> list[InvestigationReference]:
+    if not incident:
+        return []
+
+    scored: list[tuple[float, JiraIssueActivity]] = []
+    for issue in _jira_issues_catalog(db, tenant_id):
+        score = _related_jira_overlap_score(incident, issue)
+        if score > 0:
+            scored.append((score, issue))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    refs: list[InvestigationReference] = []
+    for _score, issue in scored[:limit]:
+        summary = (issue.summary or issue.issue_key).strip()
+        refs.append(
+            InvestigationReference(
+                id=f"jira-related-{issue.issue_key}",
+                type="jira",
+                title=f"{issue.issue_key}: {summary[:100]}",
+                url=issue.issue_url or f"jira://{issue.issue_key}",
+                snippet=(
+                    f"{issue.issue_type} · {issue.priority} · {issue.status}"
+                ),
+            )
+        )
+    return refs
+
+
+def _workaround_from_resolved_jira(
+    incident: IncidentSummary | None,
+) -> str | None:
+    if not incident:
+        return None
+
+    best: tuple[float, str] | None = None
+    for issue in _jira_issues_catalog():
+        if not issue.is_done or not issue.is_bug_or_incident:
+            continue
+        score = _related_jira_overlap_score(incident, issue)
+        if score <= 0:
+            continue
+        summary = (issue.summary or "").strip()
+        if len(summary) < 30:
+            continue
+        candidate = (
+            f"Resolved in {issue.issue_key} ({issue.status}): {summary}"
+        )[:400]
+        if not best or score > best[0]:
+            best = (score, candidate)
+
+    return best[1] if best else None
 
 
 def _lookup_slack_thread(incident_id: str):
@@ -1321,6 +1600,7 @@ def _build_references_from_hits(
     list[InvestigationReference],
     list[InvestigationReference],
 ]:
+    active_jira = (jira_id or "").upper()
     slack: list[InvestigationReference] = []
     jira: list[InvestigationReference] = []
     notion: list[InvestigationReference] = []
@@ -1338,11 +1618,30 @@ def _build_references_from_hits(
         snippet = text.strip()[:240]
         if len(snippet) < 12 and not url_override:
             return
-        key = (url_override or ref_id or snippet[:80]).lower()
-        if key in seen:
-            return
-        seen.add(key)
         ref_type = forced_type or _reference_type(text)
+        if ref_type == "jira":
+            jira_key = (
+                _parse_jira_id(title_override or "")
+                or _parse_jira_id(snippet)
+                or _parse_jira_id(url_override or "")
+            )
+            if jira_key:
+                if active_jira and jira_key.upper() == active_jira:
+                    return
+                dedupe_key = f"jira:{jira_key.upper()}"
+                if dedupe_key in seen:
+                    return
+                seen.add(dedupe_key)
+            else:
+                key = (url_override or ref_id or snippet[:80]).lower()
+                if key in seen:
+                    return
+                seen.add(key)
+        else:
+            key = (url_override or ref_id or snippet[:80]).lower()
+            if key in seen:
+                return
+            seen.add(key)
         ref = InvestigationReference(
             id=ref_id or f"ref-{len(seen)}",
             type=ref_type,  # type: ignore[arg-type]
@@ -1382,6 +1681,8 @@ def _build_references_from_hits(
             )
             continue
         if hit.jira_key:
+            if active_jira and hit.jira_key.upper() == active_jira:
+                continue
             add_ref(
                 hit.text,
                 forced_type="jira",
@@ -1391,15 +1692,6 @@ def _build_references_from_hits(
             )
             continue
         add_ref(hit.text)
-
-    if jira_id:
-        add_ref(
-            f"Jira ticket {jira_id} linked to active incident investigation.",
-            forced_type="jira",
-            url_override=f"jira://{jira_id}",
-            title_override=f"Jira {jira_id}",
-            ref_id=f"jira-{jira_id}",
-        )
 
     return slack, jira, notion, postmortems
 
@@ -1447,12 +1739,6 @@ def _build_references_from_search(
 
     for text in search_texts:
         add_ref(text)
-
-    if jira_id:
-        add_ref(
-            f"Jira ticket {jira_id} linked to active incident investigation.",
-            forced_type="jira",
-        )
 
     return slack, jira, notion, postmortems
 
@@ -1543,6 +1829,8 @@ def _compute_confidence(
     hits: list[_GraphSearchHit],
     graph_hops: list[_GraphHop],
     sme_count: int,
+    *,
+    related_jira_count: int = 0,
 ) -> float:
     edge_weights = {
         "BLOCKS": 6.0,
@@ -1554,14 +1842,19 @@ def _compute_confidence(
     }
     hop_bonus = sum(edge_weights.get(hop.edge, 2.0) for hop in graph_hops)
     hop_bonus = min(22.0, hop_bonus)
+    related_bonus = min(12.0, related_jira_count * 4.0)
 
     if hits:
         avg_similarity = sum(hit.similarity for hit in hits) / len(hits)
         sme_bonus = min(12.0, sme_count * 3.0)
-        return min(97.0, round(avg_similarity * 0.7 + hop_bonus + sme_bonus, 1))
+        return min(
+            97.0,
+            round(avg_similarity * 0.7 + hop_bonus + sme_bonus + related_bonus, 1),
+        )
 
     base = min(30.0, len(graph_hops) * 6.0)
     base += min(20.0, sme_count * 5.0)
+    base += related_bonus
     return min(55.0, round(max(base, 18.0), 1))
 
 
@@ -1701,7 +1994,24 @@ async def _search_incident_graph_fusion(
 
     try:
         return await asyncio.wait_for(_run_all(), timeout=timeout_seconds + 2)
-    except (asyncio.TimeoutError, Exception):
+    except asyncio.TimeoutError:
+        logger.warning(
+            "investigation cognee_fusion timeout tenant=%s queries=%d",
+            tenant_id,
+            len(queries),
+        )
+        if len(queries) == 1:
+            return await _search_incident_graph(
+                queries[0], tenant_id, timeout_seconds=timeout_seconds
+            )
+        return []
+    except Exception as exc:
+        logger.warning(
+            "investigation cognee_fusion error tenant=%s queries=%d err=%s",
+            tenant_id,
+            len(queries),
+            exc,
+        )
         if len(queries) == 1:
             return await _search_incident_graph(
                 queries[0], tenant_id, timeout_seconds=timeout_seconds
@@ -1722,6 +2032,11 @@ def _fusion_search_queries(
         queries.append(
             f"{incident.jira_id} jira blocks {scope} component failure root cause why outage"
         )
+        title_tokens = sorted(_title_tokens(incident.title))[:6]
+        if title_tokens:
+            queries.append(
+                f"{' '.join(title_tokens)} related jira bug incident workaround resolution steps"
+            )
     channel = (incident.channel_name or incident.system_scope or "").lstrip("#")
     queries.append(
         f"slack incident thread #{channel} {incident.title} "
@@ -1760,8 +2075,28 @@ async def _search_incident_graph(
             return results if isinstance(results, list) else list(results or [])
 
     try:
-        return await asyncio.wait_for(_run_search(), timeout=timeout_seconds)
-    except (asyncio.TimeoutError, Exception):
+        results = await asyncio.wait_for(_run_search(), timeout=timeout_seconds)
+        logger.debug(
+            "investigation cognee_chunks ok tenant=%s hits=%d query=%r",
+            tenant_id,
+            len(results),
+            search_query[:100],
+        )
+        return results
+    except asyncio.TimeoutError:
+        logger.warning(
+            "investigation cognee_chunks timeout tenant=%s query=%r",
+            tenant_id,
+            search_query[:100],
+        )
+        return []
+    except Exception as exc:
+        logger.warning(
+            "investigation cognee_chunks error tenant=%s query=%r err=%s",
+            tenant_id,
+            search_query[:100],
+            exc,
+        )
         return []
 
 
@@ -1774,6 +2109,28 @@ async def build_diagnostics(
     incident: IncidentSummary | None = None,
     raw_results: list[Any] | None = None,
 ) -> InvestigationDiagnostics:
+    incident_label = incident_id or (incident.id if incident else "-")
+    with _investigation_span("build_diagnostics", incident_id=incident_label):
+        return await _build_diagnostics_impl(
+            db,
+            tenant,
+            message,
+            incident_id=incident_id,
+            incident=incident,
+            raw_results=raw_results,
+        )
+
+
+async def _build_diagnostics_impl(
+    db: Session,
+    tenant: Tenant,
+    message: str,
+    *,
+    incident_id: str | None = None,
+    incident: IncidentSummary | None = None,
+    raw_results: list[Any] | None = None,
+) -> InvestigationDiagnostics:
+    incident_label = incident_id or (incident.id if incident else "-")
     jira_id = _parse_jira_id(message)
     ctx = _load_graph_context(
         db,
@@ -1786,9 +2143,19 @@ async def build_diagnostics(
 
     if raw_results is None:
         fusion_queries = _fusion_search_queries(message, ctx.incident)
+        logger.info(
+            "investigation fusion_search incident=%s queries=%d",
+            incident_label,
+            len(fusion_queries),
+        )
         raw_results = await _search_incident_graph_fusion(
             fusion_queries,
             tenant.id,
+        )
+        logger.info(
+            "investigation fusion_results incident=%s raw_hits=%d",
+            incident_label,
+            len(raw_results),
         )
 
     ctx.search_hits = _rank_search_hits_for_incident(
@@ -1850,8 +2217,28 @@ async def build_diagnostics(
     ctx.slack_threads, ctx.jira_tickets, ctx.notion_pages, ctx.postmortems = (
         _build_references_from_hits(ctx.search_hits, jira_id=jira_id)
     )
+    related_jira = _find_related_jira_tickets(
+        ctx.incident,
+        db=db,
+        tenant_id=tenant.id,
+    )
+    logger.info(
+        "investigation related_jira incident=%s count=%d ranked_hits=%d",
+        incident_label,
+        len(related_jira),
+        len(ctx.search_hits),
+    )
     ctx.slack_threads = _merge_references(ctx.slack_threads, op_slack)
-    ctx.jira_tickets = _merge_references(ctx.jira_tickets, op_jira)
+    ctx.jira_tickets = _finalize_jira_references(
+        _merge_references(ctx.jira_tickets, related_jira, op_jira),
+        active_jira_id=jira_id,
+    )
+    logger.info(
+        "investigation jira_refs_final incident=%s count=%d active=%s",
+        incident_label,
+        len(ctx.jira_tickets),
+        jira_id or "-",
+    )
     ctx.notion_pages = _merge_references(ctx.notion_pages, op_notion)
 
     ctx.graph_hops = _build_graph_hops(
@@ -1870,10 +2257,20 @@ async def build_diagnostics(
         ctx.incident,
     )
 
-    cognee_narrative = await _fetch_cognee_root_cause_narrative(
-        ctx.incident,
-        tenant.id,
+    narrative_task = asyncio.create_task(
+        _fetch_cognee_root_cause_narrative(ctx.incident, tenant.id)
     )
+    workaround_task = asyncio.create_task(
+        _resolve_workaround(
+            hits=ctx.search_hits,
+            search_texts=ctx.search_texts,
+            incident=ctx.incident,
+            tenant_id=tenant.id,
+            platform_workaround=platform_workaround,
+        )
+    )
+    cognee_narrative = await narrative_task
+    workaround_text, workaround_available = await workaround_task
     graph_root = _analyze_root_cause_from_graph(
         ctx.search_hits,
         ctx.incident,
@@ -1902,15 +2299,7 @@ async def build_diagnostics(
         else None
     )
 
-    workaround_text, workaround_available = await _resolve_workaround(
-        hits=ctx.search_hits,
-        search_texts=ctx.search_texts,
-        incident=ctx.incident,
-        tenant_id=tenant.id,
-        platform_workaround=platform_workaround,
-    )
-
-    return InvestigationDiagnostics(
+    diagnostics = InvestigationDiagnostics(
         probable_root_cause=(
             _pick_first_displayable(
                 ctx.incident,
@@ -1928,7 +2317,10 @@ async def build_diagnostics(
             )
         ),
         confidence_score=_compute_confidence(
-            ctx.search_hits, ctx.graph_hops, len(smes)
+            ctx.search_hits,
+            ctx.graph_hops,
+            len(smes),
+            related_jira_count=len(related_jira),
         ),
         workaround=workaround_text,
         workaround_available=workaround_available,
@@ -1938,6 +2330,16 @@ async def build_diagnostics(
         jira_tickets=ctx.jira_tickets,
         notion_pages=ctx.notion_pages + ctx.postmortems,
     )
+    logger.info(
+        "investigation diagnostics_summary incident=%s confidence=%.1f "
+        "jira_refs=%d slack_refs=%d workaround=%s",
+        incident_label,
+        diagnostics.confidence_score,
+        len(diagnostics.jira_tickets),
+        len(diagnostics.slack_threads),
+        workaround_available,
+    )
+    return diagnostics
 
 
 def _briefing_query_for_incident(incident: IncidentSummary) -> str:
@@ -2014,10 +2416,25 @@ async def stream_incident_briefing(
     incident: IncidentSummary,
     tenant: Tenant,
     db: Session,
+    *,
+    force: bool = False,
 ):
     cache_key = (str(tenant.id), incident.id)
-    cached = _briefing_cache.get(cache_key)
+    if force:
+        invalidate_briefing_cache(tenant.id, incident.id)
+        from app.services.incident_feed import invalidate_incident_feed_cache
+
+        invalidate_incident_feed_cache(tenant.id)
+        cached = None
+    else:
+        cached = _briefing_cache.get(cache_key)
+
     if cached and (time.time() - cached[0]) < _BRIEFING_CACHE_TTL_SECONDS:
+        logger.info(
+            "investigation briefing_cache_hit incident=%s tenant=%s",
+            incident.id,
+            tenant.id,
+        )
         yield _status_event(
             "summarizing",
             f"Loaded cached briefing for {incident.title}…",
@@ -2031,11 +2448,22 @@ async def stream_incident_briefing(
         return
 
     message = _briefing_query_for_incident(incident)
+    started = time.perf_counter()
 
     try:
+        logger.info(
+            "investigation briefing_build start incident=%s tenant=%s force=%s",
+            incident.id,
+            tenant.id,
+            force,
+        )
         yield _status_event(
             "searching",
-            f"Loading context for {incident.title}…",
+            (
+                f"Refreshing knowledge graph context for {incident.title}…"
+                if force
+                else f"Loading context for {incident.title}…"
+            ),
         )
 
         yield _status_event(
@@ -2060,7 +2488,21 @@ async def stream_incident_briefing(
         }
         yield f"data: {json.dumps(diag_chunk)}\n\n"
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        logger.info(
+            "investigation briefing_build done incident=%s tenant=%s elapsed_ms=%.0f "
+            "confidence=%.1f",
+            incident.id,
+            tenant.id,
+            (time.perf_counter() - started) * 1000,
+            diagnostics.confidence_score,
+        )
     except Exception as exc:
+        logger.exception(
+            "investigation briefing_build failed incident=%s tenant=%s elapsed_ms=%.0f",
+            incident.id,
+            tenant.id,
+            (time.perf_counter() - started) * 1000,
+        )
         yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
 
@@ -2069,39 +2511,60 @@ async def stream_investigation_chat(
     tenant: Tenant,
     db: Session,
 ):
+    started = time.perf_counter()
     ctx = _load_graph_context(db, tenant.id, payload.incident_id)
     search_query = _build_search_query(payload.message, ctx.incident)
 
-    yield _status_event(
-        "searching",
-        "Searching tenant knowledge graph for incident context…",
-    )
-    raw_results = await _search_incident_graph(search_query, tenant.id)
-    search_hits = _parse_graph_search_hits(raw_results)
+    try:
+        logger.info(
+            "investigation chat_build start incident=%s tenant=%s",
+            payload.incident_id,
+            tenant.id,
+        )
+        yield _status_event(
+            "searching",
+            "Searching tenant knowledge graph for incident context…",
+        )
+        raw_results = await _search_incident_graph(search_query, tenant.id)
+        search_hits = _parse_graph_search_hits(raw_results)
 
-    yield _status_event(
-        "matching",
-        "Matching components, owners, and related references…",
-    )
-    diagnostics = await build_diagnostics(
-        db,
-        tenant,
-        payload.message,
-        incident_id=payload.incident_id,
-        incident=ctx.incident,
-        raw_results=raw_results,
-    )
+        yield _status_event(
+            "matching",
+            "Matching components, owners, and related references…",
+        )
+        diagnostics = await build_diagnostics(
+            db,
+            tenant,
+            payload.message,
+            incident_id=payload.incident_id,
+            incident=ctx.incident,
+            raw_results=raw_results,
+        )
 
-    yield _status_event("summarizing", "Preparing graph-grounded answer…")
+        yield _status_event("summarizing", "Preparing graph-grounded answer…")
 
-    answer = _compose_chat_answer(payload.message, diagnostics, search_hits)
+        answer = _compose_chat_answer(payload.message, diagnostics, search_hits)
 
-    for token in answer.split(" "):
-        chunk = {"type": "token", "content": token + " "}
-        yield f"data: {json.dumps(chunk)}\n\n"
-        await asyncio.sleep(0.02)
+        for token in answer.split(" "):
+            chunk = {"type": "token", "content": token + " "}
+            yield f"data: {json.dumps(chunk)}\n\n"
+            await asyncio.sleep(0.02)
 
-    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        logger.info(
+            "investigation chat_build done incident=%s tenant=%s elapsed_ms=%.0f",
+            payload.incident_id,
+            tenant.id,
+            (time.perf_counter() - started) * 1000,
+        )
+    except Exception:
+        logger.exception(
+            "investigation chat_build failed incident=%s tenant=%s elapsed_ms=%.0f",
+            payload.incident_id,
+            tenant.id,
+            (time.perf_counter() - started) * 1000,
+        )
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Chat analysis failed'})}\n\n"
 
 
 def _status_event(phase: str, message: str) -> str:

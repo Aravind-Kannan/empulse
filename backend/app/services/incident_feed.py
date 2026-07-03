@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.operational import IncidentRecord
 from app.schemas.investigation import IncidentStatus, IncidentSummary
 from app.services.integration_config_store import get_jira_config, get_slack_config
-from app.services.jira_client import fetch_jira_issues
+from app.services.jira_client import fetch_jira_incident_issues
 from app.services.jira_types import JiraIssueActivity
 from app.services.slack_client import fetch_slack_incident_threads, thread_title
 from app.services.slack_types import SlackThreadRecord
@@ -39,15 +39,20 @@ def _slack_ts_to_datetime(ts: str) -> datetime:
     return datetime.fromtimestamp(float(ts), tz=UTC)
 
 
+_TERMINAL_INCIDENT_STATUSES: frozenset[IncidentStatus] = frozenset({"Resolved", "Closed"})
+
+
 def _map_jira_status(status: str, status_category: str) -> IncidentStatus:
     if status_category.lower() == "done":
         return "Closed"
     lowered = status.lower()
+    if any(token in lowered for token in ("closed", "cancelled", "canceled", "won't fix", "wont fix")):
+        return "Closed"
     if "wait" in lowered or "block" in lowered:
         return "Waiting for Input"
     if "progress" in lowered or "investig" in lowered or "review" in lowered:
         return "Investigating"
-    if "resolved" in lowered or "done" in lowered:
+    if "resolved" in lowered or "done" in lowered or "complete" in lowered:
         return "Resolved"
     return "Open"
 
@@ -136,10 +141,18 @@ def _apply_overrides(
     merged: list[IncidentSummary] = []
     for item in incidents:
         override = overrides.get(item.id)
-        if override:
-            merged.append(item.model_copy(update={"status": override}))
-        else:
+        if not override:
             merged.append(item)
+            continue
+        # Jira terminal state wins over stale local "Open" saved before Jira closed.
+        if (
+            item.source == "jira"
+            and item.status in _TERMINAL_INCIDENT_STATUSES
+            and override not in _TERMINAL_INCIDENT_STATUSES
+        ):
+            merged.append(item)
+            continue
+        merged.append(item.model_copy(update={"status": override}))
     return merged
 
 
@@ -214,15 +227,19 @@ def fetch_live_incidents(
     warnings: list[str] = []
     sources_connected = {"jira": False, "slack": False}
     overrides = _load_status_overrides(db, tenant_id)
+    jira_by_key: dict[str, JiraIssueActivity] = {}
 
     jira_config = get_jira_config(db, tenant_id)
     if jira_config:
         sources_connected["jira"] = True
         try:
-            issues = fetch_jira_issues(jira_config)
-            for issue in issues:
-                if issue.is_done or not issue.is_bug_or_incident:
-                    continue
+            issues = fetch_jira_incident_issues(jira_config)
+            jira_by_key = {
+                issue.issue_key: issue
+                for issue in issues
+                if issue.is_bug_or_incident
+            }
+            for issue in jira_by_key.values():
                 incidents.append(_jira_to_summary(issue))
         except Exception as exc:
             logger.warning("Jira incident fetch failed: %s", exc)
@@ -241,7 +258,24 @@ def fetch_live_incidents(
                 thread_dt = _slack_ts_to_datetime(thread.thread_ts)
                 if thread_dt < cutoff:
                     continue
-                incidents.append(_slack_to_summary(thread))
+                jira_match = _JIRA_ID_PATTERN.search(thread.parent_text)
+                linked_jira = (
+                    jira_by_key.get(jira_match.group(0)) if jira_match else None
+                )
+                if linked_jira and linked_jira.is_done:
+                    continue
+                if linked_jira:
+                    incidents.append(
+                        _slack_to_summary(
+                            thread,
+                            status_override=_map_jira_status(
+                                linked_jira.status,
+                                linked_jira.status_category,
+                            ),
+                        )
+                    )
+                else:
+                    incidents.append(_slack_to_summary(thread))
         except Exception as exc:
             logger.warning("Slack incident fetch failed: %s", exc)
             warnings.append(f"Could not load Slack incidents: {exc}")
@@ -268,8 +302,10 @@ def get_incident_by_id(
     db: Session,
     tenant_id: uuid.UUID,
     incident_id: str,
+    *,
+    use_cache: bool = True,
 ) -> IncidentSummary | None:
-    incidents, _, _ = fetch_live_incidents(db, tenant_id)
+    incidents, _, _ = fetch_live_incidents(db, tenant_id, use_cache=use_cache)
     match = next((item for item in incidents if item.id == incident_id), None)
     if match:
         return match

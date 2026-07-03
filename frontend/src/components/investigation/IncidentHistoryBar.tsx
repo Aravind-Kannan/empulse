@@ -177,7 +177,7 @@ export function IncidentHistoryBar({
   };
 
   return (
-    <section className="space-y-4 bg-zinc-950/10 border border-zinc-800/60 rounded-xl p-4 shadow-sm">
+    <section className="space-y-4 overflow-x-hidden bg-zinc-950/10 border border-zinc-800/60 rounded-xl p-4 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
@@ -224,7 +224,7 @@ export function IncidentHistoryBar({
         </div>
       )}
 
-      <div className="relative group">
+      <div className="relative group overflow-hidden">
         {hasOverflow && canScrollLeft && (
           <button
             type="button"
@@ -238,10 +238,8 @@ export function IncidentHistoryBar({
 
         <div
           ref={scrollContainerRef}
-          className={`flex gap-3 scroll-smooth ${
-            hasOverflow
-              ? "overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent"
-              : "overflow-x-hidden"
+          className={`incident-cards-scroll flex gap-3 scroll-smooth ${
+            hasOverflow ? "overflow-x-auto" : "overflow-x-hidden"
           }`}
         >
           {incidents.map((incident) => {

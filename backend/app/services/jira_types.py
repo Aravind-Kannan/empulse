@@ -27,7 +27,13 @@ class JiraIssueActivity:
 
     @property
     def is_done(self) -> bool:
-        return self.status_category.lower() == "done"
+        if self.status_category.lower() == "done":
+            return True
+        lowered = self.status.lower()
+        return any(
+            token in lowered
+            for token in ("closed", "done", "resolved", "cancelled", "canceled", "complete")
+        )
 
     @property
     def is_high_priority(self) -> bool:

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -22,6 +24,7 @@ from app.services.investigation import (
 from app.tenancy import CurrentTenant
 
 router = APIRouter(prefix="/api/investigation", tags=["investigation"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/statuses")
@@ -77,13 +80,21 @@ async def incident_briefing_stream(
     incident_id: str,
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
+    force: bool = Query(default=False),
 ):
-    live = get_incident_by_id(db, tenant.id, incident_id)
+    live = get_incident_by_id(db, tenant.id, incident_id, use_cache=not force)
     if not live:
         raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found.")
 
+    logger.info(
+        "investigation briefing_stream request incident_id=%s force=%s tenant=%s",
+        incident_id,
+        force,
+        tenant.id,
+    )
+
     return StreamingResponse(
-        stream_incident_briefing(live, tenant, db),
+        stream_incident_briefing(live, tenant, db, force=force),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -99,6 +110,12 @@ async def investigation_chat_stream(
     tenant: CurrentTenant,
     db: Session = Depends(get_db),
 ):
+    logger.info(
+        "investigation chat_stream request incident_id=%s tenant=%s message_len=%d",
+        payload.incident_id,
+        tenant.id,
+        len(payload.message or ""),
+    )
     return StreamingResponse(
         stream_investigation_chat(payload, tenant, db),
         media_type="text/event-stream",
