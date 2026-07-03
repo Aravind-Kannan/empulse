@@ -24,6 +24,7 @@ import type {
   IntegrationSyncJobsAcceptedResponse,
   IntegrationSyncResult,
   InvestigationAnalysisStatus,
+  InvestigationBaseMetadata,
   InvestigationDiagnostics,
   KraAnalyticsResponse,
   KraBackupAssignmentResponse,
@@ -591,6 +592,7 @@ type InvestigationStreamPayload = {
   phase?: InvestigationAnalysisStatus["phase"];
   message?: string;
   diagnostics?: InvestigationDiagnostics;
+  base_metadata?: InvestigationBaseMetadata;
 };
 
 async function readInvestigationSseStream(
@@ -598,6 +600,7 @@ async function readInvestigationSseStream(
   handlers: {
     onStatus?: (status: InvestigationAnalysisStatus) => void;
     onToken?: (token: string) => void;
+    onBaseMetadata?: (metadata: InvestigationBaseMetadata) => void;
     onDiagnostics?: (diagnostics: InvestigationDiagnostics) => void;
   },
 ): Promise<void> {
@@ -622,6 +625,8 @@ async function readInvestigationSseStream(
       const payload = JSON.parse(line.slice(6)) as InvestigationStreamPayload;
       if (payload.type === "status" && payload.phase && payload.message) {
         handlers.onStatus?.({ phase: payload.phase, message: payload.message });
+      } else if (payload.type === "base_metadata" && payload.base_metadata) {
+        handlers.onBaseMetadata?.(payload.base_metadata);
       } else if (payload.type === "token" && payload.content) {
         handlers.onToken?.(payload.content);
       } else if (payload.type === "diagnostics" && payload.diagnostics) {
@@ -640,7 +645,10 @@ export async function streamIncidentBriefing(
   incidentId: string,
   onStatus: (status: InvestigationAnalysisStatus) => void,
   onDiagnostics: (diagnostics: InvestigationDiagnostics) => void,
-  options?: { force?: boolean },
+  options?: {
+    force?: boolean;
+    onBaseMetadata?: (metadata: InvestigationBaseMetadata) => void;
+  },
 ): Promise<void> {
   const query = options?.force ? "?force=true" : "";
   const response = await apiFetch(
@@ -656,7 +664,11 @@ export async function streamIncidentBriefing(
     throw new Error(`Incident briefing failed (${response.status})`);
   }
 
-  await readInvestigationSseStream(response, { onStatus, onDiagnostics });
+  await readInvestigationSseStream(response, {
+    onStatus,
+    onDiagnostics,
+    onBaseMetadata: options?.onBaseMetadata,
+  });
 }
 
 export async function streamInvestigationChat(

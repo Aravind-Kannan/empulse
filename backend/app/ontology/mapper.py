@@ -129,6 +129,13 @@ def map_work_item(
         status=record.status,
         project_key=record.project_key,
         summary=record.summary,
+        description_preview=record.description,
+        resolution=record.resolution,
+        labels=", ".join(record.labels),
+        comment_preview=" | ".join(record.comment_excerpts[:5]),
+        reporter_name=(
+            record.reporter.display_name if record.reporter else ""
+        ),
     )
     edge_count = 0
 
@@ -146,6 +153,8 @@ def map_work_item(
                 component,
             )
             edge_count += 1
+
+    _attach_linked_work_items(node, record.linked_work_item_ids)
 
     return node, edge_count
 

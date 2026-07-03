@@ -53,6 +53,26 @@ class InvestigationReference(BaseModel):
     snippet: str
 
 
+class InvestigationGraphHop(BaseModel):
+    from_node: str
+    edge: str
+    to: str
+
+
+class InvestigationAssignmentRecord(BaseModel):
+    employee_id: str
+    employee_name: str
+    component_id: str
+    component_name: str
+    codebase_share_pct: float = Field(ge=0, le=100)
+
+
+class InvestigationBaseMetadata(BaseModel):
+    incident: IncidentSummary
+    assignments: list[InvestigationAssignmentRecord] = Field(default_factory=list)
+    scope_owners: list[SmeRecommendation] = Field(default_factory=list)
+
+
 class InvestigationDiagnostics(BaseModel):
     probable_root_cause: str
     confidence_score: float = Field(ge=0, le=100)
@@ -63,6 +83,7 @@ class InvestigationDiagnostics(BaseModel):
     slack_threads: list[InvestigationReference] = Field(default_factory=list)
     jira_tickets: list[InvestigationReference] = Field(default_factory=list)
     notion_pages: list[InvestigationReference] = Field(default_factory=list)
+    graph_hops: list[InvestigationGraphHop] = Field(default_factory=list)
 
 
 class InvestigationChatRequest(BaseModel):
@@ -71,7 +92,7 @@ class InvestigationChatRequest(BaseModel):
 
 
 class InvestigationChatChunk(BaseModel):
-    type: Literal["token", "diagnostics", "status", "done"]
+    type: Literal["token", "diagnostics", "status", "base_metadata", "done"]
     content: str | None = None
     phase: Literal["searching", "matching", "summarizing"] | None = None
     message: str | None = None

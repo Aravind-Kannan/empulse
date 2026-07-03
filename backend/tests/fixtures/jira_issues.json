@@ -6,9 +6,20 @@
     "status": "In Progress",
     "status_category": "indeterminate",
     "project_key": "ENG",
+    "summary": "Checkout API 500 errors under load",
     "assignee_provider_user_id": "jira-cara",
     "assignee_email": "cara.patel@acme.com",
-    "component_id": "comp-auth"
+    "reporter_provider_user_id": "jira-ben",
+    "reporter_email": "ben.rivera@acme.com",
+    "component_id": "comp-auth",
+    "labels": ["incident", "checkout"],
+    "description_text": "Checkout API returns HTTP 500 when the connection pool is exhausted.",
+    "resolution": "",
+    "linked_issue_keys": ["ENG-156"],
+    "recent_comments": [
+      "Root cause appears to be connection pool exhaustion.",
+      "Mitigation: scale checkout pods and increase pool size."
+    ]
   },
   {
     "issue_key": "ENG-156",

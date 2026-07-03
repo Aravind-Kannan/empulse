@@ -314,3 +314,50 @@ def test_slack_api_get_retries_http_429():
 
     assert payload["ok"] is True
     assert calls["count"] == 2
+
+
+def test_fetch_slack_incident_threads_feed_mode_limits_channels_and_replies():
+    config = SlackConfigRequest(
+        workspace_url="https://acme.slack.com",
+        bot_token="xoxb-test",
+        channel_ids="",
+    )
+    history = [
+        {
+            "ts": "100.0",
+            "text": "SEV1 checkout down",
+            "reply_count": 5,
+            "user": "U1",
+        },
+    ]
+
+    with (
+        patch(
+            "app.services.slack_client.resolve_sync_channels",
+            return_value=(
+                {"C_INC", "C_GEN"},
+                {"C_INC"},
+                set(),
+                {"C_INC": "incident", "C_GEN": "general"},
+                2,
+            ),
+        ),
+        patch(
+            "app.services.slack_client.fetch_channel_history",
+            return_value=history,
+        ) as mock_history,
+        patch(
+            "app.services.slack_client._fetch_thread_replies",
+        ) as mock_replies,
+    ):
+        threads, _, warnings, stats = fetch_slack_incident_threads(
+            config,
+            purpose="feed",
+        )
+
+    assert not warnings
+    assert stats["channels_synced"] == 1
+    mock_history.assert_called_once()
+    mock_replies.assert_not_called()
+    assert threads
+    assert threads[0].channel_name == "incident"

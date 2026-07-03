@@ -14,7 +14,9 @@ import type {
   IncidentStatus,
   IncidentSummary,
   InvestigationAnalysisStatus,
+  InvestigationBaseMetadata,
   InvestigationDiagnostics,
+  CachedInvestigationData,
 } from "@/lib/types";
 
 import { IncidentHistoryBar } from "./IncidentHistoryBar";
@@ -27,10 +29,11 @@ import { InvestigationDiagnosticsPanel } from "./InvestigationDiagnosticsPanel";
 import {
   createBriefingFetcher,
   defaultWorkspaceChatHistory,
+  fallbackBaseMetadata,
   filterIncidentsForBar,
   PREFETCH_CONCURRENCY,
+  PREFETCH_SLOT_LIMIT,
   pickFirstBarIncident,
-  type CachedWorkspace,
   type IncidentSyncStatus,
 } from "./investigation-prefetch";
 
@@ -49,9 +52,9 @@ export function InvestigationDashboard() {
   const [refreshingBriefing, setRefreshingBriefing] = useState(false);
 
   const [workspaceCache, setWorkspaceCache] = useState<
-    Record<string, CachedWorkspace>
+    Record<string, CachedInvestigationData>
   >({});
-  const workspaceCacheRef = useRef<Record<string, CachedWorkspace>>({});
+  const workspaceCacheRef = useRef<Record<string, CachedInvestigationData>>({});
   const fetchGenRef = useRef(0);
   const briefingFetcherRef = useRef(createBriefingFetcher());
   const chatPanelRef = useRef<InvestigationChatPanelHandle>(null);
@@ -80,21 +83,31 @@ export function InvestigationDashboard() {
   const [briefingStatus, setBriefingStatus] =
     useState<InvestigationAnalysisStatus | null>(null);
   const [briefingError, setBriefingError] = useState<string | null>(null);
+  const [baseMetadata, setBaseMetadata] =
+    useState<InvestigationBaseMetadata | null>(null);
+  const baseMetadataRef = useRef<Record<string, InvestigationBaseMetadata>>({});
 
   const writeWorkspaceCache = useCallback(
-    (incidentId: string, entry: CachedWorkspace) => {
+    (incidentId: string, entry: CachedInvestigationData) => {
       workspaceCacheRef.current = {
         ...workspaceCacheRef.current,
         [incidentId]: entry,
       };
       setWorkspaceCache({ ...workspaceCacheRef.current });
-      setSyncStatus((prev) => ({ ...prev, [incidentId]: "ready" }));
+      setSyncStatus((prev) => ({
+        ...prev,
+        [incidentId]: entry.diagnostics
+          ? "ready"
+          : prev[incidentId] === "loading"
+            ? "loading"
+            : (prev[incidentId] ?? "idle"),
+      }));
     },
     [],
   );
 
   const readWorkspaceCache = useCallback(
-    (incidentId: string): CachedWorkspace | undefined =>
+    (incidentId: string): CachedInvestigationData | undefined =>
       workspaceCacheRef.current[incidentId],
     [],
   );
@@ -115,6 +128,11 @@ export function InvestigationDashboard() {
       setChatIncidentId(incident.id);
       setBriefingError(null);
       setBriefingStatus(null);
+
+      if (cached.baseMetadata) {
+        setBaseMetadata(cached.baseMetadata);
+        baseMetadataRef.current[incident.id] = cached.baseMetadata;
+      }
 
       if (!cached.diagnostics) {
         setDiagnostics(null);
@@ -137,6 +155,10 @@ export function InvestigationDashboard() {
     const cached = readWorkspaceCache(incidentId);
     writeWorkspaceCache(incidentId, {
       chatHistory: cached?.chatHistory ?? chatMessages,
+      baseMetadata:
+        baseMetadataRef.current[incidentId] ??
+        cached?.baseMetadata ??
+        null,
       diagnostics:
         diagnosticsIncidentId === incidentId
           ? diagnostics
@@ -159,6 +181,10 @@ export function InvestigationDashboard() {
       writeWorkspaceCache(incidentId, {
         diagnostics: nextDiagnostics,
         chatHistory,
+        baseMetadata:
+          baseMetadataRef.current[incidentId] ??
+          workspaceCacheRef.current[incidentId]?.baseMetadata ??
+          null,
       });
       return chatHistory;
     },
@@ -197,10 +223,20 @@ export function InvestigationDashboard() {
     [persistBriefingResult, readWorkspaceCache, setIncidentSyncStatus],
   );
 
+  const autoBriefingSlotIds = useCallback((): Set<string> => {
+    return new Set(
+      filterIncidentsForBar(allIncidentsRef.current, activeFilter)
+        .slice(0, PREFETCH_SLOT_LIMIT)
+        .map((item) => item.id),
+    );
+  }, [activeFilter]);
+
   const drainPrefetchQueue = useCallback(() => {
     if (foregroundBriefingRef.current) {
       return;
     }
+
+    const allowedSlots = autoBriefingSlotIds();
 
     while (
       prefetchRunningRef.current < PREFETCH_CONCURRENCY &&
@@ -208,6 +244,12 @@ export function InvestigationDashboard() {
     ) {
       const incidentId = prefetchQueueRef.current[0];
       if (!incidentId) break;
+
+      if (!allowedSlots.has(incidentId)) {
+        prefetchQueueRef.current.shift();
+        prefetchQueuedRef.current.delete(incidentId);
+        continue;
+      }
 
       if (incidentId === activeIncidentIdRef.current) {
         prefetchQueueRef.current.shift();
@@ -242,40 +284,15 @@ export function InvestigationDashboard() {
 
       break;
     }
-  }, [readWorkspaceCache, runPrefetch, setIncidentSyncStatus]);
-
-  const enqueuePrefetch = useCallback(
-    (incidentId: string, options?: { front?: boolean }) => {
-      if (!incidentId || incidentId === activeIncidentIdRef.current) return;
-
-      if (readWorkspaceCache(incidentId)?.diagnostics) {
-        setIncidentSyncStatus(incidentId, "ready");
-        return;
-      }
-      if (
-        briefingFetcherRef.current.isInFlight(incidentId) ||
-        prefetchQueuedRef.current.has(incidentId)
-      ) {
-        return;
-      }
-
-      prefetchQueuedRef.current.add(incidentId);
-      if (options?.front) {
-        prefetchQueueRef.current.unshift(incidentId);
-      } else {
-        prefetchQueueRef.current.push(incidentId);
-      }
-      drainPrefetchQueue();
-    },
-    [drainPrefetchQueue, readWorkspaceCache, setIncidentSyncStatus],
-  );
+  }, [autoBriefingSlotIds, readWorkspaceCache, runPrefetch, setIncidentSyncStatus]);
 
   const rebuildPrefetchQueue = useCallback(
     (orderedIds: string[], activeId: string | null) => {
       const nextQueue: string[] = [];
       const nextQueued = new Set<string>();
+      const slotIds = orderedIds.slice(0, PREFETCH_SLOT_LIMIT);
 
-      for (const id of orderedIds) {
+      for (const id of slotIds) {
         if (id === activeId) continue;
         if (readWorkspaceCache(id)?.diagnostics) {
           setIncidentSyncStatus(id, "ready");
@@ -316,6 +333,7 @@ export function InvestigationDashboard() {
         if (options?.force || !readWorkspaceCache(incident.id)) {
           setDiagnostics(null);
           setDiagnosticsIncidentId(null);
+          setBaseMetadata(fallbackBaseMetadata(incident));
           setBriefingStatus({
             phase: "searching",
             message: options?.force
@@ -333,6 +351,24 @@ export function InvestigationDashboard() {
               if (fetchGenRef.current === gen) {
                 setBriefingStatus(status);
               }
+            },
+            onBaseMetadata: (metadata) => {
+              if (fetchGenRef.current !== gen) return;
+              baseMetadataRef.current[incident.id] = metadata;
+              setBaseMetadata(metadata);
+              setActiveIncident((prev) =>
+                prev?.id === incident.id ? metadata.incident : prev,
+              );
+              const cached = readWorkspaceCache(incident.id);
+              writeWorkspaceCache(incident.id, {
+                chatHistory:
+                  cached?.chatHistory ?? defaultWorkspaceChatHistory(
+                    incident.id,
+                    workspaceCacheRef.current,
+                  ),
+                baseMetadata: metadata,
+                diagnostics: cached?.diagnostics ?? null,
+              });
             },
             onDiagnostics: (diag) => {
               if (fetchGenRef.current === gen) {
@@ -381,11 +417,15 @@ export function InvestigationDashboard() {
       readWorkspaceCache,
       restoreWorkspaceFromCache,
       setIncidentSyncStatus,
+      writeWorkspaceCache,
     ],
   );
 
   const applyFeed = useCallback(
     (data: Awaited<ReturnType<typeof fetchIncidents>>) => {
+      prefetchQueueRef.current = [];
+      prefetchQueuedRef.current.clear();
+      prefetchPlanKeyRef.current = "";
       setAllIncidents(data.incidents);
       allIncidentsRef.current = data.incidents;
       setFeedWarnings(data.warnings);
@@ -420,6 +460,7 @@ export function InvestigationDashboard() {
     if (!activeIncident) {
       setDiagnostics(null);
       setDiagnosticsIncidentId(null);
+      setBaseMetadata(null);
       setChatMessages(defaultChatWelcomeNoIncident());
       setChatIncidentId(null);
       setBriefingStatus(null);
@@ -504,12 +545,9 @@ export function InvestigationDashboard() {
     );
   }
 
-  const handleIncidentVisible = useCallback(
-    (incidentId: string) => {
-      enqueuePrefetch(incidentId);
-    },
-    [enqueuePrefetch],
-  );
+  const handleIncidentVisible = useCallback((_incidentId: string) => {
+    // Briefings for cards beyond the background prefetch window load on select.
+  }, []);
 
   function leaveActiveIncident() {
     chatPanelRef.current?.finalizeInterruptedStream();
@@ -523,6 +561,21 @@ export function InvestigationDashboard() {
     fetchGenRef.current += 1;
     setBriefingError(null);
     setBriefingStatus(null);
+
+    const cached = readWorkspaceCache(incident.id);
+    if (cached?.diagnostics) {
+      setBaseMetadata(
+        cached.baseMetadata ?? fallbackBaseMetadata(incident),
+      );
+      setDiagnostics(cached.diagnostics);
+      setDiagnosticsIncidentId(incident.id);
+      setChatMessages(cached.chatHistory);
+      setChatIncidentId(incident.id);
+      setActiveIncident(incident);
+      return;
+    }
+
+    setBaseMetadata(fallbackBaseMetadata(incident));
     setActiveIncident(incident);
   }
 
@@ -541,13 +594,21 @@ export function InvestigationDashboard() {
         prev.map((item) => (item.id === updated.id ? updated : item)),
       );
 
-      delete workspaceCacheRef.current[updated.id];
-      setWorkspaceCache({ ...workspaceCacheRef.current });
-      setIncidentSyncStatus(updated.id, "idle");
-      enqueuePrefetch(updated.id);
-
-      if (activeIncident.id === updated.id) {
-        void loadWorkspaceForIncident(updated, { force: true });
+      const cached = readWorkspaceCache(updated.id);
+      if (cached) {
+        const patchedMetadata = cached.baseMetadata
+          ? { ...cached.baseMetadata, incident: updated }
+          : fallbackBaseMetadata(updated);
+        baseMetadataRef.current[updated.id] = patchedMetadata;
+        if (activeIncident.id === updated.id) {
+          setBaseMetadata(patchedMetadata);
+        }
+        writeWorkspaceCache(updated.id, {
+          ...cached,
+          baseMetadata: patchedMetadata,
+        });
+      } else if (activeIncident.id === updated.id) {
+        setBaseMetadata(fallbackBaseMetadata(updated));
       }
 
       if (
@@ -593,6 +654,10 @@ export function InvestigationDashboard() {
     const cached = readWorkspaceCache(forIncidentId);
     writeWorkspaceCache(forIncidentId, {
       chatHistory: messages,
+      baseMetadata:
+        baseMetadataRef.current[forIncidentId] ??
+        cached?.baseMetadata ??
+        null,
       diagnostics:
         diagnosticsIncidentId === forIncidentId
           ? diagnostics
@@ -627,6 +692,19 @@ export function InvestigationDashboard() {
     activeIncident && diagnosticsIncidentId === activeIncident.id
       ? diagnostics
       : null;
+
+  const analyzing = briefingStatus !== null || refreshingBriefing;
+  const graphAnalyzing =
+    !!activeIncident &&
+    analyzing &&
+    (!visibleDiagnostics || diagnosticsIncidentId !== activeIncident.id);
+
+  const visibleBaseMetadata =
+    activeIncident &&
+    (baseMetadata?.incident.id === activeIncident.id
+      ? baseMetadata
+      : (workspaceCache[activeIncident.id]?.baseMetadata ??
+        fallbackBaseMetadata(activeIncident)));
 
   const visibleChatMessages =
     !activeIncident
@@ -693,9 +771,14 @@ export function InvestigationDashboard() {
                   )))
               : false
           }
-          status={activeIncident?.status ?? "Open"}
+          status={
+            visibleBaseMetadata?.incident.status ??
+            activeIncident?.status ??
+            "Open"
+          }
           statusUpdating={statusUpdating}
-          analyzing={briefingStatus !== null || refreshingBriefing}
+          analyzing={analyzing}
+          graphAnalyzing={graphAnalyzing}
           analysisMessage={briefingStatus?.message ?? null}
           onStatusChange={handleStatusChange}
           onRefresh={activeIncident ? handleRefreshBriefing : undefined}
@@ -707,7 +790,9 @@ export function InvestigationDashboard() {
           slackThreads={visibleDiagnostics?.slack_threads ?? []}
           jiraTickets={visibleDiagnostics?.jira_tickets ?? []}
           notionPages={visibleDiagnostics?.notion_pages ?? []}
-          analyzing={briefingStatus !== null || refreshingBriefing}
+          baseMetadata={visibleBaseMetadata}
+          analyzing={analyzing}
+          graphAnalyzing={graphAnalyzing}
           analysisMessage={briefingStatus?.message ?? null}
         />
       </div>

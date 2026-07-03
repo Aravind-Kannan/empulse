@@ -1,8 +1,7 @@
-"""Live incident cards from Jira issues and Slack incident threads."""
+"""Incident cards from last integration sync (Jira + Slack telemetry cache)."""
 
 from __future__ import annotations
 
-import logging
 import re
 import time
 import uuid
@@ -13,16 +12,20 @@ from sqlalchemy.orm import Session
 from app.models.operational import IncidentRecord
 from app.schemas.investigation import IncidentStatus, IncidentSummary
 from app.services.integration_config_store import get_jira_config, get_slack_config
-from app.services.jira_client import fetch_jira_incident_issues
+from app.services.integration_telemetry import (
+    get_cached_jira_issues,
+    get_cached_slack_threads,
+    has_jira_sync,
+    has_slack_sync,
+    hydrate_integration_telemetry,
+)
 from app.services.jira_types import JiraIssueActivity
-from app.services.slack_client import fetch_slack_incident_threads, thread_title
+from app.services.slack_client import qualifies_for_incident_feed, thread_title
 from app.services.slack_types import SlackThreadRecord
-
-logger = logging.getLogger(__name__)
 
 _JIRA_ID_PATTERN = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 _RECENT_DAYS = 14
-_INCIDENT_FEED_CACHE_TTL_SECONDS = 60.0
+_INCIDENT_FEED_CACHE_TTL_SECONDS = 300.0
 _incident_feed_cache: dict[
     uuid.UUID,
     tuple[float, list[IncidentSummary], list[str], dict[str, bool]],
@@ -216,13 +219,16 @@ def fetch_live_incidents(
     use_cache: bool = True,
 ) -> tuple[list[IncidentSummary], list[str], dict[str, bool]]:
     """
-    Pull active incidents from connected Jira and Slack integrations.
+    Build incident cards from persisted integration sync telemetry (no live APIs).
     Returns (incidents, warnings, sources_connected).
     """
     if use_cache:
         cached = _incident_feed_cache.get(tenant_id)
         if cached and (time.time() - cached[0]) < _INCIDENT_FEED_CACHE_TTL_SECONDS:
             return cached[1], list(cached[2]), dict(cached[3])
+
+    hydrate_integration_telemetry(db, tenant_id)
+
     incidents: list[IncidentSummary] = []
     warnings: list[str] = []
     sources_connected = {"jira": False, "slack": False}
@@ -230,30 +236,28 @@ def fetch_live_incidents(
     jira_by_key: dict[str, JiraIssueActivity] = {}
 
     jira_config = get_jira_config(db, tenant_id)
-    if jira_config:
+    if jira_config or has_jira_sync():
         sources_connected["jira"] = True
-        try:
-            issues = fetch_jira_incident_issues(jira_config)
+        if has_jira_sync():
             jira_by_key = {
                 issue.issue_key: issue
-                for issue in issues
+                for issue in get_cached_jira_issues()
                 if issue.is_bug_or_incident
             }
             for issue in jira_by_key.values():
                 incidents.append(_jira_to_summary(issue))
-        except Exception as exc:
-            logger.warning("Jira incident fetch failed: %s", exc)
-            warnings.append(f"Could not load Jira incidents: {exc}")
+        elif jira_config:
+            warnings.append(
+                "Jira is connected but not synced yet. Run sync from Settings → Integrations."
+            )
 
     slack_config = get_slack_config(db, tenant_id)
-    if slack_config:
+    if slack_config or has_slack_sync():
         sources_connected["slack"] = True
-        try:
-            threads, _, slack_warnings, _ = fetch_slack_incident_threads(slack_config)
-            warnings.extend(slack_warnings)
+        if has_slack_sync():
             cutoff = datetime.now(UTC) - timedelta(days=_RECENT_DAYS)
-            for thread in threads:
-                if not (thread.is_incident_channel or thread.is_on_call_channel):
+            for thread in get_cached_slack_threads():
+                if not qualifies_for_incident_feed(thread):
                     continue
                 thread_dt = _slack_ts_to_datetime(thread.thread_ts)
                 if thread_dt < cutoff:
@@ -276,9 +280,10 @@ def fetch_live_incidents(
                     )
                 else:
                     incidents.append(_slack_to_summary(thread))
-        except Exception as exc:
-            logger.warning("Slack incident fetch failed: %s", exc)
-            warnings.append(f"Could not load Slack incidents: {exc}")
+        elif slack_config:
+            warnings.append(
+                "Slack is connected but not synced yet. Run sync from Settings → Integrations."
+            )
 
     incidents = _apply_overrides(incidents, overrides)
     incidents = [item for item in incidents if _is_recent(item.updated_at)]

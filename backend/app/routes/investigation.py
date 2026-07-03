@@ -58,7 +58,7 @@ async def patch_incident_status(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    # Async write-back: cognee.add() + cognee.cognify() on tenant dataset.
+    # Async write-back: structured GraphIncidentRecord upsert (no cognify).
     background_tasks.add_task(
         write_incident_memory_to_cognee,
         tenant.id,

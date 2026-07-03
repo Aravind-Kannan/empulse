@@ -119,7 +119,17 @@ def _jira_key(node: Any) -> str:
 
 
 def _jira_version(node: Any) -> str:
-    return f"{node.status}|{node.priority}|{node.issue_type}"
+    return _ledger_content_version(
+        node.status,
+        node.priority,
+        node.issue_type,
+        node.summary,
+        getattr(node, "description_preview", ""),
+        getattr(node, "resolution", ""),
+        getattr(node, "labels", ""),
+        getattr(node, "comment_preview", ""),
+        getattr(node, "reporter_name", ""),
+    )
 
 
 def _jira_label(node: Any) -> str:

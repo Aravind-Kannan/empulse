@@ -21,11 +21,14 @@ from app.services.integration_telemetry import (
 from app.services.notion_types import NotionDocRecord
 from app.services.slack_client import (
     fetch_slack_incident_threads,
+    is_incident_feed_channel,
     is_resolved_incident_thread,
     load_fixture_channel_history,
+    qualifies_for_incident_feed,
 )
 from app.services.slack_evidence import build_slack_evidence_items
 from app.services.slack_telemetry import compute_slack_telemetry
+from app.services.slack_types import SlackThreadRecord
 from app.services.era.signals_builder import build_signals_for_employee
 
 from tests.conftest import add_employee
@@ -87,6 +90,52 @@ def test_bot_only_thread_not_attributed():
         thread for thread in threads if thread.parent_text == "Bot-only noise thread"
     )
     assert is_resolved_incident_thread(bot_thread, is_incident_channel=True) is None
+
+
+def test_qualifies_for_incident_feed_only_incident_named_channels():
+    incident_channel_thread = SlackThreadRecord(
+        channel_id="C1",
+        channel_name="incident",
+        thread_ts="1",
+        parent_text="SEV1 checkout outage",
+    )
+    prefixed_channel_thread = SlackThreadRecord(
+        channel_id="C2",
+        channel_name="incident-payments",
+        thread_ts="2",
+        parent_text="payment incident — pool exhausted",
+    )
+    general_channel_thread = SlackThreadRecord(
+        channel_id="C3",
+        channel_name="eng-alerts",
+        thread_ts="3",
+        parent_text="prod outage in checkout",
+        is_incident_channel=True,
+    )
+    plural_channel_thread = SlackThreadRecord(
+        channel_id="C4",
+        channel_name="incidents",
+        thread_ts="4",
+        parent_text="SEV1 latency",
+        is_incident_channel=True,
+    )
+    assert qualifies_for_incident_feed(incident_channel_thread) is True
+    assert qualifies_for_incident_feed(prefixed_channel_thread) is True
+    assert qualifies_for_incident_feed(general_channel_thread) is False
+    assert qualifies_for_incident_feed(plural_channel_thread) is False
+    assert (
+        qualifies_for_incident_feed(
+            SlackThreadRecord(
+                channel_id="C1",
+                channel_name="incident",
+                thread_ts="5",
+                parent_text="lunch at 1?",
+            )
+        )
+        is False
+    )
+    assert is_incident_feed_channel("#incident") is True
+    assert is_incident_feed_channel("incident-checkout") is True
 
 
 def test_undocumented_incident_without_notion_update(db, tenant):

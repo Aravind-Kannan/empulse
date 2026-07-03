@@ -17,6 +17,7 @@ from app.models.operational import (
     Assignment,
     Component,
     Employee,
+    EmployeeIdentity,
     IncidentRecord,
     NotionDocSnapshot,
 )
@@ -25,8 +26,11 @@ from app.schemas.investigation import (
     IncidentListResponse,
     IncidentStatus,
     IncidentSummary,
+    InvestigationAssignmentRecord,
+    InvestigationBaseMetadata,
     InvestigationChatRequest,
     InvestigationDiagnostics,
+    InvestigationGraphHop,
     InvestigationReference,
     SmeRecommendation,
 )
@@ -41,16 +45,24 @@ from app.services.integration_telemetry import (
     get_cached_slack_threads,
 )
 from app.services.jira_types import JiraIssueActivity
+from app.services.slack_client import thread_title
+from cognee.infrastructure.engine import DataPoint
+
 from app.services.tenant_cognee import (
+    tenant_add_data_points,
     tenant_cognee_context,
-    tenant_write_memory_record,
 )
 from app.tenancy import tenant_dataset_name
 
 logger = logging.getLogger(__name__)
 
 _BRIEFING_CACHE_TTL_SECONDS = 1800.0
+_BASELINE_CACHE_TTL_SECONDS = 120.0
+_GRAPH_COMPLETION_CONFIDENCE_THRESHOLD = 80.0
+_HYBRID_SEARCH_TOP_K = 15
+
 _briefing_cache: dict[tuple[str, str], tuple[float, InvestigationDiagnostics]] = {}
+_baseline_cache: dict[str, tuple[float, "_TenantBaseline"]] = {}
 
 _BRIEFING_QUERY = (
     "incident root cause workaround impact owners escalation postmortem runbook"
@@ -206,6 +218,55 @@ class _GraphHop:
 
 
 @dataclass
+class _TenantBaseline:
+    """Sync-time org graph snapshot reused across briefing/chat requests."""
+
+    components: list[Component]
+    employees: list[Employee]
+    assignments: list[Assignment]
+    loaded_at: float
+
+
+@dataclass
+class _OperationalBundle:
+    """Pre-compiled operational metadata fetched in parallel with vector search."""
+
+    operational_smes: list[SmeRecommendation]
+    op_slack: list[InvestigationReference]
+    op_jira: list[InvestigationReference]
+    op_notion: list[InvestigationReference]
+    related_jira: list[InvestigationReference]
+    interaction_counts: dict[str, tuple[int, int]]
+
+
+@dataclass
+class _IncidentEvidencePack:
+    """Consolidated retrieval context for a single diagnostics build."""
+
+    baseline: _TenantBaseline
+    incident: IncidentSummary | None
+    search_hits: list[_GraphSearchHit] = field(default_factory=list)
+    search_texts: list[str] = field(default_factory=list)
+    retrieval_confidence: float = 0.0
+    operational: _OperationalBundle | None = None
+
+
+class GraphIncidentRecord(DataPoint):
+    """Structured incident node — updated in-place on status transitions."""
+
+    incident_id: str
+    title: str = ""
+    system_scope: str = ""
+    jira_id: str = ""
+    status: str = ""
+    resolution_note: str = ""
+    metadata: dict = {
+        "index_fields": ["incident_id", "title", "jira_id", "status", "system_scope"],
+        "identity_fields": ["incident_id"],
+    }
+
+
+@dataclass
 class _GraphContext:
     search_hits: list[_GraphSearchHit] = field(default_factory=list)
     search_texts: list[str] = field(default_factory=list)
@@ -220,6 +281,7 @@ class _GraphContext:
     jira_tickets: list[InvestigationReference] = field(default_factory=list)
     notion_pages: list[InvestigationReference] = field(default_factory=list)
     postmortems: list[InvestigationReference] = field(default_factory=list)
+    retrieval_confidence: float = 0.0
 
 
 def list_incidents(
@@ -296,23 +358,30 @@ async def write_incident_memory_to_cognee(
     system_scope: str | None = None,
     jira_id: str | None = None,
 ) -> None:
-    """Write incident status transitions back into the tenant Cognee dataset."""
+    """Upsert structured incident graph node — avoids unstructured status blobs."""
     note = (resolution_note or "").strip()
-    updated_text = (
-        f"Incident {incident_id} status changed to {status}."
-        + (f" Resolution note: {note}" if note else "")
+    node = GraphIncidentRecord(
+        incident_id=incident_id,
+        title=(title or "").strip(),
+        system_scope=(system_scope or "").strip(),
+        jira_id=(jira_id or "").strip(),
+        status=status,
+        resolution_note=note,
     )
-    record = {
-        "id": incident_id,
-        "title": title,
-        "system_scope": system_scope,
-        "jira_id": jira_id,
-        "status": status,
-        "updated_text": updated_text,
-        "resolution_note": note or None,
-        "record_type": "incident_status_update",
-    }
-    await tenant_write_memory_record(tenant_id, record)
+    try:
+        await tenant_add_data_points(tenant_id, [node])
+        logger.info(
+            "investigation incident_node_upsert incident=%s tenant=%s status=%s",
+            incident_id,
+            tenant_id,
+            status,
+        )
+    except Exception:
+        logger.exception(
+            "investigation incident_node_upsert failed incident=%s tenant=%s",
+            incident_id,
+            tenant_id,
+        )
 
 
 def _parse_jira_id(message: str) -> str | None:
@@ -341,6 +410,18 @@ def _extract_search_text(item: Any) -> str:
         if record_type == "incident_status_update":
             updated = raw.get("updated_text")
             return str(updated).strip() if updated else ""
+
+        if raw.get("incident_id") and (
+            raw.get("resolution_note") or raw.get("status")
+        ):
+            parts = [
+                str(raw.get("title") or "").strip(),
+                str(raw.get("status") or "").strip(),
+                str(raw.get("resolution_note") or "").strip(),
+            ]
+            combined = ". ".join(part for part in parts if part)
+            if combined and not _is_internal_memory_text(combined):
+                return combined[:600]
 
         for key in (
             "text",
@@ -411,7 +492,149 @@ def _is_metadata_only_reference(text: str) -> bool:
         return True
     if "notion page" in lowered and "last edited" in lowered:
         return True
+    if "document '" in lowered and " documents unlinked" in lowered:
+        return True
     return False
+
+
+def _is_sync_warning_text(text: str) -> bool:
+    lowered = text.lower()
+    if "warnings:" in lowered and "slack" in lowered:
+        return True
+    if "could not reach slack" in lowered:
+        return True
+    if "read timed out" in lowered or "httpsconnectionpool" in lowered:
+        return True
+    return False
+
+
+def _is_reference_noise_text(text: str) -> bool:
+    return _is_metadata_only_reference(text) or _is_sync_warning_text(text)
+
+
+_GENERIC_NOTION_TITLES = frozenset(
+    {
+        "getting started",
+        "to do list",
+        "weekly to-do list",
+        "weekly to do list",
+        "home",
+        "quick note",
+        "tasks",
+        "untitled",
+    }
+)
+
+
+def _is_generic_notion_title(title: str) -> bool:
+    return _normalize_reference_title(title) in _GENERIC_NOTION_TITLES
+
+
+def _normalize_reference_title(title: str) -> str:
+    return " ".join((title or "").strip().lower().split())
+
+
+def _is_placeholder_reference_url(url: str) -> bool:
+    normalized = (url or "").strip().lower()
+    if not normalized:
+        return True
+    if normalized in {"notion://page", "slack://thread", "jira://ticket"}:
+        return True
+    if normalized.startswith(("notion://", "slack://", "jira://")) and not normalized.startswith(
+        "http"
+    ):
+        return True
+    return False
+
+
+def _filter_investigation_references(
+    refs: list[InvestigationReference],
+) -> list[InvestigationReference]:
+    filtered: list[InvestigationReference] = []
+    seen: set[str] = set()
+    for ref in refs:
+        blob = f"{ref.title} {ref.snippet}"
+        if _is_reference_noise_text(blob):
+            continue
+        if _is_placeholder_reference_url(ref.url):
+            continue
+        key = (ref.url or ref.id).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered.append(ref)
+    return filtered
+
+
+def _lookup_notion_snapshot(
+    db: Session,
+    tenant_id: uuid.UUID,
+    page_id: str,
+) -> NotionDocSnapshot | None:
+    return (
+        db.query(NotionDocSnapshot)
+        .filter(
+            NotionDocSnapshot.tenant_id == tenant_id,
+            NotionDocSnapshot.page_id == page_id,
+            NotionDocSnapshot.is_archived.is_(False),
+        )
+        .first()
+    )
+
+
+def _notion_reference_from_hit(
+    hit: _GraphSearchHit,
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> InvestigationReference | None:
+    page_id = hit.notion_page_id
+    if not page_id:
+        return None
+    row = _lookup_notion_snapshot(db, tenant_id, page_id)
+    if not row or not row.component_id:
+        return None
+    if _is_generic_notion_title(row.title):
+        return None
+    if not row.page_url.startswith("http"):
+        return None
+    kind = row.page_kind.replace("_", " ")
+    return InvestigationReference(
+        id=f"notion-{page_id}",
+        type="notion" if row.page_kind != "postmortem" else "postmortem",
+        title=row.title[:120],
+        url=row.page_url,
+        snippet=f"{kind.title()} · linked to component",
+    )
+
+
+def _lookup_slack_thread_parts(channel_id: str, thread_ts: str):
+    for thread in get_cached_slack_threads():
+        if thread.channel_id == channel_id and thread.thread_ts == thread_ts:
+            return thread
+    return None
+
+
+def _slack_reference_from_hit(hit: _GraphSearchHit) -> InvestigationReference | None:
+    if _is_reference_noise_text(hit.text):
+        return None
+    thread_id = hit.slack_thread_id
+    if not thread_id:
+        return None
+    parts = thread_id.split(":", 2)
+    if len(parts) < 2:
+        return None
+    channel_id, thread_ts = parts[0], parts[-1]
+    thread = _lookup_slack_thread_parts(channel_id, thread_ts)
+    if not thread or not thread.thread_url.startswith("http"):
+        return None
+    channel = thread.channel_name.lstrip("#") or thread.channel_id
+    return InvestigationReference(
+        id=f"slack-{thread.channel_id}-{thread.thread_ts}",
+        type="slack",
+        title=thread_title(thread.parent_text),
+        url=thread.thread_url,
+        snippet=f"#{channel} thread",
+    )
 
 
 def _is_displayable_evidence_text(
@@ -425,7 +648,7 @@ def _is_displayable_evidence_text(
         return False
     if _is_query_echo_text(stripped):
         return False
-    if _is_metadata_only_reference(stripped):
+    if _is_reference_noise_text(stripped):
         return False
     if _is_bare_ticket_summary(stripped, incident):
         return False
@@ -962,24 +1185,31 @@ async def _fetch_cognee_solutions_narrative(
 
 async def _resolve_workaround(
     *,
+    db: Session,
     hits: list[_GraphSearchHit],
     search_texts: list[str],
     incident: IncidentSummary | None,
     tenant_id: uuid.UUID,
     platform_workaround: str | None,
+    use_graph_completion: bool = True,
 ) -> tuple[str, bool]:
-    cognee_solutions = await _fetch_cognee_solutions_narrative(incident, tenant_id)
+    cognee_solutions: str | None = None
+    if use_graph_completion:
+        cognee_solutions = await _fetch_cognee_solutions_narrative(incident, tenant_id)
     graph_solutions = _analyze_solutions_from_graph(hits, incident)
     synthesized = _synthesize_workaround(search_texts, incident)
     resolved_jira = _workaround_from_resolved_jira(incident)
+    linked_jira = _workaround_from_linked_jira_issue(incident, db, tenant_id)
 
-    for candidate in (
+    candidates: tuple[str | None, ...] = (
+        linked_jira,
         resolved_jira,
         cognee_solutions,
         graph_solutions,
         platform_workaround,
         synthesized,
-    ):
+    )
+    for candidate in candidates:
         picked = _pick_first_displayable(incident, candidate)
         if picked:
             return picked, True
@@ -1043,13 +1273,96 @@ def invalidate_briefing_cache(
 ) -> None:
     if tenant_id is None:
         _briefing_cache.clear()
+        _baseline_cache.clear()
         return
     if incident_id is None:
         for key in list(_briefing_cache):
             if key[0] == str(tenant_id):
                 _briefing_cache.pop(key, None)
+        _baseline_cache.pop(str(tenant_id), None)
         return
     _briefing_cache.pop((str(tenant_id), incident_id), None)
+
+
+def _get_tenant_baseline(db: Session, tenant_id: uuid.UUID) -> _TenantBaseline:
+    cache_key = str(tenant_id)
+    cached = _baseline_cache.get(cache_key)
+    if cached and (time.time() - cached[0]) < _BASELINE_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    baseline = _TenantBaseline(
+        components=db.query(Component).filter(Component.tenant_id == tenant_id).all(),
+        employees=(
+            db.query(Employee)
+            .options(joinedload(Employee.assignments))
+            .filter(Employee.tenant_id == tenant_id)
+            .all()
+        ),
+        assignments=db.query(Assignment).filter(Assignment.tenant_id == tenant_id).all(),
+        loaded_at=time.time(),
+    )
+    _baseline_cache[cache_key] = (time.time(), baseline)
+    return baseline
+
+
+def _scope_component_ids(
+    components: list[Component],
+    incident: IncidentSummary | None,
+) -> set[str]:
+    if not incident:
+        return set()
+    matched = _match_components(
+        components,
+        incident.system_scope,
+        incident.system_scope.lower(),
+    )
+    return {component.id for component in matched}
+
+
+def _prepare_operational_bundle(
+    db: Session,
+    tenant_id: uuid.UUID,
+    ctx: _GraphContext,
+) -> _OperationalBundle:
+    operational_smes, op_slack, op_jira, op_notion = _operational_context_for_incident(
+        db,
+        tenant_id,
+        ctx.incident,
+        ctx.employees,
+        ctx.components,
+    )
+    related_jira = _find_related_jira_tickets(
+        ctx.incident,
+        db=db,
+        tenant_id=tenant_id,
+    )
+    interaction_counts = _employee_interaction_counts(
+        db,
+        tenant_id,
+        _scope_component_ids(ctx.components, ctx.incident),
+    )
+    return _OperationalBundle(
+        operational_smes=operational_smes,
+        op_slack=op_slack,
+        op_jira=op_jira,
+        op_notion=op_notion,
+        related_jira=related_jira,
+        interaction_counts=interaction_counts,
+    )
+
+
+def _compute_retrieval_confidence(hits: list[_GraphSearchHit]) -> float:
+    """Initial confidence from hybrid CHUNKS similarity — gates GRAPH_COMPLETION."""
+    if not hits:
+        return 0.0
+    ranked = sorted(hits, key=lambda hit: hit.similarity, reverse=True)
+    top = ranked[:3]
+    weights = (0.5, 0.35, 0.15)
+    score = sum(hit.similarity * weights[idx] for idx, hit in enumerate(top))
+    incident_boost = 0.0
+    if top and top[0].similarity >= 72.0:
+        incident_boost = 6.0
+    return min(100.0, round(score + incident_boost, 1))
 
 
 def _lookup_jira_issue(
@@ -1236,6 +1549,90 @@ def _find_related_jira_tickets(
     return refs
 
 
+def _jira_issue_narrative_parts(issue: JiraIssueActivity) -> list[str]:
+    parts: list[str] = []
+    if issue.summary:
+        parts.append(issue.summary.strip())
+    if issue.description_text:
+        parts.append(issue.description_text.strip())
+    if issue.resolution:
+        parts.append(f"Resolution: {issue.resolution.strip()}")
+    parts.extend(comment.strip() for comment in issue.recent_comments if comment.strip())
+    return parts
+
+
+def _first_matching_jira_sentence(
+    parts: list[str],
+    hints: tuple[str, ...],
+    incident: IncidentSummary | None,
+    *,
+    min_length: int = 20,
+) -> str | None:
+    for text in parts:
+        for sentence in re.split(r"[.\n!?]+", text):
+            stripped = sentence.strip()
+            if len(stripped) < min_length:
+                continue
+            if _text_has_hints(stripped, hints) and _is_displayable_evidence_text(
+                stripped,
+                incident,
+            ):
+                return stripped[:400]
+    return None
+
+
+def _root_cause_from_linked_jira_issue(
+    incident: IncidentSummary | None,
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> str | None:
+    if not incident or not incident.jira_id:
+        return None
+    issue = _lookup_jira_issue(incident.jira_id, db, tenant_id)
+    if not issue:
+        return None
+
+    parts = _jira_issue_narrative_parts(issue)
+    matched = _first_matching_jira_sentence(parts, _ROOT_CAUSE_HINTS, incident)
+    if matched:
+        return matched
+
+    if issue.description_text and len(issue.description_text.strip()) >= 40:
+        sentence = issue.description_text.strip().split(".")[0].strip()
+        if _is_displayable_evidence_text(sentence, incident):
+            return sentence[:400]
+
+    if issue.recent_comments:
+        for comment in issue.recent_comments:
+            stripped = comment.strip()
+            if len(stripped) >= 40 and _is_displayable_evidence_text(stripped, incident):
+                return stripped[:400]
+    return None
+
+
+def _workaround_from_linked_jira_issue(
+    incident: IncidentSummary | None,
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> str | None:
+    if not incident or not incident.jira_id:
+        return None
+    issue = _lookup_jira_issue(incident.jira_id, db, tenant_id)
+    if not issue:
+        return None
+
+    parts = _jira_issue_narrative_parts(issue)
+    matched = _first_matching_jira_sentence(parts, _SOLUTION_HINTS, incident)
+    if matched:
+        return matched[:400]
+
+    if issue.resolution and issue.resolution.strip():
+        resolution = issue.resolution.strip()
+        if _is_displayable_evidence_text(resolution, incident):
+            return f"{issue.issue_key} resolution: {resolution}"[:400]
+    return None
+
+
 def _workaround_from_resolved_jira(
     incident: IncidentSummary | None,
 ) -> str | None:
@@ -1249,12 +1646,17 @@ def _workaround_from_resolved_jira(
         score = _related_jira_overlap_score(incident, issue)
         if score <= 0:
             continue
-        summary = (issue.summary or "").strip()
-        if len(summary) < 30:
-            continue
-        candidate = (
-            f"Resolved in {issue.issue_key} ({issue.status}): {summary}"
-        )[:400]
+        parts = _jira_issue_narrative_parts(issue)
+        matched = _first_matching_jira_sentence(parts, _SOLUTION_HINTS, incident)
+        if matched:
+            candidate = f"Resolved in {issue.issue_key} ({issue.status}): {matched}"[:400]
+        else:
+            summary = (issue.summary or "").strip()
+            if len(summary) < 30:
+                continue
+            candidate = (
+                f"Resolved in {issue.issue_key} ({issue.status}): {summary}"
+            )[:400]
         if not best or score > best[0]:
             best = (score, candidate)
 
@@ -1356,6 +1758,15 @@ def _operational_context_for_incident(
                         url=issue.issue_url or f"jira://{issue.issue_key}",
                         snippet=(
                             f"{issue.issue_type} · {issue.priority} · {issue.status}"
+                            + (
+                                f" · {issue.description_text[:160]}"
+                                if issue.description_text
+                                else (
+                                    f" · {issue.recent_comments[0][:160]}"
+                                    if issue.recent_comments
+                                    else ""
+                                )
+                            )
                             + (
                                 f" · assignee mapped"
                                 if issue.assignee_provider_user_id
@@ -1496,16 +1907,23 @@ def _employee_interaction_counts(
                     notion_counts.get(row.owner_employee_id, 0) + 1
                 )
 
+    slack_identities = (
+        db.query(EmployeeIdentity)
+        .filter(
+            EmployeeIdentity.tenant_id == tenant_id,
+            EmployeeIdentity.provider == "slack",
+        )
+        .all()
+    )
+    slack_user_to_employee = {
+        row.provider_username_or_id: row.employee_id for row in slack_identities
+    }
+
     for thread in get_cached_slack_threads():
         for message in thread.messages:
             if message.is_bot or not message.user_id:
                 continue
-            employee_id = resolve_author_employee_id(
-                db,
-                tenant_id,
-                "slack",
-                message.user_id,
-            )
+            employee_id = slack_user_to_employee.get(message.user_id)
             if employee_id:
                 slack_counts[employee_id] = slack_counts.get(employee_id, 0) + 1
 
@@ -1525,19 +1943,11 @@ def _load_graph_context(
     *,
     incident: IncidentSummary | None = None,
 ) -> _GraphContext:
+    baseline = _get_tenant_baseline(db, tenant_id)
     ctx = _GraphContext()
-    ctx.components = (
-        db.query(Component).filter(Component.tenant_id == tenant_id).all()
-    )
-    ctx.employees = (
-        db.query(Employee)
-        .options(joinedload(Employee.assignments))
-        .filter(Employee.tenant_id == tenant_id)
-        .all()
-    )
-    ctx.assignments = (
-        db.query(Assignment).filter(Assignment.tenant_id == tenant_id).all()
-    )
+    ctx.components = baseline.components
+    ctx.employees = baseline.employees
+    ctx.assignments = baseline.assignments
     if incident:
         ctx.incident = incident
     elif incident_id:
@@ -1594,6 +2004,8 @@ def _build_references_from_hits(
     hits: list[_GraphSearchHit],
     *,
     jira_id: str | None,
+    db: Session | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> tuple[
     list[InvestigationReference],
     list[InvestigationReference],
@@ -1617,6 +2029,8 @@ def _build_references_from_hits(
     ) -> None:
         snippet = text.strip()[:240]
         if len(snippet) < 12 and not url_override:
+            return
+        if _is_reference_noise_text(snippet):
             return
         ref_type = forced_type or _reference_type(text)
         if ref_type == "jira":
@@ -1649,6 +2063,8 @@ def _build_references_from_hits(
             url=url_override or _reference_url(text, ref_type),
             snippet=snippet or title_override or ref_type,
         )
+        if _is_placeholder_reference_url(ref.url):
+            return
         if ref_type == "slack":
             slack.append(ref)
         elif ref_type == "jira":
@@ -1660,25 +2076,19 @@ def _build_references_from_hits(
 
     for hit in hits:
         if hit.slack_thread_id:
-            channel, _, ts = hit.slack_thread_id.partition(":")
-            add_ref(
-                hit.text,
-                forced_type="slack",
-                url_override=f"slack://{channel}/{ts}" if ts else f"slack://{channel}",
-                title_override=_reference_title(hit.text, "slack"),
-                ref_id=f"slack-{hit.slack_thread_id}",
-            )
+            ref = _slack_reference_from_hit(hit)
+            if ref:
+                slack.append(ref)
             continue
-        if hit.notion_page_id:
-            url = _reference_url(hit.text, "notion")
-            if url == "notion://page":
-                url = f"notion://{hit.notion_page_id}"
-            add_ref(
-                hit.text,
-                forced_type="notion",
-                url_override=url,
-                ref_id=f"notion-{hit.notion_page_id}",
-            )
+        if hit.notion_page_id and db is not None and tenant_id is not None:
+            ref = _notion_reference_from_hit(hit, db, tenant_id)
+            if ref:
+                if ref.type == "postmortem":
+                    postmortems.append(ref)
+                else:
+                    notion.append(ref)
+            continue
+        if hit.notion_page_id or _is_reference_noise_text(hit.text):
             continue
         if hit.jira_key:
             if active_jira and hit.jira_key.upper() == active_jira:
@@ -1716,6 +2126,8 @@ def _build_references_from_search(
         snippet = text.strip()[:240]
         if len(snippet) < 20:
             return
+        if _is_reference_noise_text(snippet):
+            return
         key = snippet[:80].lower()
         if key in seen:
             return
@@ -1728,6 +2140,8 @@ def _build_references_from_search(
             url=_reference_url(text, ref_type),
             snippet=snippet,
         )
+        if _is_placeholder_reference_url(ref.url):
+            return
         if ref_type == "slack":
             slack.append(ref)
         elif ref_type == "jira":
@@ -1760,6 +2174,10 @@ def _root_cause_from_live_incident(
                 parts.append(f"Status {issue.status}")
             if issue.priority:
                 parts.append(f"Priority {issue.priority}")
+            if issue.description_text:
+                parts.append(issue.description_text.strip()[:280])
+            elif issue.recent_comments:
+                parts.append(issue.recent_comments[0][:280])
             return " · ".join(parts)[:400]
 
     if incident.source == "slack":
@@ -1869,7 +2287,7 @@ def _build_graph_hops(
     slack_threads: list[InvestigationReference],
     operational_smes: list[SmeRecommendation],
 ) -> list[_GraphHop]:
-    hops: list[GraphHop] = []
+    hops: list[_GraphHop] = []
     seen: set[tuple[str, str, str]] = set()
 
     def add(from_node: str, edge: str, to_node: str) -> None:
@@ -1952,97 +2370,63 @@ def _build_search_query(
     message: str,
     incident: IncidentSummary | None,
 ) -> str:
-    query_parts = [message]
+    return _build_unified_hybrid_query(message, incident)
+
+
+def _build_unified_hybrid_query(
+    message: str,
+    incident: IncidentSummary | None,
+) -> str:
+    """Single hybrid retrieval query replacing multi-query fusion."""
+    parts = [_BRIEFING_QUERY, message]
     if incident:
-        query_parts.insert(0, incident.id)
-        query_parts.append(incident.title)
-        query_parts.append(incident.system_scope)
+        parts.extend(
+            [
+                incident.id,
+                incident.title,
+                incident.system_scope,
+            ]
+        )
         if incident.jira_id:
-            query_parts.append(incident.jira_id)
+            parts.append(
+                f"{incident.jira_id} jira blocks {incident.system_scope} "
+                "component failure root cause why outage"
+            )
+            title_tokens = sorted(_title_tokens(incident.title))[:6]
+            if title_tokens:
+                parts.append(
+                    f"{' '.join(title_tokens)} related jira bug incident "
+                    "workaround resolution mitigation steps"
+                )
         if incident.channel_name:
-            query_parts.append(incident.channel_name)
-    return " incident root cause workaround postmortem ".join(query_parts)
+            parts.append(incident.channel_name)
+        channel = (incident.channel_name or incident.system_scope or "").lstrip("#")
+        parts.append(
+            f"slack incident thread #{channel} {incident.title} "
+            "workaround solution mitigation fix resolve recovery runbook postmortem"
+        )
+    return " ".join(part.strip() for part in parts if part and str(part).strip())
 
 
-async def _search_incident_graph_fusion(
-    queries: list[str],
+async def _hybrid_incident_search(
+    message: str,
+    incident: IncidentSummary | None,
     tenant_id: uuid.UUID,
     *,
     timeout_seconds: float = 15.0,
 ) -> list[Any]:
-    if not queries:
-        return []
-
-    async def _run_all() -> list[Any]:
-        batches = await asyncio.gather(
-            *[
-                _search_incident_graph(query, tenant_id, timeout_seconds=timeout_seconds)
-                for query in queries
-            ]
-        )
-        merged: list[Any] = []
-        seen_texts: set[str] = set()
-        for batch in batches:
-            for item in batch:
-                text = _extract_search_text(item)
-                key = text[:120].lower()
-                if not text or key in seen_texts:
-                    continue
-                seen_texts.add(key)
-                merged.append(item)
-        return merged
-
-    try:
-        return await asyncio.wait_for(_run_all(), timeout=timeout_seconds + 2)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "investigation cognee_fusion timeout tenant=%s queries=%d",
-            tenant_id,
-            len(queries),
-        )
-        if len(queries) == 1:
-            return await _search_incident_graph(
-                queries[0], tenant_id, timeout_seconds=timeout_seconds
-            )
-        return []
-    except Exception as exc:
-        logger.warning(
-            "investigation cognee_fusion error tenant=%s queries=%d err=%s",
-            tenant_id,
-            len(queries),
-            exc,
-        )
-        if len(queries) == 1:
-            return await _search_incident_graph(
-                queries[0], tenant_id, timeout_seconds=timeout_seconds
-            )
-        return []
-
-
-def _fusion_search_queries(
-    message: str,
-    incident: IncidentSummary | None,
-) -> list[str]:
-    queries = [_build_search_query(message, incident)]
-    if not incident:
-        return queries
-
-    scope = incident.system_scope
-    if incident.jira_id:
-        queries.append(
-            f"{incident.jira_id} jira blocks {scope} component failure root cause why outage"
-        )
-        title_tokens = sorted(_title_tokens(incident.title))[:6]
-        if title_tokens:
-            queries.append(
-                f"{' '.join(title_tokens)} related jira bug incident workaround resolution steps"
-            )
-    channel = (incident.channel_name or incident.system_scope or "").lstrip("#")
-    queries.append(
-        f"slack incident thread #{channel} {incident.title} "
-        f"workaround solution mitigation fix resolve recovery runbook"
+    query = _build_unified_hybrid_query(message, incident)
+    logger.info(
+        "investigation hybrid_search tenant=%s query_len=%d",
+        tenant_id,
+        len(query),
     )
-    return queries[:3]
+    return await _search_incident_graph(
+        query,
+        tenant_id,
+        timeout_seconds=timeout_seconds,
+        top_k=_HYBRID_SEARCH_TOP_K,
+    )
 
 
 async def _search_incident_graph(
@@ -2050,6 +2434,7 @@ async def _search_incident_graph(
     tenant_id: uuid.UUID,
     *,
     timeout_seconds: float = 15.0,
+    top_k: int = _HYBRID_SEARCH_TOP_K,
 ) -> list[Any]:
     import cognee
     from cognee.modules.search.types.SearchType import SearchType
@@ -2063,14 +2448,14 @@ async def _search_incident_graph(
                     search_query,
                     query_type=SearchType.CHUNKS,
                     datasets=[dataset],
-                    top_k=12,
+                    top_k=top_k,
                     include_references=True,
                 )
             except TypeError:
                 results = await cognee.search(
                     search_query,
                     datasets=[dataset],
-                    top_k=12,
+                    top_k=top_k,
                 )
             return results if isinstance(results, list) else list(results or [])
 
@@ -2142,20 +2527,26 @@ async def _build_diagnostics_impl(
         jira_id = ctx.incident.jira_id
 
     if raw_results is None:
-        fusion_queries = _fusion_search_queries(message, ctx.incident)
-        logger.info(
-            "investigation fusion_search incident=%s queries=%d",
-            incident_label,
-            len(fusion_queries),
-        )
-        raw_results = await _search_incident_graph_fusion(
-            fusion_queries,
+        search_coro = _hybrid_incident_search(message, ctx.incident, tenant.id)
+        ops_coro = asyncio.to_thread(
+            _prepare_operational_bundle,
+            db,
             tenant.id,
+            ctx,
         )
+        raw_results, operational_bundle = await asyncio.gather(search_coro, ops_coro)
         logger.info(
-            "investigation fusion_results incident=%s raw_hits=%d",
+            "investigation hybrid_results incident=%s raw_hits=%d related_jira=%d",
             incident_label,
             len(raw_results),
+            len(operational_bundle.related_jira),
+        )
+    else:
+        operational_bundle = await asyncio.to_thread(
+            _prepare_operational_bundle,
+            db,
+            tenant.id,
+            ctx,
         )
 
     ctx.search_hits = _rank_search_hits_for_incident(
@@ -2163,6 +2554,18 @@ async def _build_diagnostics_impl(
         ctx.incident,
     )
     ctx.search_texts = [hit.text for hit in ctx.search_hits]
+    ctx.retrieval_confidence = _compute_retrieval_confidence(ctx.search_hits)
+    use_graph_completion = (
+        ctx.retrieval_confidence < _GRAPH_COMPLETION_CONFIDENCE_THRESHOLD
+    )
+    logger.info(
+        "investigation retrieval_confidence incident=%s confidence=%.1f "
+        "graph_completion=%s",
+        incident_label,
+        ctx.retrieval_confidence,
+        use_graph_completion,
+    )
+
     corpus = " ".join(ctx.search_texts).lower()
 
     ctx.matched_components = _match_components(ctx.components, message, corpus)
@@ -2174,11 +2577,17 @@ async def _build_diagnostics_impl(
         )
 
     component_ids = {c.id for c in ctx.matched_components}
-    interaction_counts = _employee_interaction_counts(
-        db,
-        tenant.id,
-        component_ids,
-    )
+    interaction_counts = operational_bundle.interaction_counts
+    for component_id in component_ids:
+        if component_id not in interaction_counts:
+            scoped = _employee_interaction_counts(db, tenant.id, {component_id})
+            for employee_id, counts in scoped.items():
+                prior = interaction_counts.get(employee_id, (0, 0))
+                interaction_counts[employee_id] = (
+                    max(prior[0], counts[0]),
+                    max(prior[1], counts[1]),
+                )
+
     hit_similarity_by_employee: dict[str, float] = {}
     for hit in ctx.search_hits:
         if not hit.employee_name:
@@ -2206,21 +2615,19 @@ async def _build_diagnostics_impl(
     employee_scores.sort(key=lambda item: item[1], reverse=True)
     ctx.matched_employees = employee_scores[:5]
 
-    operational_smes, op_slack, op_jira, op_notion = _operational_context_for_incident(
-        db,
-        tenant.id,
-        ctx.incident,
-        ctx.employees,
-        ctx.components,
-    )
+    operational_smes = operational_bundle.operational_smes
+    op_slack = operational_bundle.op_slack
+    op_jira = operational_bundle.op_jira
+    op_notion = operational_bundle.op_notion
+    related_jira = operational_bundle.related_jira
 
     ctx.slack_threads, ctx.jira_tickets, ctx.notion_pages, ctx.postmortems = (
-        _build_references_from_hits(ctx.search_hits, jira_id=jira_id)
-    )
-    related_jira = _find_related_jira_tickets(
-        ctx.incident,
-        db=db,
-        tenant_id=tenant.id,
+        _build_references_from_hits(
+            ctx.search_hits,
+            jira_id=jira_id,
+            db=db,
+            tenant_id=tenant.id,
+        )
     )
     logger.info(
         "investigation related_jira incident=%s count=%d ranked_hits=%d",
@@ -2228,18 +2635,19 @@ async def _build_diagnostics_impl(
         len(related_jira),
         len(ctx.search_hits),
     )
-    ctx.slack_threads = _merge_references(ctx.slack_threads, op_slack)
-    ctx.jira_tickets = _finalize_jira_references(
-        _merge_references(ctx.jira_tickets, related_jira, op_jira),
-        active_jira_id=jira_id,
+    ctx.slack_threads = _filter_investigation_references(
+        _merge_references(ctx.slack_threads, op_slack)
     )
-    logger.info(
-        "investigation jira_refs_final incident=%s count=%d active=%s",
-        incident_label,
-        len(ctx.jira_tickets),
-        jira_id or "-",
+    ctx.jira_tickets = _filter_investigation_references(
+        _finalize_jira_references(
+            _merge_references(ctx.jira_tickets, related_jira, op_jira),
+            active_jira_id=jira_id,
+        )
     )
-    ctx.notion_pages = _merge_references(ctx.notion_pages, op_notion)
+    ctx.notion_pages = _filter_investigation_references(
+        _merge_references(ctx.notion_pages, op_notion)
+    )
+    ctx.postmortems = _filter_investigation_references(ctx.postmortems)
 
     ctx.graph_hops = _build_graph_hops(
         ctx.incident,
@@ -2257,25 +2665,42 @@ async def _build_diagnostics_impl(
         ctx.incident,
     )
 
-    narrative_task = asyncio.create_task(
-        _fetch_cognee_root_cause_narrative(ctx.incident, tenant.id)
-    )
-    workaround_task = asyncio.create_task(
-        _resolve_workaround(
-            hits=ctx.search_hits,
-            search_texts=ctx.search_texts,
-            incident=ctx.incident,
-            tenant_id=tenant.id,
-            platform_workaround=platform_workaround,
-        )
-    )
-    cognee_narrative = await narrative_task
-    workaround_text, workaround_available = await workaround_task
     graph_root = _analyze_root_cause_from_graph(
         ctx.search_hits,
         ctx.incident,
         ctx.matched_components,
     )
+
+    cognee_narrative: str | None = None
+    if use_graph_completion:
+        narrative_task = asyncio.create_task(
+            _fetch_cognee_root_cause_narrative(ctx.incident, tenant.id)
+        )
+        workaround_task = asyncio.create_task(
+            _resolve_workaround(
+                db=db,
+                hits=ctx.search_hits,
+                search_texts=ctx.search_texts,
+                incident=ctx.incident,
+                tenant_id=tenant.id,
+                platform_workaround=platform_workaround,
+                use_graph_completion=True,
+            )
+        )
+        cognee_narrative, (workaround_text, workaround_available) = await asyncio.gather(
+            narrative_task,
+            workaround_task,
+        )
+    else:
+        workaround_text, workaround_available = await _resolve_workaround(
+            db=db,
+            hits=ctx.search_hits,
+            search_texts=ctx.search_texts,
+            incident=ctx.incident,
+            tenant_id=tenant.id,
+            platform_workaround=platform_workaround,
+            use_graph_completion=False,
+        )
 
     graph_smes = [
         SmeRecommendation(
@@ -2298,12 +2723,18 @@ async def _build_diagnostics_impl(
         if not ctx.search_hits
         else None
     )
+    linked_jira_root = _root_cause_from_linked_jira_issue(
+        ctx.incident,
+        db,
+        tenant.id,
+    )
 
     diagnostics = InvestigationDiagnostics(
         probable_root_cause=(
             _pick_first_displayable(
                 ctx.incident,
                 graph_root,
+                linked_jira_root,
                 cognee_narrative,
                 platform_root,
                 _synthesize_root_cause(
@@ -2329,6 +2760,14 @@ async def _build_diagnostics_impl(
         slack_threads=ctx.slack_threads,
         jira_tickets=ctx.jira_tickets,
         notion_pages=ctx.notion_pages + ctx.postmortems,
+        graph_hops=[
+            InvestigationGraphHop(
+                from_node=hop.from_node,
+                edge=hop.edge,
+                to=hop.to,
+            )
+            for hop in ctx.graph_hops
+        ],
     )
     logger.info(
         "investigation diagnostics_summary incident=%s confidence=%.1f "
@@ -2349,6 +2788,68 @@ def _briefing_query_for_incident(incident: IncidentSummary) -> str:
     if incident.channel_name:
         parts.append(incident.channel_name)
     return " ".join(parts)
+
+
+def _build_base_metadata(
+    db: Session,
+    tenant_id: uuid.UUID,
+    incident: IncidentSummary,
+) -> InvestigationBaseMetadata:
+    """Fast relational baseline emitted before Cognee graph traversal."""
+    ctx = _load_graph_context(db, tenant_id, incident.id, incident=incident)
+    scope_component_ids = _scope_component_ids(ctx.components, ctx.incident)
+    employees_by_id = {employee.id: employee for employee in ctx.employees}
+    components_by_id = {component.id: component for component in ctx.components}
+
+    assignments: list[InvestigationAssignmentRecord] = []
+    for assignment in ctx.assignments:
+        if assignment.component_id not in scope_component_ids:
+            continue
+        employee = employees_by_id.get(assignment.employee_id)
+        component = components_by_id.get(assignment.component_id)
+        if not employee or not component:
+            continue
+        assignments.append(
+            InvestigationAssignmentRecord(
+                employee_id=employee.id,
+                employee_name=employee.name,
+                component_id=component.id,
+                component_name=component.name,
+                codebase_share_pct=float(assignment.codebase_share_pct),
+            )
+        )
+    assignments.sort(key=lambda row: row.codebase_share_pct, reverse=True)
+
+    scope_owners: list[SmeRecommendation] = []
+    if ctx.incident:
+        for employee, score in _component_owners_for_scope(
+            ctx.components,
+            ctx.employees,
+            ctx.incident.system_scope,
+        ):
+            scope_owners.append(
+                SmeRecommendation(
+                    employee_id=employee.id,
+                    name=employee.name,
+                    role=f"{employee.role} · component owner",
+                    compatibility_score=score,
+                    status=_presence_for_score(score),  # type: ignore[arg-type]
+                )
+            )
+
+    return InvestigationBaseMetadata(
+        incident=incident,
+        assignments=assignments[:12],
+        scope_owners=scope_owners,
+    )
+
+
+def _base_metadata_event(metadata: InvestigationBaseMetadata) -> str:
+    chunk = {
+        "type": "base_metadata",
+        "base_metadata": metadata.model_dump(mode="json"),
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
 
 
 def _compose_chat_answer(
@@ -2435,6 +2936,7 @@ async def stream_incident_briefing(
             incident.id,
             tenant.id,
         )
+        yield _base_metadata_event(_build_base_metadata(db, tenant.id, incident))
         yield _status_event(
             "summarizing",
             f"Loaded cached briefing for {incident.title}…",
@@ -2465,6 +2967,8 @@ async def stream_incident_briefing(
                 else f"Loading context for {incident.title}…"
             ),
         )
+
+        yield _base_metadata_event(_build_base_metadata(db, tenant.id, incident))
 
         yield _status_event(
             "matching",
@@ -2525,7 +3029,7 @@ async def stream_investigation_chat(
             "searching",
             "Searching tenant knowledge graph for incident context…",
         )
-        raw_results = await _search_incident_graph(search_query, tenant.id)
+        raw_results = await _hybrid_incident_search(search_query, ctx.incident, tenant.id)
         search_hits = _parse_graph_search_hits(raw_results)
 
         yield _status_event(

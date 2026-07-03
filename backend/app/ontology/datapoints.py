@@ -84,11 +84,27 @@ class WorkItem(DataPoint):
     status: str
     project_key: str
     summary: str = ""
+    description_preview: str = ""
+    resolution: str = ""
+    labels: str = ""
+    comment_preview: str = ""
+    reporter_name: str = ""
     assignedTo: SkipValidation[Any] = None
     blocks: SkipValidation[Any] = None
     metadata: dict = {
         "ontology_type": "WorkItem",
-        "index_fields": ["work_item_id", "issue_type", "status", "summary", "source"],
+        "index_fields": [
+            "work_item_id",
+            "issue_type",
+            "status",
+            "summary",
+            "description_preview",
+            "resolution",
+            "labels",
+            "comment_preview",
+            "reporter_name",
+            "source",
+        ],
         "identity_fields": ["work_item_id"],
     }
 

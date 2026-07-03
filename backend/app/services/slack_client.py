@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import requests
@@ -20,18 +22,33 @@ logger = logging.getLogger(__name__)
 
 RESOLUTION_PATTERNS = ("resolved", "fixed", "root cause", "mitigated")
 INCIDENT_KEYWORDS = ("#incident", "sev1", "sev2", "sev3", "outage", "incident")
+_JIRA_KEY_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
+_INCIDENT_SIGNAL_RE = re.compile(
+    r"(#incident\b|\bsev[123]\b|\boutage\b|\bincident\b)",
+    re.IGNORECASE,
+)
 MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 OFF_HOURS_START = 22
 OFF_HOURS_END = 7
 LOOKBACK_DAYS = 90
+FEED_LOOKBACK_DAYS = 14
+FEED_HISTORY_LIMIT = 200
+SYNC_HISTORY_LIMIT = 10_000
+MAX_THREAD_REPLY_FETCHES_PER_CHANNEL = 35
 ON_CALL_WINDOW_HOURS = 4
 MIN_THREAD_MESSAGES = 3
 MIN_THREAD_USERS = 2
 ESCALATION_THREAD_THRESHOLD = 8
 ESCALATION_CONCENTRATION_PCT = 70.0
-SLACK_API_MIN_INTERVAL_SEC = 1.15
+SLACK_API_MIN_INTERVAL_SEC = 1.3
 SLACK_MAX_RETRIES = 8
 _last_slack_request_at = 0.0
+
+SlackFetchPurpose = Literal["sync", "feed"]
+_SLACK_FETCH_CACHE_TTL_SECONDS = {"sync": 900.0, "feed": 300.0}
+_slack_fetch_cache: dict[str, tuple[float, tuple[Any, ...]]] = {}
+_slack_fetch_locks: dict[str, threading.Lock] = {}
+_slack_fetch_lock_guard = threading.Lock()
 
 
 def _pace_slack_request() -> None:
@@ -42,6 +59,47 @@ def _pace_slack_request() -> None:
     if elapsed < SLACK_API_MIN_INTERVAL_SEC:
         time.sleep(SLACK_API_MIN_INTERVAL_SEC - elapsed)
     _last_slack_request_at = time.monotonic()
+
+
+def _slack_fetch_cache_key(config: SlackConfigRequest, purpose: SlackFetchPurpose) -> str:
+    fingerprint = "|".join(
+        [
+            purpose,
+            config.bot_token.strip(),
+            config.channel_ids.strip(),
+            config.incident_channel_ids.strip(),
+            config.on_call_channel_ids.strip(),
+        ]
+    )
+    return hashlib.sha256(fingerprint.encode()).hexdigest()
+
+
+def _get_slack_fetch_lock(cache_key: str) -> threading.Lock:
+    with _slack_fetch_lock_guard:
+        lock = _slack_fetch_locks.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _slack_fetch_locks[cache_key] = lock
+        return lock
+
+
+def invalidate_slack_threads_cache(cache_key: str | None = None) -> None:
+    """Drop in-process Slack thread fetch cache (e.g. after integration sync)."""
+    if cache_key is None:
+        _slack_fetch_cache.clear()
+        return
+    _slack_fetch_cache.pop(cache_key, None)
+
+
+def _incident_feed_channel_ids(
+    target_channels: set[str],
+    id_to_name: dict[str, str],
+) -> set[str]:
+    return {
+        channel_id
+        for channel_id in target_channels
+        if is_incident_feed_channel(id_to_name.get(channel_id, channel_id))
+    }
 
 
 def _retry_after_seconds(response: requests.Response, attempt: int) -> float:
@@ -410,11 +468,59 @@ def _extract_mentions(text: str) -> list[str]:
     return MENTION_RE.findall(text or "")
 
 
+def _normalize_channel_name(channel_name: str) -> str:
+    return (channel_name or "").lstrip("#").strip().lower()
+
+
+def is_incident_feed_channel(channel_name: str) -> bool:
+    """
+    Channels that may surface incident cards: name is exactly ``incident`` or
+    starts with ``incident-`` (e.g. ``incident-payments``).
+    """
+    name = _normalize_channel_name(channel_name)
+    return name == "incident" or name.startswith("incident-")
+
+
+def _text_has_incident_keywords(text: str) -> bool:
+    return bool(_INCIDENT_SIGNAL_RE.search(text or ""))
+
+
+def _human_messages(messages: list[SlackMessageRecord]) -> list[SlackMessageRecord]:
+    return [message for message in messages if not message.is_bot]
+
+
+def thread_has_incident_signal(thread: SlackThreadRecord) -> bool:
+    """Incident-like content: Jira key or incident keywords in parent / early replies."""
+    if _JIRA_KEY_RE.search(thread.parent_text or ""):
+        return True
+    if _text_has_incident_keywords(thread.parent_text):
+        return True
+    human = _human_messages(thread.messages)
+    if human:
+        combined = " ".join(message.text for message in human[:3])
+        if _text_has_incident_keywords(combined):
+            return True
+    return False
+
+
+def qualifies_for_incident_feed(thread: SlackThreadRecord) -> bool:
+    """
+    Whether a Slack thread should appear on the investigation incident board.
+
+    Channel must be ``#incident`` or ``incident-*``, and thread text must include
+    a Jira key or incident keywords — not every message in the channel.
+    """
+    if not is_incident_feed_channel(thread.channel_name):
+        return False
+    if not _human_messages(thread.messages) and not (thread.parent_text or "").strip():
+        return False
+    return thread_has_incident_signal(thread)
+
+
 def _contains_incident_signal(text: str, *, is_incident_channel: bool) -> bool:
     if is_incident_channel:
         return True
-    lowered = (text or "").lower()
-    return any(keyword in lowered for keyword in INCIDENT_KEYWORDS)
+    return _text_has_incident_keywords(text)
 
 
 def _is_resolution_message(message: SlackMessageRecord) -> bool:
@@ -422,10 +528,6 @@ def _is_resolution_message(message: SlackMessageRecord) -> bool:
     if any(pattern in lowered for pattern in RESOLUTION_PATTERNS):
         return True
     return "white_check_mark" in message.reactions or "heavy_check_mark" in message.reactions
-
-
-def _human_messages(messages: list[SlackMessageRecord]) -> list[SlackMessageRecord]:
-    return [message for message in messages if not message.is_bot]
 
 
 def is_resolved_incident_thread(
@@ -586,6 +688,53 @@ def fetch_slack_incident_threads(
     component_names: dict[str, str] | None = None,
     use_fixture: bool = False,
     now: datetime | None = None,
+    purpose: SlackFetchPurpose = "sync",
+) -> tuple[list[SlackThreadRecord], dict[str, str], list[str], dict[str, int]]:
+    """
+    Return (threads, slack_user_id_to_email, warnings, sync_stats).
+
+    ``purpose='feed'`` — lightweight path for incident cards (few channels,
+    no thread-reply fan-out). ``purpose='sync'`` — full integration ingest.
+    """
+    if use_fixture or not config.bot_token.strip():
+        return _fetch_slack_incident_threads_uncached(
+            config,
+            component_names=component_names,
+            use_fixture=use_fixture,
+            now=now,
+            purpose=purpose,
+        )
+
+    cache_key = _slack_fetch_cache_key(config, purpose)
+    ttl = _SLACK_FETCH_CACHE_TTL_SECONDS[purpose]
+    cached = _slack_fetch_cache.get(cache_key)
+    if cached and (time.time() - cached[0]) < ttl:
+        return cached[1]  # type: ignore[return-value]
+
+    lock = _get_slack_fetch_lock(cache_key)
+    with lock:
+        cached = _slack_fetch_cache.get(cache_key)
+        if cached and (time.time() - cached[0]) < ttl:
+            return cached[1]  # type: ignore[return-value]
+
+        result = _fetch_slack_incident_threads_uncached(
+            config,
+            component_names=component_names,
+            use_fixture=use_fixture,
+            now=now,
+            purpose=purpose,
+        )
+        _slack_fetch_cache[cache_key] = (time.time(), result)
+        return result
+
+
+def _fetch_slack_incident_threads_uncached(
+    config: SlackConfigRequest,
+    *,
+    component_names: dict[str, str] | None = None,
+    use_fixture: bool = False,
+    now: datetime | None = None,
+    purpose: SlackFetchPurpose = "sync",
 ) -> tuple[list[SlackThreadRecord], dict[str, str], list[str], dict[str, int]]:
     """
     Return (threads, slack_user_id_to_email, warnings, sync_stats).
@@ -610,7 +759,13 @@ def fetch_slack_incident_threads(
         return threads, users, [], fixture_stats
 
     now = now or datetime.now(UTC)
-    oldest = now.timestamp() - (LOOKBACK_DAYS * 86400)
+    if purpose == "feed":
+        lookback_days = FEED_LOOKBACK_DAYS
+        history_limit = FEED_HISTORY_LIMIT
+    else:
+        lookback_days = LOOKBACK_DAYS
+        history_limit = SYNC_HISTORY_LIMIT
+    oldest = now.timestamp() - (lookback_days * 86400)
     try:
         configured, incident_channels, on_call_channels, id_to_name, channels_discovered = (
             resolve_sync_channels(config.bot_token, config)
@@ -619,7 +774,20 @@ def fetch_slack_incident_threads(
         return [], {}, [str(exc)], empty_stats
 
     target_channels = configured
-    if not target_channels:
+    if purpose == "feed":
+        target_channels = _incident_feed_channel_ids(configured, id_to_name)
+        if not target_channels:
+            return (
+                [],
+                {},
+                [
+                    "No Slack channels named #incident or incident-* found for the "
+                    "incident board. Rename your incident channel or run a full "
+                    "Slack sync from Settings."
+                ],
+                {**empty_stats, "channels_discovered": channels_discovered},
+            )
+    elif not target_channels:
         return (
             [],
             {},
@@ -644,7 +812,7 @@ def fetch_slack_incident_threads(
             history = fetch_channel_history(
                 config.bot_token,
                 channel_id,
-                limit=10_000,
+                limit=history_limit,
                 oldest=oldest,
             )
         except ValueError as exc:
@@ -654,18 +822,28 @@ def fetch_slack_incident_threads(
         channels_synced += 1
         messages_ingested += len(history)
 
+        reply_fetches = 0
         for parent in [message for message in history if _is_thread_parent_message(message)]:
             thread_ts = str(parent.get("ts", ""))
             if not thread_ts:
                 continue
             parent_text = str(parent.get("text") or "")
-            if (parent.get("reply_count") or 0) > 0:
-                try:
-                    replies = _fetch_thread_replies(config.bot_token, channel_id, thread_ts)
-                except ValueError as exc:
-                    warnings.append(str(exc))
+            reply_count = int(parent.get("reply_count") or 0)
+            if reply_count > 0 and purpose == "sync":
+                if reply_fetches < MAX_THREAD_REPLY_FETCHES_PER_CHANNEL:
+                    try:
+                        replies = _fetch_thread_replies(
+                            config.bot_token,
+                            channel_id,
+                            thread_ts,
+                        )
+                        reply_fetches += 1
+                    except ValueError as exc:
+                        warnings.append(str(exc))
+                        replies = [parent]
+                    messages_ingested += max(0, len(replies) - 1)
+                else:
                     replies = [parent]
-                messages_ingested += max(0, len(replies) - 1)
             else:
                 replies = [parent]
 

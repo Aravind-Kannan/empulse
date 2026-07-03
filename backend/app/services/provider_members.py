@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 
 from sqlalchemy.orm import Session
@@ -21,6 +22,50 @@ from app.services.jira_client import fetch_jira_provider_members
 from app.services.notion_client import fetch_notion_member_records
 
 logger = logging.getLogger(__name__)
+
+_PROVIDER_MEMBERS_CACHE_TTL_SECONDS = 900.0
+_provider_members_cache: dict[tuple[str, str], tuple[float, list[ProviderMember]]] = {}
+
+
+def invalidate_provider_members_cache(
+    tenant_id: uuid.UUID | None = None,
+    provider: str | None = None,
+) -> None:
+    """Drop cached provider member lists (e.g. after integration sync)."""
+    if tenant_id is None and provider is None:
+        _provider_members_cache.clear()
+        return
+    tenant_key = str(tenant_id) if tenant_id is not None else None
+    keys_to_drop = [
+        key
+        for key in _provider_members_cache
+        if (tenant_key is None or key[0] == tenant_key)
+        and (provider is None or key[1] == provider)
+    ]
+    for key in keys_to_drop:
+        _provider_members_cache.pop(key, None)
+
+
+def cache_provider_members(
+    tenant_id: uuid.UUID,
+    provider: str,
+    members: list[ProviderMember],
+) -> None:
+    _provider_members_cache[(str(tenant_id), provider)] = (time.time(), list(members))
+
+
+def get_cached_provider_members(
+    tenant_id: uuid.UUID,
+    provider: str,
+) -> list[ProviderMember] | None:
+    cached = _provider_members_cache.get((str(tenant_id), provider))
+    if not cached:
+        return None
+    cached_at, members = cached
+    if (time.time() - cached_at) >= _PROVIDER_MEMBERS_CACHE_TTL_SECONDS:
+        _provider_members_cache.pop((str(tenant_id), provider), None)
+        return None
+    return list(members)
 
 
 def _records_to_members(records: list[MasterDataRecord]) -> list[ProviderMember]:
@@ -78,40 +123,71 @@ def fetch_live_provider_members(
     if not _has_integration_credentials(db, tenant_id, provider):
         return None
 
+    cached = get_cached_provider_members(tenant_id, provider)
+    if cached is not None:
+        return cached
+
     try:
         if provider == "jira":
             config = get_jira_config(db, tenant_id)
             if not config:
-                return []
-            return fetch_jira_provider_members(config)
+                return _store_live_provider_members(tenant_id, provider, [])
+            return _store_live_provider_members(
+                tenant_id,
+                provider,
+                fetch_jira_provider_members(config),
+            )
 
         if provider == "github":
             config = get_github_config(db, tenant_id)
             if not config:
-                return []
-            return fetch_github_provider_members(config)
+                return _store_live_provider_members(tenant_id, provider, [])
+            return _store_live_provider_members(
+                tenant_id,
+                provider,
+                fetch_github_provider_members(config),
+            )
 
         if provider == "slack":
             stored = get_all_configs(db, tenant_id)["slack"]
             token = (stored.get("bot_token") or "").strip()
             if not token:
-                return []
+                return _store_live_provider_members(tenant_id, provider, [])
             records = _fetch_slack_users_live(token)
-            return _records_to_members(records)
+            return _store_live_provider_members(
+                tenant_id,
+                provider,
+                _records_to_members(records),
+            )
 
         if provider == "notion":
             stored = get_all_configs(db, tenant_id)["notion"]
             token = (stored.get("integration_token") or "").strip()
             if not token:
-                return []
+                return _store_live_provider_members(tenant_id, provider, [])
             database_ids = (stored.get("database_ids") or "").strip() or None
             records = fetch_notion_member_records(token, database_ids)
-            return _records_to_members(records)
+            return _store_live_provider_members(
+                tenant_id,
+                provider,
+                _records_to_members(records),
+            )
     except Exception as exc:
         logger.warning("Live provider member fetch failed for %s: %s", provider, exc)
+        cache_provider_members(tenant_id, provider, [])
         return []
 
+    cache_provider_members(tenant_id, provider, [])
     return []
+
+
+def _store_live_provider_members(
+    tenant_id: uuid.UUID,
+    provider: str,
+    members: list[ProviderMember],
+) -> list[ProviderMember]:
+    cache_provider_members(tenant_id, provider, members)
+    return members
 
 
 def get_provider_members_for_tenant(
