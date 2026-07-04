@@ -46,6 +46,8 @@ export function EraHotspotSummary({
     };
   }, [employeeId]);
 
+  const sectionTitle = `Critical files — ${employeeName}`;
+
   if (loading) {
     return (
       <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
@@ -60,7 +62,7 @@ export function EraHotspotSummary({
   if (error) {
     return (
       <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
-        <h3 className="text-sm font-medium text-zinc-200">File hotspots</h3>
+        <h3 className="text-sm font-medium text-zinc-200">{sectionTitle}</h3>
         <p className="mt-2 text-sm text-red-300">{error}</p>
       </section>
     );
@@ -68,22 +70,26 @@ export function EraHotspotSummary({
 
   if (!data || data.files.length === 0) {
     return (
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
-        <h3 className="text-sm font-medium text-zinc-200">File hotspots</h3>
-        <p className="mt-2 text-sm text-zinc-500">
-          No critical file silos for {employeeName} in the last 90 days.
-        </p>
-      </section>
+      <FileRiskMatrix
+        title={sectionTitle}
+        files={[]}
+        compact
+        collapsible
+        defaultExpanded={false}
+        emptyMessage={`No critical file silos for ${employeeName} in the last 90 days.`}
+      />
     );
   }
 
   return (
     <FileRiskMatrix
-      title={`Critical files — ${employeeName}`}
+      title={sectionTitle}
       files={data.files}
       quadrantCounts={{ critical: data.critical_count }}
       crossTrainingPriority={data.files}
       compact
+      collapsible
+      defaultExpanded={false}
     />
   );
 }

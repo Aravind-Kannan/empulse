@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 
 import type { FileRiskItem, FileRiskQuadrant } from "@/lib/types";
 
@@ -69,6 +69,9 @@ interface FileRiskMatrixProps {
   crossTrainingPriority?: FileRiskItem[];
   compact?: boolean;
   title?: string;
+  collapsible?: boolean;
+  defaultExpanded?: boolean;
+  emptyMessage?: string;
 }
 
 function formatFileLabel(path: string): { name: string; folder: string | null } {
@@ -145,16 +148,68 @@ function FileRiskRow({ file, emphasize = false }: { file: FileRiskItem; emphasiz
   );
 }
 
+function FileListPagination({
+  page,
+  totalItems,
+  onPageChange,
+}: {
+  page: number;
+  totalItems: number;
+  onPageChange: (updater: (current: number) => number) => void;
+}) {
+  const totalPages = Math.ceil(totalItems / FILES_PER_PAGE);
+  if (totalPages <= 1) {
+    return null;
+  }
+
+  const rangeStart = totalItems === 0 ? 0 : page * FILES_PER_PAGE + 1;
+  const rangeEnd = Math.min((page + 1) * FILES_PER_PAGE, totalItems);
+
+  return (
+    <div className="mt-3 flex items-center justify-between border-t border-zinc-800/80 pt-3">
+      <button
+        type="button"
+        disabled={page === 0}
+        onClick={() => onPageChange((current) => current - 1)}
+        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" />
+        Previous
+      </button>
+      <span className="text-xs tabular-nums text-zinc-500">
+        {rangeStart}–{rangeEnd} of {totalItems}
+      </span>
+      <button
+        type="button"
+        disabled={page >= totalPages - 1}
+        onClick={() => onPageChange((current) => current + 1)}
+        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+      >
+        Next
+        <ChevronRight className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 export function FileRiskMatrix({
   files,
   quadrantCounts = {},
   crossTrainingPriority = [],
   compact = false,
   title = "File ownership risk",
+  collapsible = false,
+  defaultExpanded = false,
+  emptyMessage,
 }: FileRiskMatrixProps) {
   const [selectedQuadrant, setSelectedQuadrant] =
     useState<FileRiskQuadrant>("critical");
   const [page, setPage] = useState(0);
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  useEffect(() => {
+    setExpanded(defaultExpanded);
+  }, [defaultExpanded, files]);
 
   useEffect(() => {
     setSelectedQuadrant("critical");
@@ -194,14 +249,10 @@ export function FileRiskMatrix({
   }, [byQuadrant]);
 
   const selectedFiles = byQuadrant[selectedQuadrant];
-  const totalPages = Math.ceil(selectedFiles.length / FILES_PER_PAGE);
   const paginatedFiles = selectedFiles.slice(
     page * FILES_PER_PAGE,
     (page + 1) * FILES_PER_PAGE,
   );
-  const rangeStart =
-    selectedFiles.length === 0 ? 0 : page * FILES_PER_PAGE + 1;
-  const rangeEnd = Math.min((page + 1) * FILES_PER_PAGE, selectedFiles.length);
 
   const priorityFiles =
     crossTrainingPriority.length > 0
@@ -209,36 +260,106 @@ export function FileRiskMatrix({
       : byQuadrant.critical;
 
   if (files.length === 0) {
+    if (compact && collapsible) {
+      return (
+        <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            className="flex w-full items-start gap-2 text-left"
+            aria-expanded={expanded}
+          >
+            {expanded ? (
+              <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+            ) : (
+              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+            )}
+            <h3 className="min-w-0 flex-1 text-sm font-medium text-zinc-200">
+              {title}
+              <span className="ml-2 font-normal tabular-nums text-zinc-500">
+                (0 files)
+              </span>
+            </h3>
+          </button>
+          {expanded ? (
+            <p className="mt-3 border-t border-zinc-800 pt-3 text-sm text-zinc-500">
+              {emptyMessage ??
+                "No file ownership data yet. Connect and sync GitHub to see which files depend on too few people."}
+            </p>
+          ) : null}
+        </section>
+      );
+    }
+
     return (
       <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
         <h3 className="text-sm font-medium text-zinc-200">{title}</h3>
         <p className="mt-2 text-sm text-zinc-500">
-          No file ownership data yet. Connect and sync GitHub to see which files
-          depend on too few people.
+          {emptyMessage ??
+            "No file ownership data yet. Connect and sync GitHub to see which files depend on too few people."}
         </p>
       </section>
     );
   }
 
   if (compact) {
+    const fileCount = priorityFiles.length;
+    const paginatedPriorityFiles = priorityFiles.slice(
+      page * FILES_PER_PAGE,
+      (page + 1) * FILES_PER_PAGE,
+    );
+    const heading = (
+      <div className="min-w-0 flex-1 text-left">
+        <h3 className="text-sm font-medium text-zinc-200">
+          {title}
+          <span className="ml-2 font-normal tabular-nums text-zinc-500">
+            ({fileCount} {fileCount === 1 ? "file" : "files"})
+          </span>
+        </h3>
+        <p className="mt-1 text-xs text-zinc-500">
+          Files where this person is the main owner and the team would struggle
+          if they were unavailable.
+        </p>
+      </div>
+    );
+
     return (
       <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
-        <div className="mb-3">
-          <h3 className="text-sm font-medium text-zinc-200">{title}</h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            Files where this person is the main owner and the team would struggle
-            if they were unavailable.
-          </p>
-        </div>
-        <ul className="space-y-2">
-          {priorityFiles.map((file) => (
-            <FileRiskRow
-              key={`${file.component_id}-${file.file_path}`}
-              file={file}
-              emphasize
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            className="flex w-full items-start gap-2 text-left"
+            aria-expanded={expanded}
+          >
+            {expanded ? (
+              <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+            ) : (
+              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+            )}
+            {heading}
+          </button>
+        ) : (
+          <div className="mb-3">{heading}</div>
+        )}
+        {(!collapsible || expanded) && (
+          <div className={collapsible ? "mt-3 border-t border-zinc-800 pt-3" : undefined}>
+            <ul className="space-y-2">
+              {paginatedPriorityFiles.map((file) => (
+                <FileRiskRow
+                  key={`${file.component_id}-${file.file_path}`}
+                  file={file}
+                  emphasize
+                />
+              ))}
+            </ul>
+            <FileListPagination
+              page={page}
+              totalItems={fileCount}
+              onPageChange={setPage}
             />
-          ))}
-        </ul>
+          </div>
+        )}
       </section>
     );
   }
@@ -308,31 +429,11 @@ export function FileRiskMatrix({
                   />
                 ))}
               </ul>
-              {totalPages > 1 ? (
-                <div className="mt-3 flex items-center justify-between border-t border-zinc-800/80 pt-3">
-                  <button
-                    type="button"
-                    disabled={page === 0}
-                    onClick={() => setPage((current) => current - 1)}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
-                  >
-                    <ChevronLeft className="h-3.5 w-3.5" />
-                    Previous
-                  </button>
-                  <span className="text-xs tabular-nums text-zinc-500">
-                    {rangeStart}–{rangeEnd} of {selectedFiles.length}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={page >= totalPages - 1}
-                    onClick={() => setPage((current) => current + 1)}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
-                  >
-                    Next
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : null}
+              <FileListPagination
+                page={page}
+                totalItems={selectedFiles.length}
+                onPageChange={setPage}
+              />
             </>
           ) : (
             <p className="flex flex-1 items-center justify-center text-sm text-zinc-500">
