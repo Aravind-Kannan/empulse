@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 
@@ -153,7 +154,40 @@ def test_github_url_uses_configured_branch_not_hardcoded_main(db, tenant):
     persist_file_risk_snapshots(db, tenant.id, activities, repo_path="acme/payments-service")
     db.commit()
 
-    payload = get_kra_file_risk(db, tenant.id, component_id="comp-payments")
+    with patch(
+        "app.services.github_client.list_repository_branches",
+        return_value=("master", ["master"]),
+    ):
+        payload = get_kra_file_risk(db, tenant.id, component_id="comp-payments")
+    assert payload["files"][0]["github_url"] == (
+        "https://github.com/acme/payments-service/blob/master/services/payments/handler.ts"
+    )
+
+
+def test_github_url_uses_repository_default_branch_over_configured_main(db, tenant):
+    _seed(db, tenant.id)
+    save_github_config(
+        db,
+        tenant.id,
+        GitHubConfigRequest(
+            repository_url="https://github.com/acme/payments-service",
+            branch_target="main",
+            personal_access_token="ghp_test_token",
+        ),
+    )
+    activities = [
+        _activity(pr, "services/payments/handler.ts")
+        for pr in (801, 802, 803)
+    ]
+    persist_file_risk_snapshots(db, tenant.id, activities, repo_path="acme/payments-service")
+    db.commit()
+
+    with patch(
+        "app.services.github_client.list_repository_branches",
+        return_value=("master", ["master", "develop"]),
+    ):
+        payload = get_kra_file_risk(db, tenant.id, component_id="comp-payments")
+
     assert payload["files"][0]["github_url"] == (
         "https://github.com/acme/payments-service/blob/master/services/payments/handler.ts"
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -14,6 +15,8 @@ from app.services.github_doa import DOA_AUTHOR_THRESHOLD, _should_exclude_path, 
 from app.services.github_touch import FileTouch as DoaFileTouch
 from app.services.github_touch import build_file_touch_indexes
 from app.services.github_types import GitHubCommitActivity, GitHubPullRequestActivity
+
+logger = logging.getLogger(__name__)
 
 ANALYSIS_WINDOW_DAYS = 90
 HIGH_CHURN_PR_THRESHOLD = 3
@@ -214,16 +217,76 @@ def persist_file_risk_snapshots(
     return snapshots
 
 
-def _resolve_github_branch(db: Session, tenant_id: uuid.UUID) -> str:
-    from app.services.integration_config_store import get_github_config
-
-    config = get_github_config(db, tenant_id)
-    if not config:
-        return "main"
+def _configured_github_branch_fallback(config) -> str:
     branches = config.resolved_branch_targets()
     if branches:
         return branches[0]
     return (config.branch_target or "main").strip() or "main"
+
+
+def _repository_url_for_repo_path(config, repo_path: str) -> str | None:
+    from app.services.github_client import GitHubClientError, parse_repository_url
+
+    normalized = (repo_path or "").strip().lower()
+    if not normalized:
+        return None
+
+    for url in config.resolved_repository_urls():
+        try:
+            owner, repo = parse_repository_url(url)
+        except GitHubClientError:
+            continue
+        if f"{owner}/{repo}".lower() == normalized:
+            return url
+
+    urls = config.resolved_repository_urls()
+    return urls[0] if len(urls) == 1 else None
+
+
+def _resolve_github_branch(
+    db: Session,
+    tenant_id: uuid.UUID,
+    repo_path: str = "",
+    *,
+    branch_cache: dict[str, str] | None = None,
+) -> str:
+    from app.services.integration_config_store import get_github_config
+    from app.services.github_client import GitHubClientError, list_repository_branches
+
+    cache_key = (repo_path or "").strip().lower()
+    if branch_cache is not None and cache_key and cache_key in branch_cache:
+        return branch_cache[cache_key]
+
+    config = get_github_config(db, tenant_id)
+    fallback = _configured_github_branch_fallback(config) if config else "main"
+
+    if config and cache_key:
+        repository_url = _repository_url_for_repo_path(config, repo_path)
+        token = (config.personal_access_token or "").strip()
+        if repository_url and token:
+            try:
+                default_branch, _ = list_repository_branches(token, repository_url)
+                branch = (default_branch or fallback).strip() or fallback
+                if branch_cache is not None:
+                    branch_cache[cache_key] = branch
+                return branch
+            except GitHubClientError:
+                logger.warning(
+                    "Could not resolve default branch for %s; using %s",
+                    repo_path,
+                    fallback,
+                )
+            except Exception:
+                logger.warning(
+                    "Unexpected error resolving default branch for %s; using %s",
+                    repo_path,
+                    fallback,
+                    exc_info=True,
+                )
+
+    if branch_cache is not None and cache_key:
+        branch_cache[cache_key] = fallback
+    return fallback
 
 
 def _github_blob_url(repo_path: str, file_path: str, branch: str) -> str | None:
@@ -280,7 +343,7 @@ def get_kra_file_risk(
         for row in db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
     }
 
-    branch = _resolve_github_branch(db, tenant_id)
+    branch_cache: dict[str, str] = {}
     files = [
         _snapshot_to_dict(
             row,
@@ -290,7 +353,9 @@ def get_kra_file_risk(
                 if row.primary_owner_employee_id
                 else None
             ),
-            branch=branch,
+            branch=_resolve_github_branch(
+                db, tenant_id, row.repo_path, branch_cache=branch_cache
+            ),
         )
         for row in rows
     ]
@@ -342,13 +407,15 @@ def get_employee_hotspots(
     )
     owner_name = employee.name if employee else None
 
-    branch = _resolve_github_branch(db, tenant_id)
+    branch_cache: dict[str, str] = {}
     files = [
         _snapshot_to_dict(
             row,
             component_name=components.get(row.component_id, row.component_id),
             owner_name=owner_name,
-            branch=branch,
+            branch=_resolve_github_branch(
+                db, tenant_id, row.repo_path, branch_cache=branch_cache
+            ),
         )
         for row in rows
     ]
