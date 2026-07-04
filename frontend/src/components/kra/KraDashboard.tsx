@@ -6,7 +6,6 @@ import { Loader2 } from "lucide-react";
 import Link from "next/link";
 
 import { fetchKraFileRisk, fetchKraGraph, fetchKraSummary, fetchOrgChart } from "@/lib/api";
-import { formatKraComponentLabel } from "@/lib/github-component-display";
 import { useWorkspace } from "@/context/WorkspaceContext";
 import type {
   KraAnalyticsResponse,
@@ -41,8 +40,10 @@ export function KraDashboard() {
   const [mounted, setMounted] = useState(false);
   const [fileRisk, setFileRisk] = useState<KraFileRiskResponse | null>(null);
   const [fileRiskLoading, setFileRiskLoading] = useState(false);
-  const [matrixComponentId, setMatrixComponentId] = useState<string>("");
   const [orgChart, setOrgChart] = useState<OrgChartPayload | null>(null);
+
+  const selectedComponentId =
+    selectedComponent?.type === "component" ? selectedComponent.id : null;
 
   useEffect(() => {
     setMounted(true);
@@ -127,36 +128,15 @@ export function KraDashboard() {
     [criticalSpofFilter, criticalSpofIds],
   );
 
-  const componentNodes = useMemo(
-    () => graph?.nodes.filter((node) => node.type === "component") ?? [],
-    [graph],
-  );
-
   useEffect(() => {
-    if (!graph || componentNodes.length === 0) return;
-    setMatrixComponentId((current) => {
-      if (current && componentNodes.some((node) => node.id === current)) {
-        return current;
-      }
-      if (highlightId && componentNodes.some((node) => node.id === highlightId)) {
-        return highlightId;
-      }
-      if (selectedComponent?.type === "component") {
-        return selectedComponent.id;
-      }
-      return componentNodes[0]?.id ?? "";
-    });
-  }, [graph, componentNodes, highlightId, selectedComponent]);
-
-  useEffect(() => {
-    if (!matrixComponentId) {
+    if (!selectedComponentId) {
       setFileRisk(null);
       return;
     }
 
     let cancelled = false;
     setFileRiskLoading(true);
-    fetchKraFileRisk(matrixComponentId)
+    fetchKraFileRisk(selectedComponentId)
       .then((data) => {
         if (!cancelled) setFileRisk(data);
       })
@@ -170,7 +150,7 @@ export function KraDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [matrixComponentId, operationalRevision]);
+  }, [selectedComponentId, operationalRevision]);
 
   const emptyStateMessage = useMemo(() => {
     if (!orgChart) {
@@ -260,7 +240,6 @@ export function KraDashboard() {
           );
           if (node) {
             setSelectedComponent(node);
-            setMatrixComponentId(node.id);
             setDocGapPanelOpen(false);
           }
         }}
@@ -278,63 +257,52 @@ export function KraDashboard() {
           </Link>
         </div>
       ) : (
-        <KraGraph
-          graph={graph}
-          selectedComponentId={selectedComponent?.id ?? null}
-          highlightCriticalSpofIds={highlightCriticalSpofIds}
-          onSelectComponent={(node) => {
-            setSelectedComponent(node);
-            if (node.type === "component") {
-              setMatrixComponentId(node.id);
-            }
-          }}
-        />
-      )}
-
-      {graph.nodes.length > 0 && (
-      <div className="space-y-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-sm font-medium text-zinc-200">File ownership risk</h2>
-          {componentNodes.length > 0 && (
-            <select
-              value={matrixComponentId}
-              onChange={(event) => setMatrixComponentId(event.target.value)}
-              className="rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-300"
-            >
-              {componentNodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {formatKraComponentLabel(node)}
-                </option>
-              ))}
-            </select>
+        <div
+          className={`flex min-h-[420px] items-stretch overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/40 shadow-sm ring-1 ring-white/[0.03] ${
+            selectedComponent ? "divide-x divide-zinc-800/70" : ""
+          }`}
+        >
+          <div className="min-w-0 flex-1">
+            <KraGraph
+              graph={graph}
+              selectedComponentId={selectedComponent?.id ?? null}
+              highlightCriticalSpofIds={highlightCriticalSpofIds}
+              detailOpen={!!selectedComponent}
+              splitView={!!selectedComponent}
+              onSelectComponent={(node) => setSelectedComponent(node)}
+            />
+          </div>
+          {selectedComponent && (
+            <KraComponentDrawer
+              component={selectedComponent}
+              graph={graph}
+              onClose={() => setSelectedComponent(null)}
+              className="w-[min(100%,400px)] shrink-0"
+            />
           )}
         </div>
-        {fileRiskLoading ? (
-          <div className="flex h-32 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/30 text-sm text-zinc-400">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Loading file risk…
-          </div>
-        ) : (
-          <FileRiskMatrix
-            files={fileRisk?.files ?? []}
-            quadrantCounts={fileRisk?.quadrant_counts}
-            crossTrainingPriority={fileRisk?.cross_training_priority}
-            title={
-              fileRisk?.component_name
-                ? `${fileRisk.component_name} — file ownership`
-                : "File ownership risk"
-            }
-          />
-        )}
-      </div>
       )}
 
-      {selectedComponent && (
-        <KraComponentDrawer
-          component={selectedComponent}
-          graph={graph}
-          onClose={() => setSelectedComponent(null)}
-        />
+      {graph.nodes.length > 0 && selectedComponentId && (
+        <div className="space-y-3">
+          {fileRiskLoading ? (
+            <div className="flex h-32 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/30 text-sm text-zinc-400">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Loading file risk…
+            </div>
+          ) : (
+            <FileRiskMatrix
+              files={fileRisk?.files ?? []}
+              quadrantCounts={fileRisk?.quadrant_counts}
+              crossTrainingPriority={fileRisk?.cross_training_priority}
+              title={
+                fileRisk?.component_name
+                  ? `${fileRisk.component_name} — file ownership`
+                  : "File ownership risk"
+              }
+            />
+          )}
+        </div>
       )}
     </div>
   );

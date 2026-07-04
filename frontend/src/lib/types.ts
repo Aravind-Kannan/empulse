@@ -605,6 +605,7 @@ export interface FileRiskItem {
 export interface KraFileRiskResponse {
   component_id: string | null;
   component_name: string | null;
+  team_size?: number | null;
   files: FileRiskItem[];
   quadrant_counts: Record<string, number>;
   cross_training_priority: FileRiskItem[];

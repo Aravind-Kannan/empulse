@@ -25,6 +25,11 @@ class FileRiskItem(BaseModel):
 class KraFileRiskResponse(BaseModel):
     component_id: str | None = None
     component_name: str | None = None
+    team_size: int | None = Field(
+        default=None,
+        ge=1,
+        description="Active engineering headcount used for coverage thresholds",
+    )
     files: list[FileRiskItem] = Field(default_factory=list)
     quadrant_counts: dict[str, int] = Field(default_factory=dict)
     cross_training_priority: list[FileRiskItem] = Field(default_factory=list)

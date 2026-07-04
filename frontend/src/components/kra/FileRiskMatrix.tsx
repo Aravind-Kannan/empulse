@@ -10,33 +10,53 @@ type FileRiskBucket = "needs_attention" | "healthy";
 const RISK_QUADRANTS: FileRiskQuadrant[] = ["critical", "stable_niche"];
 const HEALTHY_QUADRANTS: FileRiskQuadrant[] = ["active_shared", "healthy"];
 
-const BUCKET_META: Record<
-  FileRiskBucket,
+const QUADRANT_META: Record<
+  FileRiskQuadrant,
   {
-    label: string;
     shortLabel: string;
-    description: string;
-    accentClass: string;
-    borderClass: string;
+    tooltip: string;
     badgeClass: string;
   }
 > = {
-  needs_attention: {
-    label: "Needs attention",
-    shortLabel: "At risk",
-    description:
-      "Less than half the team edits this file, bus factor is low, or one person owns most of it.",
-    accentClass: "text-red-300",
-    borderClass: "border-red-500/30 bg-red-500/5",
+  critical: {
+    shortLabel: "Critical",
+    tooltip: "One owner, active file",
     badgeClass: "bg-red-500/15 text-red-200 border-red-500/30",
   },
+  stable_niche: {
+    shortLabel: "Concentrated",
+    tooltip: "Knowledge sits with few people",
+    badgeClass: "bg-orange-500/15 text-orange-200 border-orange-500/30",
+  },
+  active_shared: {
+    shortLabel: "Active",
+    tooltip: "Team shares it, changes often",
+    badgeClass: "bg-sky-500/10 text-sky-200 border-sky-500/25",
+  },
   healthy: {
-    label: "Healthy",
     shortLabel: "Healthy",
-    description: "Enough teammates share ownership of this file.",
+    tooltip: "Team shares it, quiet file",
+    badgeClass: "bg-emerald-500/10 text-emerald-200 border-emerald-500/25",
+  },
+};
+
+const BUCKET_META: Record<
+  FileRiskBucket,
+  {
+    shortLabel: string;
+    accentClass: string;
+    borderClass: string;
+  }
+> = {
+  needs_attention: {
+    shortLabel: "At risk",
+    accentClass: "text-red-300",
+    borderClass: "border-red-500/30 bg-red-500/5",
+  },
+  healthy: {
+    shortLabel: "Healthy",
     accentClass: "text-emerald-300",
     borderClass: "border-emerald-500/25 bg-emerald-500/5",
-    badgeClass: "bg-emerald-500/10 text-emerald-200 border-emerald-500/25",
   },
 };
 
@@ -70,6 +90,23 @@ function fileRiskBucket(quadrant: FileRiskQuadrant): FileRiskBucket {
   return RISK_QUADRANTS.includes(quadrant) ? "needs_attention" : "healthy";
 }
 
+function ownershipSignal(file: FileRiskItem): string | null {
+  if (!file.primary_owner_name) {
+    return null;
+  }
+  if (file.primary_owner_doa_pct != null) {
+    return `${file.primary_owner_name} owns ${file.primary_owner_doa_pct.toFixed(0)}%`;
+  }
+  return `${file.primary_owner_name} is primary owner`;
+}
+
+function fileRiskSummary(file: FileRiskItem): string | null {
+  if (file.quadrant === "healthy" || file.quadrant === "active_shared") {
+    return null;
+  }
+  return ownershipSignal(file);
+}
+
 function bucketCount(
   bucket: FileRiskBucket,
   quadrantCounts: Record<string, number>,
@@ -93,54 +130,41 @@ function formatFileLabel(path: string): { name: string; folder: string | null } 
   };
 }
 
-function contributorLabel(count: number): string {
-  if (count <= 1) return "1 person edits this";
-  if (count === 2) return "2 people edit this";
-  return `${count} people edit this`;
-}
-
-function changeLabel(churn: number): string {
-  if (churn === 0) return "No recent changes";
-  if (churn === 1) return "1 change in 90 days";
-  return `${churn} changes in 90 days`;
-}
-
-function FileRiskRow({ file, emphasize = false }: { file: FileRiskItem; emphasize?: boolean }) {
+function FileRiskRow({
+  file,
+  emphasize = false,
+}: {
+  file: FileRiskItem;
+  emphasize?: boolean;
+}) {
   const { name, folder } = formatFileLabel(file.file_path);
   const bucket = fileRiskBucket(file.quadrant);
-  const meta = BUCKET_META[bucket];
+  const bucketMeta = BUCKET_META[bucket];
+  const quadrantMeta = QUADRANT_META[file.quadrant];
+  const summary = fileRiskSummary(file);
 
   return (
     <li
       className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 ${
-        emphasize ? meta.borderClass : "border-zinc-800 bg-zinc-950/40"
+        emphasize ? bucketMeta.borderClass : "border-zinc-800 bg-zinc-950/40"
       }`}
     >
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <p className="truncate font-mono text-sm text-zinc-100">{name}</p>
-          {!emphasize && (
-            <span
-              className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${meta.badgeClass}`}
-            >
-              {meta.shortLabel}
-            </span>
-          )}
+          <span
+            title={quadrantMeta.tooltip}
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${quadrantMeta.badgeClass}`}
+          >
+            {quadrantMeta.shortLabel}
+          </span>
         </div>
         {folder ? (
           <p className="mt-0.5 truncate text-xs text-zinc-500">{folder}/</p>
         ) : null}
-        <p className="mt-1.5 text-xs text-zinc-400">
-          {changeLabel(file.churn_score)}
-          <span className="text-zinc-600"> · </span>
-          {contributorLabel(file.contributor_count)}
-          {file.primary_owner_name ? (
-            <>
-              <span className="text-zinc-600"> · </span>
-              Main owner: {file.primary_owner_name}
-            </>
-          ) : null}
-        </p>
+        {summary ? (
+          <p className="mt-1 text-xs text-zinc-400">{summary}</p>
+        ) : null}
       </div>
       {file.github_url ? (
         <a
@@ -331,8 +355,7 @@ export function FileRiskMatrix({
           </span>
         </h3>
         <p className="mt-1 text-xs text-zinc-500">
-          Files where this person is the main owner and the team would struggle
-          if they were unavailable.
+          Files where this person is the main owner.
         </p>
       </div>
     );
@@ -380,16 +403,11 @@ export function FileRiskMatrix({
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 sm:p-5">
-      <div className="mb-5">
+      <div className="mb-4">
         <h3 className="text-sm font-medium text-zinc-200">{title}</h3>
-        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-500">
-          Files are at risk when fewer than half the engineering team edits them,
-          bus factor is low relative to team size, or one person holds most of the
-          ownership (DOA).
-        </p>
       </div>
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-2">
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
         {BUCKET_PRIORITY.map((bucket) => {
           const meta = BUCKET_META[bucket];
           const count = bucketCount(bucket, quadrantCounts, byBucket);
@@ -409,25 +427,12 @@ export function FileRiskMatrix({
               <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-100">
                 {count}
               </p>
-              <p className="mt-1 text-[11px] leading-snug text-zinc-500">
-                {meta.label}
-              </p>
             </button>
           );
         })}
       </div>
 
       <div className={`rounded-xl border ${BUCKET_META[selectedBucket].borderClass}`}>
-        <div className="border-b border-zinc-800/80 px-4 py-3">
-          <h4
-            className={`text-sm font-medium ${BUCKET_META[selectedBucket].accentClass}`}
-          >
-            {BUCKET_META[selectedBucket].label}
-          </h4>
-          <p className="mt-1 text-xs text-zinc-500">
-            {BUCKET_META[selectedBucket].description}
-          </p>
-        </div>
         <div
           className="flex flex-col px-3 py-3"
           style={{ minHeight: listBodyMinHeightPx }}

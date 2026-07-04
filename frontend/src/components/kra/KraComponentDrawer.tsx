@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 
 import {
@@ -8,17 +8,22 @@ import {
   parseGitHubComponentDisplay,
 } from "@/lib/github-component-display";
 import type { KraAnalyticsResponse, KraNode } from "@/lib/types";
+import { ListPagination, paginateItems } from "@/components/ui/ListPagination";
+
+const DOC_SOURCES_PAGE_SIZE = 5;
 
 interface KraComponentDrawerProps {
   component: KraNode;
   graph: KraAnalyticsResponse;
   onClose: () => void;
+  className?: string;
 }
 
 export function KraComponentDrawer({
   component,
   graph,
   onClose,
+  className = "",
 }: KraComponentDrawerProps) {
   const linkedEngineerIds = useMemo(
     () =>
@@ -61,19 +66,33 @@ export function KraComponentDrawer({
     ? "GitHub-verified Single Point of Failure"
     : "Single Point of Failure";
   const spofReasons = component.spof_reasons ?? [];
+  const documentationSources = component.documentation_sources ?? [];
+  const [docPage, setDocPage] = useState(0);
+
+  useEffect(() => {
+    setDocPage(0);
+  }, [component.id]);
+
+  useEffect(() => {
+    const maxPage = Math.max(
+      0,
+      Math.ceil(documentationSources.length / DOC_SOURCES_PAGE_SIZE) - 1,
+    );
+    if (docPage > maxPage) {
+      setDocPage(maxPage);
+    }
+  }, [documentationSources.length, docPage]);
+
+  const paginatedDocSources = useMemo(
+    () => paginateItems(documentationSources, docPage, DOC_SOURCES_PAGE_SIZE),
+    [documentationSources, docPage],
+  );
 
   return (
-    <>
-      <button
-        type="button"
-        aria-label="Close drawer"
-        className="fixed inset-0 z-40 bg-black/50"
-        onClick={onClose}
-      />
       <aside
-        className={`fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-zinc-800 bg-slate-950 shadow-2xl transition-transform duration-300 ease-out`}
+        className={`flex min-h-0 min-w-0 flex-col bg-zinc-950/60 ${className}`}
       >
-        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800/70 bg-zinc-950/80 px-5 py-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-zinc-500">
               {githubDisplay ? "GitHub component" : "System component"}
@@ -96,13 +115,14 @@ export function KraComponentDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
+            aria-label="Close panel"
+            className="shrink-0 rounded-lg p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="flex-1 space-y-6 overflow-y-auto p-5">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {component.is_spof && (
             <div className="rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-3 text-sm text-orange-200">
               <p className="font-medium text-orange-100">{spofHeadline}</p>
@@ -150,19 +170,40 @@ export function KraComponentDrawer({
           </section>
 
           <section>
-            <h3 className="mb-2 text-sm font-medium text-zinc-200">
-              Documentation
-            </h3>
-            <ul className="space-y-2">
-              {(component.documentation_sources ?? []).map((source) => (
-                <li
-                  key={source}
-                  className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-300"
-                >
-                  {source}
-                </li>
-              ))}
-            </ul>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-zinc-200">
+                Documentation
+              </h3>
+              {documentationSources.length > 0 && (
+                <span className="text-[10px] tabular-nums text-zinc-500">
+                  {documentationSources.length} source
+                  {documentationSources.length === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+            {documentationSources.length === 0 ? (
+              <p className="text-sm text-zinc-500">No documentation linked.</p>
+            ) : (
+              <>
+                <ul className="space-y-2">
+                  {paginatedDocSources.map((source, index) => (
+                    <li
+                      key={`${docPage * DOC_SOURCES_PAGE_SIZE + index}-${source}`}
+                      className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-300"
+                    >
+                      {source}
+                    </li>
+                  ))}
+                </ul>
+                <ListPagination
+                  page={docPage}
+                  pageSize={DOC_SOURCES_PAGE_SIZE}
+                  totalItems={documentationSources.length}
+                  onPageChange={setDocPage}
+                  className="mt-2 border-none px-0 py-2"
+                />
+              </>
+            )}
           </section>
 
           <section>
@@ -189,15 +230,9 @@ export function KraComponentDrawer({
             {linkedEngineers.length === 0 && (
               <p className="text-sm text-zinc-500">No owners linked yet.</p>
             )}
-            {ownershipSource === "github" && (
-              <p className="mt-2 text-xs text-zinc-500">
-                Percentages from recent GitHub change volume on this path — not
-                org-chart assignments.
-              </p>
-            )}
+            
           </section>
         </div>
       </aside>
-    </>
   );
 }

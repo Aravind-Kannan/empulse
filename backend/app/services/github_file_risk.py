@@ -440,10 +440,12 @@ def get_kra_file_risk(
     )
 
     component_name = components.get(component_id) if component_id else None
+    team_size = _active_engineering_team_size(db, tenant_id)
 
     return {
         "component_id": component_id,
         "component_name": component_name,
+        "team_size": team_size,
         "files": files,
         "quadrant_counts": dict(quadrant_counts),
         "cross_training_priority": critical_sorted,

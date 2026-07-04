@@ -26,6 +26,8 @@ interface KraGraphProps {
   selectedComponentId: string | null;
   onSelectComponent: (node: KraNode) => void;
   highlightCriticalSpofIds?: Set<string> | null;
+  detailOpen?: boolean;
+  splitView?: boolean;
 }
 
 const MIN_GRAPH_WIDTH = 720;
@@ -35,6 +37,7 @@ const SCROLL_VIEWPORT_MAX = 560;
 const GRAPH_PADDING_TOP = 40;
 const GRAPH_PADDING_BOTTOM = 36;
 const COLUMN_INSET = 140;
+const COMPACT_COLUMN_INSET = 72;
 const ENGINEER_MIN_GAP = 92;
 const COMPONENT_MIN_GAP = 84;
 const ENGINEER_RADIUS = 22;
@@ -67,11 +70,16 @@ function columnPositions(
   return Array.from({ length: count }, (_, index) => start + index * gap);
 }
 
-function layoutGraph(graph: KraAnalyticsResponse, graphWidth: number): GraphLayout {
+function layoutGraph(
+  graph: KraAnalyticsResponse,
+  graphWidth: number,
+  compact: boolean,
+): GraphLayout {
   const engineers = graph.nodes.filter((node) => node.type === "engineer");
   const components = graph.nodes.filter((node) => node.type === "component");
-  const engineerX = COLUMN_INSET;
-  const componentX = graphWidth - COLUMN_INSET;
+  const inset = compact ? COMPACT_COLUMN_INSET : COLUMN_INSET;
+  const engineerX = inset;
+  const componentX = graphWidth - inset;
 
   const engineerSpan =
     engineers.length <= 1 ? 0 : (engineers.length - 1) * ENGINEER_MIN_GAP;
@@ -168,11 +176,15 @@ function cubicBezierMidpoint(
   };
 }
 
+const NODE_TRANSITION = "transform 300ms ease-out";
+
 export function KraGraph({
   graph,
   selectedComponentId,
   onSelectComponent,
   highlightCriticalSpofIds = null,
+  detailOpen = false,
+  splitView = false,
 }: KraGraphProps) {
   const uid = useId().replace(/:/g, "");
   const filterSpofId = `kra-spof-glow-${uid}`;
@@ -198,8 +210,8 @@ export function KraGraph({
 
   const filterActive = highlightCriticalSpofIds != null;
   const layout = useMemo(
-    () => layoutGraph(graph, graphWidth),
-    [graph, graphWidth],
+    () => layoutGraph(graph, graphWidth, detailOpen),
+    [graph, graphWidth, detailOpen],
   );
   const positionById = useMemo(
     () => new Map(layout.nodes.map((node) => [node.id, node])),
@@ -221,8 +233,33 @@ export function KraGraph({
   const componentCount = graph.nodes.filter((node) => node.type === "component").length;
   const scrollViewportHeight = Math.min(layout.height, SCROLL_VIEWPORT_MAX);
 
+  const columnDividerX = useMemo(() => {
+    const engineerXs = layout.nodes
+      .filter((node) => node.type === "engineer")
+      .map((node) => node.x);
+    const componentXs = layout.nodes
+      .filter((node) => node.type === "component")
+      .map((node) => node.x);
+    if (engineerXs.length > 0 && componentXs.length > 0) {
+      return (Math.max(...engineerXs) + Math.min(...componentXs)) / 2;
+    }
+    return layout.width / 2;
+  }, [layout.nodes, layout.width]);
+
+  const zoneInset = detailOpen ? COMPACT_COLUMN_INSET : COLUMN_INSET;
+  const engineerZoneLeft = zoneInset - ENGINEER_RADIUS - 12;
+  const engineerZoneWidth = Math.max(columnDividerX - engineerZoneLeft - 8, 48);
+  const componentZoneX = columnDividerX + 8;
+  const componentZoneWidth = Math.max(graphWidth - componentZoneX - 16, 48);
+
   return (
-    <section className="w-full overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/80 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] ring-1 ring-white/[0.03]">
+    <section
+      className={`flex h-full min-h-0 w-full flex-col overflow-hidden bg-zinc-950/80 ${
+        splitView
+          ? "shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]"
+          : "rounded-xl border border-zinc-800/80 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] ring-1 ring-white/[0.03]"
+      }`}
+    >
       <div className="flex items-center justify-between border-b border-zinc-800/70 px-4 py-2.5">
         <div>
           <h2 className="text-[13px] font-medium tracking-tight text-zinc-200">
@@ -325,34 +362,37 @@ export function KraGraph({
           />
 
           <rect
-            x={16}
+            x={engineerZoneLeft}
             y={8}
-            width={layout.width / 2 - 32}
+            width={engineerZoneWidth}
             height={layout.height - 16}
             rx={10}
             fill="#0ea5e906"
             stroke="#0ea5e912"
             strokeWidth={1}
+            style={{ transition: "width 300ms ease-out" }}
           />
           <rect
-            x={layout.width / 2 + 16}
+            x={componentZoneX}
             y={8}
-            width={layout.width / 2 - 32}
+            width={componentZoneWidth}
             height={layout.height - 16}
             rx={10}
             fill="#f9731606"
             stroke="#f9731612"
             strokeWidth={1}
+            style={{ transition: "x 300ms ease-out, width 300ms ease-out" }}
           />
 
           <line
-            x1={layout.width / 2}
+            x1={columnDividerX}
             y1={8}
-            x2={layout.width / 2}
+            x2={columnDividerX}
             y2={layout.height - 8}
             stroke="#3f3f46"
             strokeOpacity={0.35}
             strokeDasharray="4 4"
+            style={{ transition: "x1 300ms ease-out, x2 300ms ease-out" }}
           />
 
           {graph.links.map((link) => {
@@ -415,7 +455,10 @@ export function KraGraph({
               return (
                 <g
                   key={node.id}
-                  transform={`translate(${node.x}, ${node.y})`}
+                  style={{
+                    transform: `translate(${node.x}px, ${node.y}px)`,
+                    transition: NODE_TRANSITION,
+                  }}
                   opacity={filterActive && !isHovered ? 0.4 : 1}
                   onMouseEnter={() => setHoveredNodeId(node.id)}
                   onMouseLeave={() => setHoveredNodeId(null)}
@@ -458,7 +501,10 @@ export function KraGraph({
             return (
               <g
                 key={node.id}
-                transform={`translate(${node.x}, ${node.y})`}
+                style={{
+                  transform: `translate(${node.x}px, ${node.y}px)`,
+                  transition: NODE_TRANSITION,
+                }}
                 className="cursor-pointer"
                 opacity={dimmed && !isHovered ? 0.22 : 1}
                 onClick={() => onSelectComponent(node)}
