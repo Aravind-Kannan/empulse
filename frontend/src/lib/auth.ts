@@ -19,6 +19,7 @@ export interface ActiveTenant {
   id: string;
   companyName: string;
   slug: string;
+  workspaceSetupComplete: boolean;
 }
 
 export interface TenantMembership extends ActiveTenant {
@@ -48,6 +49,7 @@ export interface AuthUserResponse {
   tenant_slug: string;
   onboarded: boolean;
   oauth_provider: string | null;
+  workspace_setup_complete: boolean;
   created_at: string;
 }
 
@@ -87,7 +89,17 @@ export function userResponseToTenant(user: AuthUserResponse): ActiveTenant {
     id: user.tenant_id,
     companyName: user.company_name,
     slug: user.tenant_slug,
+    workspaceSetupComplete: user.workspace_setup_complete,
   };
+}
+
+export function onboardingPathForTenant(
+  tenant: ActiveTenant | null | undefined,
+): string {
+  if (tenant && !tenant.workspaceSetupComplete) {
+    return "/onboarding/workspace";
+  }
+  return "/onboarding";
 }
 
 export function applySessionCredentials(
@@ -203,6 +215,7 @@ export async function fetchLinkedTenants(): Promise<TenantMembership[]> {
     id: row.id,
     companyName: row.company_name,
     slug: row.slug,
+    workspaceSetupComplete: true,
     isActive: row.is_active,
   }));
 }
@@ -211,17 +224,25 @@ export async function signUpWithPassword(payload: {
   name: string;
   email: string;
   password: string;
-  company: string;
+  company?: string;
 }): Promise<{
   user: AuthUser;
   activeTenant: ActiveTenant;
   isNewUser: boolean;
   accessToken: string;
 }> {
+  const body: Record<string, string> = {
+    name: payload.name,
+    email: payload.email,
+    password: payload.password,
+  };
+  if (payload.company?.trim()) {
+    body.company = payload.company.trim();
+  }
   const response = await apiFetch(`${API_BASE}/api/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
     skipErrorToast: true,
   });
   if (!response.ok) {
@@ -270,6 +291,25 @@ export async function completeOnboardingSession(): Promise<{
   });
   if (!response.ok) {
     throw new Error(await parseAuthError(response, "Failed to complete onboarding"));
+  }
+  const data = (await response.json()) as SessionApiResponse;
+  const applied = applySessionCredentials(data.user, data.access_token);
+  return { ...applied, accessToken: data.access_token };
+}
+
+export async function updateWorkspaceName(companyName: string): Promise<{
+  user: AuthUser;
+  activeTenant: ActiveTenant;
+  accessToken: string;
+}> {
+  const response = await apiFetch(`${API_BASE}/api/auth/workspace`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company_name: companyName }),
+    skipErrorToast: true,
+  });
+  if (!response.ok) {
+    throw new Error(await parseAuthError(response, "Failed to update workspace"));
   }
   const data = (await response.json()) as SessionApiResponse;
   const applied = applySessionCredentials(data.user, data.access_token);

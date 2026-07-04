@@ -1,15 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowUpRight,
   Clock,
-  Loader2,
   Plug,
-  RefreshCw,
   Search,
   TrendingDown,
   Users,
@@ -140,9 +138,8 @@ function DashboardSkeleton() {
 }
 
 export function DashboardView() {
-  const { metrics, loading, refreshMetrics } = useWorkspace();
+  const { metrics, loading } = useWorkspace();
   const { config } = useIntegrations();
-  const [refreshing, setRefreshing] = useState(false);
   const reducedMotion = useReducedMotion();
 
   const connectedCount = getConnectedIntegrationIds(config).length;
@@ -158,15 +155,6 @@ export function DashboardView() {
     }),
     [metrics],
   );
-
-  const handleRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await refreshMetrics();
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refreshMetrics]);
 
   if (loading) {
     return <DashboardSkeleton />;
@@ -185,30 +173,13 @@ export function DashboardView() {
         initial={reducedMotion ? false : { opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: REVEAL_EASE }}
-        className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
       >
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-            Dashboard
-          </h1>
-          <p className="mt-1 text-sm text-zinc-400">
-            Key signals across your workspace — each metric shown once.
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => void handleRefresh()}
-          disabled={refreshing}
-          className="inline-flex shrink-0 items-center gap-2 self-start rounded-xl border border-zinc-700/80 bg-zinc-900/80 px-4 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-60"
-        >
-          {refreshing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-          Refresh
-        </button>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
+          Dashboard
+        </h1>
+        <p className="mt-1 text-sm text-zinc-400">
+          Key signals across your workspace — each metric shown once.
+        </p>
       </motion.header>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

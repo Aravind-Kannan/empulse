@@ -17,6 +17,7 @@ import {
   fetchLinkedTenants,
   loginWithPassword,
   logoutSession,
+  onboardingPathForTenant,
   sessionFromAuthState,
   signUpWithPassword,
   switchActiveTenant,
@@ -128,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         name: payload.name,
         email: payload.email,
         password: payload.password,
-        company: payload.company ?? "My Company",
+        company: payload.company,
       });
       setUser(result.user);
       setActiveTenant(result.activeTenant);
@@ -136,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsNewUser(result.isNewUser);
       setAuthStatus("authenticated");
       await loadLinkedTenants();
-      router.push("/onboarding");
+      router.push(onboardingPathForTenant(result.activeTenant));
     },
     [router, loadLinkedTenants],
   );
@@ -150,7 +151,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsNewUser(result.isNewUser);
       setAuthStatus("authenticated");
       await loadLinkedTenants();
-      router.push(result.user.onboarded ? "/dashboard" : "/onboarding");
+      router.push(
+        result.user.onboarded
+          ? "/dashboard"
+          : onboardingPathForTenant(result.activeTenant),
+      );
     },
     [router, loadLinkedTenants],
   );

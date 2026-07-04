@@ -2,7 +2,13 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { User } from "lucide-react";
+import {
+  GitBranchPlus,
+  Pencil,
+  Trash2,
+  Unlink,
+  User,
+} from "lucide-react";
 
 import type { Employee } from "@/lib/types";
 
@@ -11,8 +17,11 @@ export type EmployeeFlowNodeData = {
   isSelected: boolean;
   isDropTarget: boolean;
   isHighlighted: boolean;
+  isDragging?: boolean;
   onToggleSelect: () => void;
   onEdit?: () => void;
+  onUnparent?: () => void;
+  onDelete?: () => void;
 };
 
 function getInitials(name: string): string {
@@ -27,19 +36,32 @@ function getInitials(name: string): string {
 function EmployeeFlowNodeComponent({
   data,
 }: NodeProps & { data: EmployeeFlowNodeData }) {
-  const { employee, isSelected, isDropTarget, isHighlighted, onToggleSelect, onEdit } =
-    data;
+  const {
+    employee,
+    isSelected,
+    isDropTarget,
+    isHighlighted,
+    isDragging = false,
+    onToggleSelect,
+    onEdit,
+    onUnparent,
+    onDelete,
+  } = data;
+
+  const showActions = onEdit || onUnparent || onDelete;
 
   return (
     <div
-      className={`w-[188px] rounded-2xl border p-3 shadow-lg shadow-black/30 transition-all duration-300 ${
-        isHighlighted
-          ? "border-amber-400/80 bg-gradient-to-br from-amber-500/20 to-amber-500/5 ring-2 ring-amber-400/40"
-          : isSelected
-            ? "border-violet-500/50 bg-gradient-to-br from-violet-500/15 to-indigo-500/5 ring-2 ring-violet-500/30"
-            : isDropTarget
-              ? "border-sky-400/80 bg-gradient-to-br from-sky-500/15 to-cyan-500/5 ring-2 ring-sky-400/50"
-              : "border-zinc-700/80 bg-zinc-900/90 hover:border-zinc-500"
+      className={`w-[188px] rounded-2xl border p-3 shadow-lg shadow-black/30 ${
+        isDragging
+          ? "z-20 scale-[1.04] border-sky-400/80 bg-zinc-900/95 ring-2 ring-sky-400/40 shadow-xl shadow-sky-900/30 transition-transform duration-150"
+          : isHighlighted
+            ? "border-dashed border-amber-400/70 bg-zinc-900/90 ring-1 ring-amber-400/30"
+            : isSelected
+              ? "border-violet-500/50 bg-gradient-to-br from-violet-500/15 to-indigo-500/5 ring-2 ring-violet-500/30"
+              : isDropTarget
+                ? "border-sky-400/80 bg-gradient-to-br from-sky-500/15 to-cyan-500/5 ring-2 ring-sky-400/50 transition-colors duration-150"
+                : "border-zinc-700/80 bg-zinc-900/90 transition-colors duration-150 hover:border-zinc-500"
       }`}
     >
       <Handle
@@ -77,6 +99,53 @@ function EmployeeFlowNodeComponent({
           </span>
         )}
       </button>
+
+      {showActions ? (
+        <div className="mt-2 flex items-center justify-end gap-1 border-t border-zinc-800/80 pt-2">
+          {onUnparent && employee.manager_id ? (
+            <button
+              type="button"
+              title="Remove manager"
+              onClick={(event) => {
+                event.stopPropagation();
+                onUnparent();
+              }}
+              className="rounded-md border border-zinc-700/80 p-1 text-zinc-400 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <Unlink className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          {onEdit ? (
+            <button
+              type="button"
+              title="Edit"
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdit();
+              }}
+              className="rounded-md border border-zinc-700/80 p-1 text-zinc-400 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button
+              type="button"
+              title="Remove from org"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete();
+              }}
+              className="rounded-md border border-red-500/30 p-1 text-red-400 transition hover:bg-red-500/10 hover:text-red-300"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          {isDragging ? (
+            <GitBranchPlus className="ml-0.5 h-3.5 w-3.5 text-sky-300" />
+          ) : null}
+        </div>
+      ) : null}
 
       <Handle
         type="source"

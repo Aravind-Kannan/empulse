@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Boxes, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 import { ComponentEditModal } from "@/components/org-workspace/ComponentEditModal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   DEFAULT_LIST_PAGE_SIZE,
   ListPagination,
@@ -74,6 +75,8 @@ export function OrgComponentsPanel({
   const [deletingComponentId, setDeletingComponentId] = useState<string | null>(
     null,
   );
+  const [pendingDeleteComponent, setPendingDeleteComponent] =
+    useState<Component | null>(null);
 
   const sortedComponents = useMemo(
     () =>
@@ -100,13 +103,6 @@ export function OrgComponentsPanel({
 
   async function handleDeleteComponent(component: Component) {
     if (!onDeleteComponent) return;
-    if (
-      !window.confirm(
-        `Delete component "${component.name}"? Assignments for this component will be removed.`,
-      )
-    ) {
-      return;
-    }
 
     setDeletingComponentId(component.id);
     try {
@@ -190,7 +186,7 @@ export function OrgComponentsPanel({
                   }
                   onDelete={
                     onDeleteComponent
-                      ? () => void handleDeleteComponent(component)
+                      ? () => setPendingDeleteComponent(component)
                       : undefined
                   }
                   isDeleting={
@@ -207,11 +203,6 @@ export function OrgComponentsPanel({
           />
         </div>
       )}
-
-      <p className="text-xs text-zinc-600">
-        Edit names and tags here. Assign owners when editing an employee in List
-        view. Full integration sync dedupes components and syncs to the knowledge graph.
-      </p>
 
       {editingComponent && onUpdateComponent && (
         <ComponentEditModal
@@ -233,6 +224,25 @@ export function OrgComponentsPanel({
           isDeleting={isDeletingComponent}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteComponent !== null}
+        title="Delete component?"
+        description={
+          pendingDeleteComponent
+            ? `Delete "${pendingDeleteComponent.name}"? Assignments for this component will be removed.`
+            : ""
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          if (pendingDeleteComponent) {
+            void handleDeleteComponent(pendingDeleteComponent);
+          }
+          setPendingDeleteComponent(null);
+        }}
+        onCancel={() => setPendingDeleteComponent(null)}
+      />
     </div>
   );
 }

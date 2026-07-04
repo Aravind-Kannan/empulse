@@ -209,6 +209,17 @@ def apply_schema_patches(engine: Engine) -> None:
                     )
                 )
 
+        if inspector.has_table("tenants"):
+            tenant_columns = _column_names(inspector, "tenants")
+            if "workspace_setup_complete" not in tenant_columns:
+                logger.info("Adding workspace_setup_complete column to tenants")
+                conn.execute(
+                    text(
+                        "ALTER TABLE tenants "
+                        "ADD COLUMN workspace_setup_complete BOOLEAN NOT NULL DEFAULT TRUE"
+                    )
+                )
+
     from app.models.operational import (
         DoaFileSnapshot,
         EraAlert,

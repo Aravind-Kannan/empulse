@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, ChevronRight, GripVertical, Loader2, Pencil, Trash2 } from "lucide-react";
 
 import { AddEmployeeButton } from "@/components/org-workspace/AddEmployeeButton";
+import { TeamTagBar } from "@/components/org-workspace/TeamTagBar";
 import {
   DEFAULT_LIST_PAGE_SIZE,
   ListPagination,
@@ -46,6 +47,8 @@ interface OrgListGridViewProps {
   selectedIds: Set<string>;
   onToggleSelect: (employeeId: string) => void;
   onReparent: (employeeId: string, managerId: string | null) => void;
+  onAssignTeam?: (teamName: string) => void;
+  onClearSelection?: () => void;
   onEditEmployee?: (employee: Employee) => void;
   onDeleteEmployee?: (employeeId: string) => void | Promise<void>;
   deletingEmployeeId?: string | null;
@@ -185,15 +188,7 @@ function DraggableRow({
             {onDeleteEmployee ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      `Remove ${employee.name} from the organization? This cannot be undone.`,
-                    )
-                  ) {
-                    void onDeleteEmployee(employee.id);
-                  }
-                }}
+                onClick={() => onDeleteEmployee(employee.id)}
                 disabled={isDeleting}
                 className="rounded-lg border border-red-500/30 p-1.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
                 title="Delete employee"
@@ -239,6 +234,8 @@ export function OrgListGridView({
   selectedIds,
   onToggleSelect,
   onReparent,
+  onAssignTeam,
+  onClearSelection,
   onEditEmployee,
   onDeleteEmployee,
   deletingEmployeeId = null,
@@ -346,20 +343,30 @@ export function OrgListGridView({
         </div>
       )}
 
+      {selectedIds.size > 0 && onAssignTeam ? (
+        <div className={embedded ? "border-b border-zinc-800/60 px-4 py-3" : "mb-3"}>
+          <TeamTagBar
+            selectedCount={selectedIds.size}
+            onAssign={onAssignTeam}
+            onClearSelection={onClearSelection ?? (() => undefined)}
+          />
+        </div>
+      ) : null}
+
       <div
         className={
           embedded ? "overflow-x-auto" : "overflow-x-auto rounded-xl border border-zinc-800"
         }
       >
         <table className="min-w-full text-left text-sm">
-          <thead className="border-b border-zinc-800/60 bg-zinc-900/40 text-xs uppercase tracking-[0.12em] text-zinc-500">
+          <thead className="border-b border-zinc-800/60 bg-zinc-900/40 text-xs text-zinc-500">
             <tr>
               <th className="px-3 py-3 font-medium text-zinc-400">Select</th>
               <th className="px-3 py-3 font-medium text-zinc-400">Drag</th>
-              <th className="px-3 py-3 font-medium text-zinc-300">Employee</th>
-              <th className="px-3 py-3 font-medium text-zinc-300">Email</th>
-              <th className="px-3 py-3 font-medium text-zinc-300">Team</th>
-              <th className="px-3 py-3 font-medium text-zinc-300">Components</th>
+              <th className="px-3 py-3 font-medium text-zinc-500">Employee</th>
+              <th className="px-3 py-3 font-medium text-zinc-500">Email</th>
+              <th className="px-3 py-3 font-medium text-zinc-500">Team</th>
+              <th className="px-3 py-3 font-medium text-zinc-500">Components</th>
               {showActions ? (
                 <th className="px-3 py-3 font-medium text-zinc-300">Actions</th>
               ) : null}

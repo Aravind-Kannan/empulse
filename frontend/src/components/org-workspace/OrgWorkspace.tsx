@@ -8,12 +8,9 @@ import {
   Boxes,
   FileSpreadsheet,
   Fingerprint,
-  GitBranch,
   LayoutGrid,
   Loader2,
   Network,
-  Pencil,
-  RefreshCw,
   Sparkles,
   Users,
 } from "lucide-react";
@@ -25,7 +22,7 @@ import { OrgBulkCsvDialog } from "@/components/org-workspace/OrgBulkCsvDialog";
 import { OrgComponentsPanel } from "@/components/org-workspace/OrgComponentsPanel";
 import { OrgHierarchyChartView } from "@/components/org-workspace/OrgHierarchyChartView";
 import { OrgListGridView } from "@/components/org-workspace/OrgListGridView";
-import { TeamTagBar } from "@/components/org-workspace/TeamTagBar";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { WorkspacePageHeader } from "@/components/ui/WorkspacePageHeader";
 import { collectOrgRoles } from "@/lib/org-master-data";
 import { generateUniqueEmployeeId } from "@/lib/employee-id";
@@ -70,6 +67,8 @@ export interface OrgWorkspaceProps {
   isSavingComponent?: boolean;
   isDeletingComponent?: boolean;
   onTabChange?: (tab: OrgMainTab, employeeId?: string | null) => void;
+  hasUnsavedChanges?: boolean;
+  onDiscardUnsavedChanges?: () => void;
 }
 
 function StatPill({
@@ -101,32 +100,28 @@ function MainTabButton({
   icon: Icon,
   label,
   count,
-  compact = false,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   count?: number;
-  compact?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`relative flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+      className={`flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium transition ${
         active
-          ? compact
-            ? "bg-zinc-100 text-slate-950"
-            : "bg-gradient-to-br from-zinc-100 to-zinc-200 text-slate-950 shadow-lg shadow-black/20"
+          ? "bg-zinc-100 text-slate-950"
           : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
       }`}
     >
       <Icon className="h-4 w-4 shrink-0" />
-      {label}
+      <span className="truncate">{label}</span>
       {count !== undefined ? (
         <span
-          className={`rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+          className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
             active ? "bg-slate-900/10 text-slate-800" : "bg-zinc-800 text-zinc-400"
           }`}
         >
@@ -145,11 +140,11 @@ function PeopleViewToggle({
   onChange: (view: PeopleView) => void;
 }) {
   return (
-    <div className="inline-flex rounded-xl border border-zinc-800/80 bg-zinc-950/70 p-1 shadow-inner shadow-black/20">
+    <div className="inline-flex h-10 rounded-xl border border-zinc-800/80 bg-zinc-950/70 p-1 shadow-inner shadow-black/20">
       <button
         type="button"
         onClick={() => onChange("chart")}
-        className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+        className={`inline-flex h-8 items-center gap-2 rounded-lg px-3 text-sm font-medium transition ${
           view === "chart"
             ? "bg-gradient-to-br from-emerald-500/20 to-teal-500/10 text-emerald-200 ring-1 ring-emerald-500/30"
             : "text-zinc-500 hover:text-zinc-300"
@@ -161,7 +156,7 @@ function PeopleViewToggle({
       <button
         type="button"
         onClick={() => onChange("list")}
-        className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+        className={`inline-flex h-8 items-center gap-2 rounded-lg px-3 text-sm font-medium transition ${
           view === "list"
             ? "bg-gradient-to-br from-violet-500/20 to-indigo-500/10 text-violet-200 ring-1 ring-violet-500/30"
             : "text-zinc-500 hover:text-zinc-300"
@@ -200,6 +195,8 @@ export function OrgWorkspace({
   isSavingComponent = false,
   isDeletingComponent = false,
   onTabChange,
+  hasUnsavedChanges = false,
+  onDiscardUnsavedChanges,
 }: OrgWorkspaceProps) {
   const router = useRouter();
   const [mainTab, setMainTab] = useState<OrgMainTab>(initialTab);
@@ -216,6 +213,14 @@ export function OrgWorkspace({
   const [identityFocusEmployeeId, setIdentityFocusEmployeeId] = useState<
     string | null
   >(focusIdentityEmployeeId);
+  const [pendingTabSwitch, setPendingTabSwitch] = useState<{
+    tab: OrgMainTab;
+    employeeId?: string | null;
+  } | null>(null);
+  const [hasUnsavedIdentityChanges, setHasUnsavedIdentityChanges] = useState(false);
+  const [pendingDeleteEmployeeId, setPendingDeleteEmployeeId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     setMainTab(initialTab);
@@ -240,13 +245,14 @@ export function OrgWorkspace({
     [orgChart.employees],
   );
 
-  const selectedEmployee = useMemo(() => {
-    if (selectedIds.size !== 1) return null;
-    const [employeeId] = selectedIds;
-    return orgChart.employees.find((employee) => employee.id === employeeId) ?? null;
-  }, [orgChart.employees, selectedIds]);
 
-  function switchTab(tab: OrgMainTab, employeeId?: string | null) {
+  function applyTabSwitch(tab: OrgMainTab, employeeId?: string | null) {
+    if (hasUnsavedChanges && mode === "settings" && mainTab === "people") {
+      onDiscardUnsavedChanges?.();
+    }
+    if (hasUnsavedIdentityChanges && mainTab === "identity") {
+      setHasUnsavedIdentityChanges(false);
+    }
     setMainTab(tab);
     onTabChange?.(tab, employeeId ?? null);
     if (tab === "components" && onRefreshOrgChart) {
@@ -254,14 +260,35 @@ export function OrgWorkspace({
     }
   }
 
+  function attemptSwitchTab(tab: OrgMainTab, employeeId?: string | null) {
+    if (tab === mainTab) return;
+    const orgPeopleDirty =
+      hasUnsavedChanges && mode === "settings" && mainTab === "people";
+    const identityDirty = hasUnsavedIdentityChanges && mainTab === "identity";
+    if (orgPeopleDirty || identityDirty) {
+      setPendingTabSwitch({ tab, employeeId });
+      return;
+    }
+    applyTabSwitch(tab, employeeId);
+  }
+
+  function switchTab(tab: OrgMainTab, employeeId?: string | null) {
+    attemptSwitchTab(tab, employeeId);
+  }
+
   function toggleSelect(employeeId: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(employeeId)) next.delete(employeeId);
-      else next.add(employeeId);
+      if (next.has(employeeId)) {
+        next.delete(employeeId);
+        setFocusEmployeeId((current) =>
+          current === employeeId ? null : current,
+        );
+      } else {
+        next.add(employeeId);
+      }
       return next;
     });
-    setFocusEmployeeId(employeeId);
   }
 
   function handleAssignTeam(teamName: string) {
@@ -326,10 +353,6 @@ export function OrgWorkspace({
     }
   }
 
-  function openIdentityForEmployee(employeeId: string) {
-    setIdentityFocusEmployeeId(employeeId);
-    switchTab("identity", employeeId);
-  }
 
   const title = mode === "onboarding" ? "Org Chart Setup" : "Organization Hub";
   const subtitle =
@@ -339,24 +362,23 @@ export function OrgWorkspace({
   const isSettings = mode === "settings";
   const panelClassName =
     "overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40";
-  const tabBarClassName = isSettings
-    ? "flex flex-1 gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-1"
-    : "flex flex-1 gap-1.5 rounded-2xl border border-zinc-800/80 bg-zinc-950/50 p-1.5 backdrop-blur-sm";
+  const tabBarClassName =
+    "flex h-12 shrink-0 gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-1";
 
   const saveButtonLabel =
-    mode === "onboarding" ? "Confirm & Save" : "Save & Sync";
+    mode === "onboarding" ? "Confirm & save people" : "Save people";
 
   const saveButton = (
     <button
       type="button"
       onClick={() => void onSave()}
-      disabled={isSaving}
+      disabled={isSaving || (isSettings && !hasUnsavedChanges)}
       className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-medium text-white shadow-md shadow-emerald-900/20 transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
     >
       {isSaving ? (
         <>
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          {savingLabel ?? "Saving…"}
+          {savingLabel ?? "Saving people…"}
         </>
       ) : (
         <>
@@ -367,6 +389,17 @@ export function OrgWorkspace({
     </button>
   );
 
+  const peopleSaveFooter = isSettings ? (
+    <div className="flex shrink-0 items-center justify-end gap-3 border-t border-zinc-800/80 bg-zinc-950/50 px-4 py-3">
+      {hasUnsavedChanges ? (
+        <span className="mr-auto text-xs font-medium text-amber-300">
+          Unsaved people changes
+        </span>
+      ) : null}
+      {saveButton}
+    </div>
+  ) : null;
+
   const listView = (
     <OrgListGridView
       embedded
@@ -376,8 +409,10 @@ export function OrgWorkspace({
       selectedIds={selectedIds}
       onToggleSelect={toggleSelect}
       onReparent={onReparent}
+      onAssignTeam={handleAssignTeam}
+      onClearSelection={() => setSelectedIds(new Set())}
       onEditEmployee={onUpdateEmployee ? setEditingEmployee : undefined}
-      onDeleteEmployee={onDeleteEmployee ? handleEmployeeDelete : undefined}
+      onDeleteEmployee={onDeleteEmployee ? setPendingDeleteEmployeeId : undefined}
       deletingEmployeeId={deletingEmployeeId}
       onAddEmployee={onAddEmployee ? () => setAddEmployeeOpen(true) : undefined}
     />
@@ -390,7 +425,14 @@ export function OrgWorkspace({
       selectedIds={selectedIds}
       onToggleSelect={toggleSelect}
       onReparent={onReparent}
+      onAssignTeam={handleAssignTeam}
+      onClearSelection={() => setSelectedIds(new Set())}
       onEditEmployee={onUpdateEmployee ? setEditingEmployee : undefined}
+      onDeleteEmployee={
+        onDeleteEmployee
+          ? (employeeId) => setPendingDeleteEmployeeId(employeeId)
+          : undefined
+      }
       onAddEmployee={onAddEmployee ? () => setAddEmployeeOpen(true) : undefined}
       focusEmployeeId={focusEmployeeId}
       onFocusHandled={() => setFocusEmployeeId(null)}
@@ -401,11 +443,11 @@ export function OrgWorkspace({
     <div
       className={
         isSettings
-          ? "space-y-6"
-          : "relative mx-auto max-w-7xl space-y-6"
+          ? "flex min-h-[calc(100vh-10rem)] flex-col space-y-6"
+          : "relative mx-auto flex min-h-[calc(100vh-10rem)] max-w-7xl flex-col space-y-6"
       }
     >
-      {!isSettings ? (
+      {!isSettings && mode !== "onboarding" ? (
         <div
           className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-emerald-500/[0.07] via-violet-500/[0.04] to-transparent"
           aria-hidden
@@ -423,83 +465,27 @@ export function OrgWorkspace({
           </Link>
         ) : null}
 
-        {isSettings ? (
-          <>
-            <WorkspacePageHeader
-              title={title}
-              subtitle={subtitle}
-              actions={
-                onRefreshOrgChart ? (
-                  <button
-                    type="button"
-                    onClick={() => void onRefreshOrgChart()}
-                    disabled={isRefreshingOrgChart}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-60"
-                  >
-                    {isRefreshingOrgChart ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    )}
-                    Refresh
-                  </button>
-                ) : undefined
-              }
-            />
-            <div className="grid max-w-md grid-cols-3 gap-3">
-              <StatPill
-                label="People"
-                value={orgChart.employees.length}
-                accent="border-zinc-800 bg-zinc-900/40"
-              />
-              <StatPill
-                label="Components"
-                value={orgChart.components.length}
-                accent="border-zinc-800 bg-zinc-900/40"
-              />
-              <StatPill
-                label="Teams"
-                value={teamCount}
-                accent="border-zinc-800 bg-zinc-900/40"
-              />
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/15 to-violet-500/10 shadow-lg shadow-emerald-500/5">
-                <GitBranch className="h-6 w-6 text-emerald-300" />
-              </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
-                  Workspace
-                </p>
-                <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
-                  {title}
-                </h1>
-                <p className="mt-1.5 max-w-2xl text-sm text-zinc-400">{subtitle}</p>
-              </div>
-            </div>
+        <WorkspacePageHeader title={title} subtitle={subtitle} />
 
-            <div className="grid grid-cols-3 gap-2 sm:gap-3">
-              <StatPill
-                label="People"
-                value={orgChart.employees.length}
-                accent="border-emerald-500/20 bg-emerald-500/5"
-              />
-              <StatPill
-                label="Components"
-                value={orgChart.components.length}
-                accent="border-violet-500/20 bg-violet-500/5"
-              />
-              <StatPill
-                label="Teams"
-                value={teamCount}
-                accent="border-sky-500/20 bg-sky-500/5"
-              />
-            </div>
+        {isSettings ? (
+          <div className="grid max-w-md grid-cols-3 gap-3">
+            <StatPill
+              label="People"
+              value={orgChart.employees.length}
+              accent="border-zinc-800 bg-zinc-900/40"
+            />
+            <StatPill
+              label="Components"
+              value={orgChart.components.length}
+              accent="border-zinc-800 bg-zinc-900/40"
+            />
+            <StatPill
+              label="Teams"
+              value={teamCount}
+              accent="border-zinc-800 bg-zinc-900/40"
+            />
           </div>
-        )}
+        ) : null}
       </header>
 
       {masterDataSources && masterDataSources.length > 0 ? (
@@ -513,15 +499,14 @@ export function OrgWorkspace({
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className={tabBarClassName}>
+      <div className="flex flex-1 flex-col space-y-6">
+      <div className={tabBarClassName}>
           <MainTabButton
             active={mainTab === "people"}
             onClick={() => switchTab("people")}
             icon={Users}
             label="People"
             count={orgChart.employees.length}
-            compact={isSettings}
           />
           <MainTabButton
             active={mainTab === "components"}
@@ -529,7 +514,6 @@ export function OrgWorkspace({
             icon={Boxes}
             label="Components"
             count={orgChart.components.length}
-            compact={isSettings}
           />
           {mode === "settings" ? (
             <MainTabButton
@@ -537,90 +521,30 @@ export function OrgWorkspace({
               onClick={() => switchTab("identity")}
               icon={Fingerprint}
               label="Identity Mapping"
-              compact={isSettings}
             />
           ) : null}
         </div>
 
-        {mainTab === "people" ? (
-          <button
-            type="button"
-            onClick={() => setBulkCsvOpen(true)}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-950/50 px-4 py-2.5 text-sm font-medium text-zinc-300 backdrop-blur-sm transition hover:border-zinc-700 hover:bg-zinc-900/80 hover:text-zinc-100"
-          >
-            <FileSpreadsheet className="h-4 w-4" />
-            CSV Import / Export
-          </button>
-        ) : null}
-      </div>
-
       {mainTab === "people" ? (
-        <div className="relative space-y-4">
+        <div className="relative flex flex-col gap-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <PeopleViewToggle view={peopleView} onChange={setPeopleView} />
-            <p className="text-xs text-zinc-600">
-              {peopleView === "chart"
-                ? "Drag nodes to re-parent · double-click to edit"
-                : "Drag rows onto managers · expand teams in the hierarchy"}
-            </p>
+            <button
+              type="button"
+              onClick={() => setBulkCsvOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              CSV Import / Export
+            </button>
           </div>
 
-          <TeamTagBar
-            selectedCount={selectedIds.size}
-            onAssign={handleAssignTeam}
-            onClearSelection={() => setSelectedIds(new Set())}
-          />
-
-          <div className={panelClassName}>
-            {peopleView === "chart" ? chartView : listView}
-          </div>
-
-          {selectedEmployee ? (
-            <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-violet-500/25 bg-gradient-to-r from-violet-500/10 via-zinc-900/40 to-zinc-950/60 px-4 py-3.5 shadow-lg shadow-violet-500/5">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500/30 to-indigo-600/20 text-sm font-semibold text-violet-100 ring-1 ring-violet-500/30">
-                  {selectedEmployee.name
-                    .split(/\s+/)
-                    .slice(0, 2)
-                    .map((part) => part[0]?.toUpperCase() ?? "")
-                    .join("")}
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-zinc-100">
-                    {selectedEmployee.name}
-                  </p>
-                  <p className="truncate text-xs text-zinc-500">
-                    {selectedEmployee.role}
-                    {selectedEmployee.team_name
-                      ? ` · ${selectedEmployee.team_name}`
-                      : ""}
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {onUpdateEmployee ? (
-                  <button
-                    type="button"
-                    onClick={() => setEditingEmployee(selectedEmployee)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    Edit
-                  </button>
-                ) : null}
-                {mode === "settings" ? (
-                  <button
-                    type="button"
-                    onClick={() => openIdentityForEmployee(selectedEmployee.id)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-500/20"
-                  >
-                    <Fingerprint className="h-3.5 w-3.5" />
-                    Identity mappings
-                  </button>
-                ) : null}
-              </div>
+          <div className={`${panelClassName} flex flex-col`}>
+            <div className="min-h-0 flex-1">
+              {peopleView === "chart" ? chartView : listView}
             </div>
-          ) : null}
+            {peopleSaveFooter}
+          </div>
         </div>
       ) : null}
 
@@ -638,18 +562,11 @@ export function OrgWorkspace({
         </div>
       ) : null}
 
-      {mode === "settings" ? (
-        <div
-          className={
-            mainTab === "identity"
-              ? `relative ${panelClassName} p-4 sm:p-5`
-              : undefined
-          }
-        >
+      {mode === "settings" && mainTab === "identity" ? (
+        <div className={`relative ${panelClassName} p-4 sm:p-5`}>
           <IdentityMappingPanel
             focusEmployeeId={identityFocusEmployeeId}
-            preloadProviderMembers
-            visible={mainTab === "identity"}
+            onDirtyChange={setHasUnsavedIdentityChanges}
           />
         </div>
       ) : null}
@@ -693,12 +610,49 @@ export function OrgWorkspace({
         />
       ) : null}
 
-      <div
-        className={`flex items-center gap-3 border-t border-zinc-800/60 pt-4 ${
-          mode === "onboarding" ? "justify-between" : "justify-end"
-        }`}
-      >
-        {mode === "onboarding" ? (
+      <ConfirmDialog
+        open={pendingTabSwitch !== null}
+        title="Discard unsaved changes?"
+        description={
+          pendingTabSwitch && mainTab === "identity"
+            ? "Identity mapping edits are not saved yet. Discard them and switch tabs, or cancel and click Save mappings first."
+            : "People changes are not saved yet. Discard them and switch tabs, or cancel and use Save people first."
+        }
+        confirmLabel="Discard & switch"
+        cancelLabel="Stay on tab"
+        onConfirm={() => {
+          if (!pendingTabSwitch) return;
+          applyTabSwitch(pendingTabSwitch.tab, pendingTabSwitch.employeeId);
+          setPendingTabSwitch(null);
+        }}
+        onCancel={() => setPendingTabSwitch(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteEmployeeId !== null}
+        title="Remove team member?"
+        description={
+          pendingDeleteEmployeeId
+            ? `Remove ${
+                orgChart.employees.find((item) => item.id === pendingDeleteEmployeeId)
+                  ?.name ?? "this person"
+              } from the organization? This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          if (pendingDeleteEmployeeId && onDeleteEmployee) {
+            void handleEmployeeDelete(pendingDeleteEmployeeId);
+          }
+          setPendingDeleteEmployeeId(null);
+        }}
+        onCancel={() => setPendingDeleteEmployeeId(null)}
+      />
+      </div>
+
+      {mode === "onboarding" ? (
+        <div className="mt-auto flex items-center justify-between gap-3 border-t border-zinc-800/60 pt-4">
           <button
             type="button"
             onClick={() => router.push("/onboarding")}
@@ -708,9 +662,9 @@ export function OrgWorkspace({
             <ArrowLeft className="h-3.5 w-3.5" />
             Back to Integrations
           </button>
-        ) : null}
-        {saveButton}
-      </div>
+          {saveButton}
+        </div>
+      ) : null}
     </div>
   );
 }

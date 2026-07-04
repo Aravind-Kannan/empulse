@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, Loader2, RefreshCw, Save } from "lucide-react";
+import { CheckCircle2, Loader2, Save, Sparkles } from "lucide-react";
 
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useIntegrations } from "@/context/IntegrationsContext";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/context/ToastContext";
 import {
   fetchIdentityReconciliation,
   fetchProviderMembersBundle,
@@ -39,26 +41,6 @@ const PROVIDER_BY_INTEGRATION: Record<IntegrationId, IdentityProvider> = {
   jira: "jira",
 };
 
-function guessMapping(
-  employee: Pick<EmployeeIdentityRow, "name" | "email">,
-  members: ProviderMember[],
-): string | null {
-  const email = employee.email.toLowerCase();
-  for (const member of members) {
-    if (member.email && member.email.toLowerCase() === email) {
-      return member.id;
-    }
-  }
-  const nameSlug = employee.name.toLowerCase().replace(/\s/g, "");
-  for (const member of members) {
-    const labelSlug = member.label.toLowerCase().replace(/[-.]/g, "");
-    if (nameSlug && labelSlug.includes(nameSlug)) {
-      return member.id;
-    }
-  }
-  return null;
-}
-
 function memberLabel(
   members: ProviderMember[],
   memberId: string | null | undefined,
@@ -69,21 +51,27 @@ function memberLabel(
   return match.email ? `${match.label} (${match.email})` : match.label;
 }
 
+function rowsFingerprint(rows: EmployeeIdentityRow[]): string {
+  return JSON.stringify(
+    rows.map((row) => ({
+      id: row.employee_id,
+      mappings: row.mappings,
+    })),
+  );
+}
+
 interface IdentityMappingPanelProps {
   focusEmployeeId?: string | null;
-  /** When true, fetch all connected provider directories in the background. */
-  preloadProviderMembers?: boolean;
-  /** When false, panel stays mounted but hidden (for background preload). */
-  visible?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 export function IdentityMappingPanel({
   focusEmployeeId = null,
-  preloadProviderMembers = false,
-  visible = true,
+  onDirtyChange,
 }: IdentityMappingPanelProps) {
   const { config } = useIntegrations();
   const { activeTenant } = useAuth();
+  const { pushToast } = useToast();
   const [data, setData] = useState<IdentityReconciliationResponse | null>(null);
   const [rows, setRows] = useState<EmployeeIdentityRow[]>([]);
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
@@ -98,10 +86,9 @@ export function IdentityMappingPanel({
   >({});
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [importRoster, setImportRoster] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savedMessage, setSavedMessage] = useState<string | null>(null);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [reimportConfirmOpen, setReimportConfirmOpen] = useState(false);
+  const savedRowsSnapshot = useRef("");
   const providerRequestIds = useRef<Partial<Record<IdentityProvider, number>>>(
     {},
   );
@@ -114,30 +101,6 @@ export function IdentityMappingPanel({
       isIntegrationConnected(app.id, config),
     ).map((app) => PROVIDER_BY_INTEGRATION[app.id]);
   }, [config]);
-
-  const applyMemberGuesses = useCallback(
-    (
-      currentRows: EmployeeIdentityRow[],
-      provider: IdentityProvider,
-      members: ProviderMember[],
-    ) => {
-      if (members.length === 0) return currentRows;
-      return currentRows.map((row) => {
-        if (row.mappings[provider]) {
-          return row;
-        }
-        const guessed = guessMapping(row, members);
-        if (!guessed) {
-          return row;
-        }
-        return {
-          ...row,
-          mappings: { ...row.mappings, [provider]: guessed },
-        };
-      });
-    },
-    [],
-  );
 
   const loadProviderMembers = useCallback(
     async (provider: IdentityProvider) => {
@@ -177,7 +140,6 @@ export function IdentityMappingPanel({
               }
             : prev,
         );
-        setRows((prev) => applyMemberGuesses(prev, provider, members));
         setProviderMemberCounts((prev) => ({
           ...prev,
           [provider]: members.length,
@@ -203,7 +165,7 @@ export function IdentityMappingPanel({
         }
       }
     },
-    [applyMemberGuesses],
+    [],
   );
 
   const loadReconciliation = useCallback(async () => {
@@ -213,6 +175,7 @@ export function IdentityMappingPanel({
     if (connectedProviders.length === 0) {
       setData(null);
       setRows([]);
+      savedRowsSnapshot.current = "";
       setIsLoadingEmployees(false);
       return;
     }
@@ -223,6 +186,7 @@ export function IdentityMappingPanel({
       });
       setData(response);
       setRows(response.employees);
+      savedRowsSnapshot.current = rowsFingerprint(response.employees);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load mappings");
     } finally {
@@ -235,13 +199,18 @@ export function IdentityMappingPanel({
   }, [loadReconciliation]);
 
   useEffect(() => {
-    if (!preloadProviderMembers || connectedProviders.length === 0) {
-      return;
-    }
+    if (connectedProviders.length === 0) return;
     void Promise.all(
       connectedProviders.map((provider) => loadProviderMembers(provider)),
     );
-  }, [preloadProviderMembers, connectedProviders, loadProviderMembers]);
+  }, [connectedProviders, loadProviderMembers]);
+
+  const hasUnsavedChanges =
+    rows.length > 0 && savedRowsSnapshot.current !== rowsFingerprint(rows);
+
+  useEffect(() => {
+    onDirtyChange?.(hasUnsavedChanges);
+  }, [hasUnsavedChanges, onDirtyChange]);
 
   useEffect(() => {
     if (!focusEmployeeId) return;
@@ -271,21 +240,18 @@ export function IdentityMappingPanel({
           : row,
       ),
     );
-    setSavedMessage(null);
   }
 
-  async function handleSync() {
+  async function runReimportRoster() {
     if (connectedProviders.length === 0) return;
 
     setIsSyncing(true);
     setError(null);
-    setSyncMessage(null);
-    setSavedMessage(null);
 
     try {
       const result = await syncIdentityMappings({
         providers: connectedProviders,
-        import_roster: importRoster,
+        import_roster: true,
         company: activeTenant?.companyName ?? null,
       });
       const rosterNote =
@@ -298,13 +264,57 @@ export function IdentityMappingPanel({
             `${row.provider}: ${row.members_fetched} members, ${row.mappings_created} mapped`,
         )
         .join("; ");
-      setSyncMessage(
-        `Synced identities — ${result.total_mappings_created} new mapping(s). ${providerNote}.${rosterNote}`,
+      pushToast(
+        `Roster re-imported — ${result.total_mappings_created} new mapping(s). ${providerNote}.${rosterNote}`,
+        "success",
       );
       setLoadedProviders(new Set());
       loadedProvidersRef.current = new Set();
       setProviderMemberCounts({});
       await loadReconciliation();
+      void Promise.all(
+        connectedProviders.map((provider) => loadProviderMembers(provider)),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Roster re-import failed");
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  async function handleSync() {
+    if (connectedProviders.length === 0) return;
+
+    setIsSyncing(true);
+    setError(null);
+
+    try {
+      const result = await syncIdentityMappings({
+        providers: connectedProviders,
+        import_roster: false,
+        company: activeTenant?.companyName ?? null,
+      });
+      const rosterNote =
+        result.roster && result.roster.employees_added + result.roster.employees_updated > 0
+          ? ` Roster: +${result.roster.employees_added} added, ${result.roster.employees_updated} updated.`
+          : "";
+      const providerNote = result.providers
+        .map(
+          (row) =>
+            `${row.provider}: ${row.members_fetched} members, ${row.mappings_created} mapped`,
+        )
+        .join("; ");
+      pushToast(
+        `Auto-mapped ${result.total_mappings_created} identity link(s). ${providerNote}.${rosterNote}`,
+        "success",
+      );
+      setLoadedProviders(new Set());
+      loadedProvidersRef.current = new Set();
+      setProviderMemberCounts({});
+      await loadReconciliation();
+      void Promise.all(
+        connectedProviders.map((provider) => loadProviderMembers(provider)),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Identity sync failed");
     } finally {
@@ -317,7 +327,6 @@ export function IdentityMappingPanel({
 
     setIsSaving(true);
     setError(null);
-    setSavedMessage(null);
 
     const mappings: EmployeeIdentityMapping[] = [];
     for (const row of rows) {
@@ -338,7 +347,9 @@ export function IdentityMappingPanel({
 
     try {
       await saveIdentityMappings(mappings);
-      setSavedMessage("Identity mappings saved.");
+      savedRowsSnapshot.current = rowsFingerprint(rows);
+      onDirtyChange?.(false);
+      pushToast("Identity mappings saved.", "success");
       await loadReconciliation();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -351,53 +362,51 @@ export function IdentityMappingPanel({
     !isLoadingEmployees && data && connectedProviders.length > 0;
 
   return (
-    <div className={visible ? "space-y-5" : "hidden"} aria-hidden={!visible}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-zinc-500">
-          Saved mappings load from your workspace with stored display names. Provider
-          directories preload in the background while you browse People.
-        </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-sm text-zinc-400">
-            <input
-              type="checkbox"
-              checked={importRoster}
-              onChange={(e) => setImportRoster(e.target.checked)}
-              className="rounded border-zinc-600 bg-zinc-950"
-            />
-            Also import employee roster
-          </label>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
             onClick={() => void handleSync()}
             disabled={
               isSyncing || isLoadingEmployees || connectedProviders.length === 0
             }
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-100 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSyncing ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <RefreshCw className="h-4 w-4" />
+              <Sparkles className="h-3.5 w-3.5" />
             )}
-            Sync &amp; auto-map
+            Auto-map identities
+          </button>
+          <button
+            type="button"
+            onClick={() => setReimportConfirmOpen(true)}
+            disabled={
+              isSyncing || isLoadingEmployees || connectedProviders.length === 0
+            }
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Re-import roster
           </button>
           <button
             type="button"
             onClick={() => void handleSave()}
             disabled={
-              isSaving || isLoadingEmployees || connectedProviders.length === 0
+              isSaving ||
+              isLoadingEmployees ||
+              connectedProviders.length === 0 ||
+              !hasUnsavedChanges
             }
-            className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSaving ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Save className="h-4 w-4" />
+              <Save className="h-3.5 w-3.5" />
             )}
             Save mappings
           </button>
-        </div>
       </div>
 
       {connectedProviders.length === 0 && (
@@ -426,18 +435,6 @@ export function IdentityMappingPanel({
             </div>
           ))
         : null}
-
-      {syncMessage ? (
-        <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
-          {syncMessage}
-        </div>
-      ) : null}
-
-      {savedMessage ? (
-        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
-          {savedMessage}
-        </div>
-      ) : null}
 
       {isLoadingEmployees ? (
         <div className="flex items-center justify-center py-16 text-zinc-500">
@@ -541,6 +538,19 @@ export function IdentityMappingPanel({
           </table>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={reimportConfirmOpen}
+        title="Re-import employee roster?"
+        description="This pulls people from connected integrations and may add or update roster entries. Existing identity mappings are kept unless people are removed."
+        confirmLabel="Re-import roster"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          setReimportConfirmOpen(false);
+          void runReimportRoster();
+        }}
+        onCancel={() => setReimportConfirmOpen(false)}
+      />
     </div>
   );
 }

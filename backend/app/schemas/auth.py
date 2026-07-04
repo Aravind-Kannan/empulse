@@ -8,7 +8,11 @@ class SignUpRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
-    company: str = Field(min_length=1, max_length=255)
+    company: str | None = Field(default=None, max_length=255)
+
+
+class UpdateWorkspaceRequest(BaseModel):
+    company_name: str = Field(min_length=1, max_length=255)
 
 
 class LoginRequest(BaseModel):
@@ -27,6 +31,7 @@ class UserResponse(BaseModel):
     tenant_slug: str
     onboarded: bool
     oauth_provider: str | None
+    workspace_setup_complete: bool = True
     created_at: datetime
 
 

@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 
 import { useAuth } from "@/context/AuthContext";
+import { useAuthErrorFromUrl } from "@/hooks/useAuthErrorFromUrl";
 import { oauthLoginUrl } from "@/lib/auth";
 
 const INPUT_CLASS =
@@ -16,29 +17,53 @@ interface AuthFormProps {
 
 export function AuthForm({ mode }: AuthFormProps) {
   const { login, signUp } = useAuth();
+  const oauthError = useAuthErrorFromUrl();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [company, setCompany] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [oauthDismissed, setOauthDismissed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const isSignup = mode === "signup";
   const oauthNextPath = isSignup ? "/onboarding" : "/dashboard";
 
+  const displayError =
+    formError ?? (!oauthDismissed && oauthError ? oauthError : null);
+
+  useEffect(() => {
+    if (oauthError) {
+      setOauthDismissed(false);
+    }
+  }, [oauthError]);
+
+  function dismissOAuthError() {
+    if (oauthError && !oauthDismissed) {
+      setOauthDismissed(true);
+    }
+  }
+
+  function handleGoogleSignIn() {
+    setFormError(null);
+    setOauthDismissed(true);
+    window.location.href = oauthLoginUrl("google", oauthNextPath);
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
+    dismissOAuthError();
+    setFormError(null);
 
     if (!email.trim()) {
-      setError("Email is required.");
+      setFormError("Email is required.");
       return;
     }
     if (!password.trim()) {
-      setError("Password is required.");
+      setFormError("Password is required.");
       return;
     }
     if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setFormError("Password must be at least 8 characters.");
       return;
     }
 
@@ -46,11 +71,11 @@ export function AuthForm({ mode }: AuthFormProps) {
     try {
       if (isSignup) {
         if (!name.trim()) {
-          setError("Name is required.");
+          setFormError("Name is required.");
           return;
         }
         if (!company.trim()) {
-          setError("Company name is required.");
+          setFormError("Company name is required.");
           return;
         }
         await signUp({
@@ -64,11 +89,13 @@ export function AuthForm({ mode }: AuthFormProps) {
       await login({ email: email.trim(), password });
     } catch (err) {
       if (err instanceof TypeError && err.message === "Failed to fetch") {
-        setError(
+        setFormError(
           "Cannot reach the API server. Ensure the backend is running on port 8000.",
         );
       } else {
-        setError(err instanceof Error ? err.message : "Authentication failed.");
+        setFormError(
+          err instanceof Error ? err.message : "Authentication failed.",
+        );
       }
     } finally {
       setSubmitting(false);
@@ -91,14 +118,21 @@ export function AuthForm({ mode }: AuthFormProps) {
         </p>
       </div>
 
+      {displayError ? (
+        <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          {displayError}
+        </p>
+      ) : null}
+
       <div className="mb-6 space-y-2.5">
-        <a
-          href={oauthLoginUrl("google", oauthNextPath)}
+        <button
+          type="button"
+          onClick={handleGoogleSignIn}
           className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700/80 bg-black/30 px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-black/50"
         >
           <GoogleIcon />
           Continue with Google
-        </a>
+        </button>
         <div className="relative py-2">
           <div className="absolute inset-0 flex items-center">
             <div className="w-full border-t border-zinc-800" />
@@ -117,7 +151,11 @@ export function AuthForm({ mode }: AuthFormProps) {
             </label>
             <input
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(event) => {
+                dismissOAuthError();
+                setName(event.target.value);
+                setFormError(null);
+              }}
               placeholder="Alice Chen"
               autoComplete="name"
               className={INPUT_CLASS}
@@ -132,7 +170,11 @@ export function AuthForm({ mode }: AuthFormProps) {
           <input
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(event) => {
+              dismissOAuthError();
+              setEmail(event.target.value);
+              setFormError(null);
+            }}
             placeholder="alice@acme.com"
             autoComplete="email"
             className={INPUT_CLASS}
@@ -146,33 +188,35 @@ export function AuthForm({ mode }: AuthFormProps) {
           <input
             type="password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(event) => {
+              dismissOAuthError();
+              setPassword(event.target.value);
+              setFormError(null);
+            }}
             placeholder={isSignup ? "At least 8 characters" : "Your password"}
             autoComplete={isSignup ? "new-password" : "current-password"}
             className={INPUT_CLASS}
           />
         </div>
 
-        {isSignup && (
+        {isSignup ? (
           <div>
             <label className="mb-1.5 block text-xs font-medium text-zinc-400">
               Company
             </label>
             <input
               value={company}
-              onChange={(e) => setCompany(e.target.value)}
+              onChange={(event) => {
+                dismissOAuthError();
+                setCompany(event.target.value);
+                setFormError(null);
+              }}
               placeholder="Acme Corp"
               autoComplete="organization"
               className={INPUT_CLASS}
             />
           </div>
-        )}
-
-        {error && (
-          <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-            {error}
-          </p>
-        )}
+        ) : null}
 
         <button
           type="submit"

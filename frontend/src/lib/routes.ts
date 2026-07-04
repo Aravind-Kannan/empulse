@@ -22,6 +22,10 @@ export function isOnboardingPath(pathname: string) {
   return pathname.startsWith("/onboarding");
 }
 
+export function isWorkspaceSetupPath(pathname: string) {
+  return pathname === "/onboarding/workspace";
+}
+
 export function isProtectedPath(pathname: string) {
   return PROTECTED_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),

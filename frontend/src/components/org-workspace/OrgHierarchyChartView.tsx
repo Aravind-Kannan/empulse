@@ -26,6 +26,7 @@ import {
   type EmployeeFlowNodeData,
 } from "@/components/org-workspace/EmployeeFlowNode";
 import { AddEmployeeButton } from "@/components/org-workspace/AddEmployeeButton";
+import { TeamTagBar } from "@/components/org-workspace/TeamTagBar";
 import {
   buildEmployeeTree,
   collectLayoutEdges,
@@ -43,7 +44,10 @@ interface OrgHierarchyChartViewProps {
   selectedIds: Set<string>;
   onToggleSelect: (employeeId: string) => void;
   onReparent: (employeeId: string, managerId: string | null) => void;
+  onAssignTeam?: (teamName: string) => void;
+  onClearSelection?: () => void;
   onEditEmployee?: (employee: Employee) => void;
+  onDeleteEmployee?: (employeeId: string) => void;
   onAddEmployee?: () => void;
   focusEmployeeId?: string | null;
   onFocusHandled?: () => void;
@@ -55,8 +59,11 @@ function buildGraphElements(
   selectedIds: Set<string>,
   dropTargetId: string | null,
   highlightedId: string | null,
+  draggedNodeId: string | null,
   onToggleSelect: (id: string) => void,
+  onReparent: (employeeId: string, managerId: string | null) => void,
   onEditEmployee?: (employee: Employee) => void,
+  onDeleteEmployee?: (employeeId: string) => void,
 ): { nodes: Node<EmployeeFlowNodeData>[]; edges: Edge[] } {
   const tree = buildEmployeeTree(employees);
   const { layouts } = layoutEmployeeTree(tree);
@@ -73,9 +80,16 @@ function buildGraphElements(
       isSelected: selectedIds.has(node.employee.id),
       isDropTarget: dropTargetId === node.employee.id,
       isHighlighted: highlightedId === node.employee.id,
+      isDragging: draggedNodeId === node.employee.id,
       onToggleSelect: () => onToggleSelect(node.employee.id),
       onEdit: onEditEmployee
         ? () => onEditEmployee(node.employee)
+        : undefined,
+      onUnparent: node.employee.manager_id
+        ? () => onReparent(node.employee.id, null)
+        : undefined,
+      onDelete: onDeleteEmployee
+        ? () => onDeleteEmployee(node.employee.id)
         : undefined,
     },
   }));
@@ -109,7 +123,10 @@ function OrgHierarchyCanvas({
   selectedIds,
   onToggleSelect,
   onReparent,
+  onAssignTeam,
+  onClearSelection,
   onEditEmployee,
+  onDeleteEmployee,
   onAddEmployee,
   focusEmployeeId,
   onFocusHandled,
@@ -123,9 +140,15 @@ function OrgHierarchyCanvas({
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const dragSnapshot = useRef<Map<string, XYPosition>>(new Map());
   const isDraggingRef = useRef(false);
+  const draggingNodeIdRef = useRef<string | null>(null);
+  const dropTargetIdRef = useRef<string | null>(null);
+  const prevSelectedIdsRef = useRef(selectedIds);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  dropTargetIdRef.current = dropTargetId;
 
   const employeeLayoutKey = useMemo(
     () =>
@@ -148,19 +171,32 @@ function OrgHierarchyCanvas({
         selectedIds,
         targetDropId,
         targetHighlight,
+        draggedNodeId,
         onToggleSelect,
+        onReparent,
         onEditEmployee,
+        onDeleteEmployee,
       );
       setNodes(graph.nodes);
       setEdges(graph.edges);
     },
-    [employees, selectedIds, dropTargetId, highlightedId, onToggleSelect, onEditEmployee],
+    [employees, selectedIds, dropTargetId, highlightedId, draggedNodeId, onToggleSelect, onReparent, onEditEmployee, onDeleteEmployee],
   );
 
   useEffect(() => {
     if (isDraggingRef.current) return;
     syncGraph();
   }, [employees, selectedIds, syncGraph]);
+
+  useEffect(() => {
+    const prev = prevSelectedIdsRef.current;
+    prev.forEach((id) => {
+      if (!selectedIds.has(id) && highlightedId === id) {
+        setHighlightedId(null);
+      }
+    });
+    prevSelectedIdsRef.current = selectedIds;
+  }, [selectedIds, highlightedId]);
 
   useEffect(() => {
     if (isDraggingRef.current) return;
@@ -170,6 +206,36 @@ function OrgHierarchyCanvas({
   }, [employeeLayoutKey, fitView]);
 
   const onNodesChange = useCallback((changes: NodeChange<Node<EmployeeFlowNodeData>>[]) => {
+    const activeDragId = draggingNodeIdRef.current;
+
+    if (activeDragId) {
+      const applicable = changes.filter((change) => {
+        if (change.type === "select") return false;
+        if (change.type === "position") {
+          return change.id === activeDragId;
+        }
+        return true;
+      });
+      if (applicable.length === 0) return;
+
+      setNodes((current) => {
+        const updated = applyNodeChanges(applicable, current);
+        return updated.map((item) => ({
+          ...item,
+          position:
+            item.id === activeDragId
+              ? item.position
+              : (dragSnapshot.current.get(item.id) ?? item.position),
+          data: {
+            ...item.data,
+            isDropTarget: item.id === dropTargetIdRef.current,
+            isDragging: item.id === activeDragId,
+          },
+        }));
+      });
+      return;
+    }
+
     const filtered = changes.filter(
       (change) => change.type !== "position" && change.type !== "select",
     );
@@ -192,15 +258,19 @@ function OrgHierarchyCanvas({
     [employees],
   );
 
-  const pinNodesToLayout = useCallback(
-    (nextDropTargetId: string | null) => {
+  const updateDragVisuals = useCallback(
+    (nextDropTargetId: string | null, activeDragId: string | null) => {
       setNodes((current) =>
         current.map((item) => ({
           ...item,
-          position: dragSnapshot.current.get(item.id) ?? item.position,
+          position:
+            activeDragId && item.id !== activeDragId
+              ? (dragSnapshot.current.get(item.id) ?? item.position)
+              : item.position,
           data: {
             ...item.data,
             isDropTarget: item.id === nextDropTargetId,
+            isDragging: item.id === activeDragId,
           },
         })),
       );
@@ -222,14 +292,22 @@ function OrgHierarchyCanvas({
       return;
     }
 
-    setHighlightedId(focusEmployeeId);
+    const shouldHighlight = !selectedIds.has(focusEmployeeId);
+    if (shouldHighlight) {
+      setHighlightedId(focusEmployeeId);
+    }
     requestAnimationFrame(() => {
       setCenter(layoutNode.x + NODE_WIDTH / 2, layoutNode.y + 48, {
         zoom: 1.15,
         duration: 500,
       });
-      syncGraph(dropTargetId, focusEmployeeId);
+      syncGraph(dropTargetId, shouldHighlight ? focusEmployeeId : null);
     });
+
+    if (!shouldHighlight) {
+      onFocusHandled?.();
+      return;
+    }
 
     const timer = setTimeout(() => {
       setHighlightedId(null);
@@ -243,6 +321,7 @@ function OrgHierarchyCanvas({
     focusEmployeeId,
     dropTargetId,
     onFocusHandled,
+    selectedIds,
     setCenter,
     syncGraph,
   ]);
@@ -257,12 +336,15 @@ function OrgHierarchyCanvas({
   const onNodeDragStart: OnNodeDrag<Node<EmployeeFlowNodeData>> = useCallback(
     (_, node) => {
       isDraggingRef.current = true;
+      draggingNodeIdRef.current = node.id;
+      setDraggedNodeId(node.id);
       dragSnapshot.current = new Map(
         getNodes().map((item) => [item.id, { ...item.position }]),
       );
       setDropTargetId(null);
+      updateDragVisuals(null, node.id);
     },
-    [getNodes],
+    [getNodes, updateDragVisuals],
   );
 
   const onNodeDrag: OnNodeDrag<Node<EmployeeFlowNodeData>> = useCallback(
@@ -274,14 +356,16 @@ function OrgHierarchyCanvas({
       const layoutNodes = getNodes() as Node<EmployeeFlowNodeData>[];
       const nextTarget = resolveDropTarget(node.id, point, layoutNodes);
       setDropTargetId(nextTarget);
-      pinNodesToLayout(nextTarget);
+      updateDragVisuals(nextTarget, node.id);
     },
-    [getNodes, pinNodesToLayout, resolveDropTarget, screenToFlowPosition],
+    [getNodes, resolveDropTarget, screenToFlowPosition, updateDragVisuals],
   );
 
   const onNodeDragStop: OnNodeDrag<Node<EmployeeFlowNodeData>> = useCallback(
     (event, node) => {
       isDraggingRef.current = false;
+      draggingNodeIdRef.current = null;
+      setDraggedNodeId(null);
       const point = screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
@@ -306,7 +390,7 @@ function OrgHierarchyCanvas({
 
       if (wouldCreateCycle(employees, node.id, targetId)) {
         showToast("Cyclical reporting lines are not allowed");
-        pinNodesToLayout(null);
+        syncGraph(null, highlightedId);
         return;
       }
 
@@ -317,7 +401,6 @@ function OrgHierarchyCanvas({
       getNodes,
       highlightedId,
       onReparent,
-      pinNodesToLayout,
       resolveDropTarget,
       screenToFlowPosition,
       showToast,
@@ -360,11 +443,6 @@ function OrgHierarchyCanvas({
       }, 2200);
     }
   }
-
-  const unparentCandidate = useMemo(() => {
-    if (selectedIds.size !== 1) return null;
-    return [...selectedIds][0] ?? null;
-  }, [selectedIds]);
 
   return (
     <div
@@ -420,20 +498,22 @@ function OrgHierarchyCanvas({
           </button>
         </div>
 
-        {unparentCandidate && (
-          <button
-            type="button"
-            onClick={() => onReparent(unparentCandidate, null)}
-            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800"
-          >
-            Unparent selected
-          </button>
-        )}
-
         {onAddEmployee && <AddEmployeeButton onClick={onAddEmployee} />}
       </div>
 
-      <div className="h-[min(68vh,720px)] min-h-[480px]">
+      <div className="relative h-[min(68vh,720px)] min-h-[480px]">
+        {selectedIds.size > 0 && onAssignTeam ? (
+          <div className="pointer-events-none absolute inset-x-3 top-3 z-10">
+            <div className="pointer-events-auto">
+              <TeamTagBar
+                selectedCount={selectedIds.size}
+                onAssign={onAssignTeam}
+                onClearSelection={onClearSelection ?? (() => undefined)}
+                compact
+              />
+            </div>
+          </div>
+        ) : null}
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -453,11 +533,6 @@ function OrgHierarchyCanvas({
           <Background gap={24} size={1} color="#1f1f23" />
         </ReactFlow>
       </div>
-
-      <p className="border-t border-zinc-800/60 px-4 py-2.5 text-xs text-zinc-500">
-        Drag a node onto another to re-parent. Double-click a node to edit role and
-        reporting details.
-      </p>
 
       {toast && (
         <div className="absolute bottom-14 left-1/2 z-50 -translate-x-1/2 animate-pulse rounded-lg border border-amber-500/40 bg-amber-500/15 px-4 py-2 text-sm text-amber-100 shadow-xl">

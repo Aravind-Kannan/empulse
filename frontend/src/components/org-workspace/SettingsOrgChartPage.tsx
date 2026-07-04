@@ -34,6 +34,26 @@ export function SettingsOrgChartPage() {
   const [isSavingComponent, setIsSavingComponent] = useState(false);
   const [isDeletingComponent, setIsDeletingComponent] = useState(false);
   const dirtyReportingEmployeeIds = useRef(new Set<string>());
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  const markDirty = useCallback((employeeIds: string | string[]) => {
+    const ids = Array.isArray(employeeIds) ? employeeIds : [employeeIds];
+    for (const id of ids) {
+      dirtyReportingEmployeeIds.current.add(id);
+    }
+    setHasUnsavedChanges(true);
+  }, []);
+
+  const discardUnsavedChanges = useCallback(async () => {
+    try {
+      const fresh = await fetchOrgChart();
+      setOrgChart(fresh);
+      dirtyReportingEmployeeIds.current.clear();
+      setHasUnsavedChanges(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reload org chart");
+    }
+  }, []);
 
   const handleTabChange = useCallback(
     (tab: OrgMainTab, employeeId?: string | null) => {
@@ -60,6 +80,7 @@ export function SettingsOrgChartPage() {
       const fresh = await fetchOrgChart();
       setOrgChart(fresh);
       dirtyReportingEmployeeIds.current.clear();
+      setHasUnsavedChanges(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh org chart");
     } finally {
@@ -83,6 +104,7 @@ export function SettingsOrgChartPage() {
           return prev;
         }
         dirtyReportingEmployeeIds.current.add(employeeId);
+        setHasUnsavedChanges(true);
         return {
           ...prev,
           employees: prev.employees.map((employee) =>
@@ -110,8 +132,9 @@ export function SettingsOrgChartPage() {
           ),
         };
       });
+      markDirty(employeeIds);
     },
-    [],
+    [markDirty],
   );
 
   const handleUpdateEmployee = useCallback(
@@ -231,7 +254,7 @@ export function SettingsOrgChartPage() {
   async function handleSave() {
     if (!orgChart) return;
     setIsSaving(true);
-    setSavingLabel("Saving org chart…");
+    setSavingLabel("Saving people…");
     setError(null);
     try {
       const fresh = await fetchOrgChart();
@@ -243,13 +266,14 @@ export function SettingsOrgChartPage() {
       await ingestOrgChart(payload, {
         onStatus: (status) => {
           if (status.status === "queued" || status.status === "running") {
-            setSavingLabel("Syncing changes…");
+            setSavingLabel("Updating org graph…");
           }
         },
       });
       const saved = await fetchOrgChart();
       setOrgChart(saved);
       dirtyReportingEmployeeIds.current.clear();
+      setHasUnsavedChanges(false);
       await refreshOperationalState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -315,6 +339,8 @@ export function SettingsOrgChartPage() {
       onDeleteComponent={handleDeleteComponent}
       isSavingComponent={isSavingComponent}
       isDeletingComponent={isDeletingComponent}
+      hasUnsavedChanges={hasUnsavedChanges}
+      onDiscardUnsavedChanges={() => void discardUnsavedChanges()}
     />
   );
 }

@@ -253,7 +253,7 @@ export function KraDashboard() {
             href="/settings/org-chart"
             className="mt-4 inline-block text-sm font-medium text-sky-400 hover:text-sky-300"
           >
-            Open Org Hub →
+            Open Organization Hub →
           </Link>
         </div>
       ) : (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from urllib.parse import quote
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
@@ -20,12 +21,15 @@ from app.schemas.auth import (
     SessionResponse,
     SignUpRequest,
     TenantMembership,
+    UpdateWorkspaceRequest,
     UserResponse,
 )
 from app.services.auth_service import (
     authenticate_password_user,
     create_tenant_and_user,
     find_or_create_oauth_user,
+    resolve_signup_company_name,
+    update_tenant_workspace_name,
     user_to_response,
 )
 from app.services.jwt_service import AUTH_COOKIE, create_access_token, decode_access_token
@@ -138,11 +142,30 @@ def _auth_response(
     )
 
 
-def _redirect_after_auth(user: User, is_new_user: bool) -> str:
+def _redirect_after_auth(user: User, tenant: Tenant, is_new_user: bool) -> str:
     settings = get_settings()
     if is_new_user or not user.onboarded:
+        if not tenant.workspace_setup_complete:
+            return f"{settings.frontend_url}/onboarding/workspace"
         return f"{settings.frontend_url}/onboarding"
     return f"{settings.frontend_url}/dashboard"
+
+
+def _resolve_oauth_redirect(
+    request: Request,
+    user: User,
+    tenant: Tenant,
+    is_new_user: bool,
+) -> str:
+    oauth_next = request.session.pop("oauth_next", None)
+    if oauth_next and is_new_user and not tenant.workspace_setup_complete:
+        settings = get_settings()
+        return f"{settings.frontend_url}/onboarding/workspace"
+    if oauth_next:
+        if oauth_next.startswith("/"):
+            return f"{get_settings().frontend_url}{oauth_next}"
+        return oauth_next
+    return _redirect_after_auth(user, tenant, is_new_user)
 
 
 def _get_token_from_request(request: Request) -> str | None:
@@ -215,11 +238,17 @@ def sign_up(
     db: Session = Depends(get_db),
 ) -> AuthResponse:
     try:
+        company_name, workspace_setup_complete = resolve_signup_company_name(
+            email=payload.email,
+            name=payload.name,
+            company_name=payload.company,
+        )
         user, tenant, _ = create_tenant_and_user(
             db,
             email=payload.email,
             name=payload.name,
-            company_name=payload.company,
+            company_name=company_name,
+            workspace_setup_complete=workspace_setup_complete,
             password=payload.password,
         )
     except ValueError as exc:
@@ -324,6 +353,34 @@ def switch_tenant(
     return SessionResponse(user=user_to_response(user, tenant), access_token=token)
 
 
+@router.patch("/workspace", response_model=SessionResponse)
+def update_workspace(
+    payload: UpdateWorkspaceRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> SessionResponse:
+    session = _get_user_from_request(request, db)
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    user, tenant = session
+
+    try:
+        tenant = update_tenant_workspace_name(db, tenant, payload.company_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    db.refresh(user)
+    token = create_access_token(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        email=user.email,
+        name=user.name,
+    )
+    _set_auth_cookies(response, token, tenant.id)
+    return SessionResponse(user=user_to_response(user, tenant), access_token=token)
+
+
 @router.post("/onboarding/complete", response_model=SessionResponse)
 def complete_onboarding(
     request: Request,
@@ -360,6 +417,7 @@ async def oauth_login(
     provider: str,
     request: Request,
     next_path: str = Query(default="/dashboard", alias="next"),
+    company: str | None = Query(default=None),
 ):
     if provider not in ("google", "github"):
         raise HTTPException(status_code=404, detail="Unknown OAuth provider.")
@@ -371,6 +429,8 @@ async def oauth_login(
 
     redirect_uri = str(request.url_for("oauth_callback", provider=provider))
     request.session["oauth_next"] = next_path
+    if company and company.strip():
+        request.session["oauth_company"] = company.strip()
     client = _get_oauth_client(provider)
     return await client.authorize_redirect(request, redirect_uri)
 
@@ -434,11 +494,15 @@ async def oauth_callback(
             name=name,
             provider=provider,
             subject=subject,
+            company_name=request.session.pop("oauth_company", None),
         )
     except ValueError as exc:
         settings = get_settings()
+        oauth_next = request.session.pop("oauth_next", None)
+        request.session.pop("oauth_company", None)
+        auth_path = "/signup" if oauth_next == "/onboarding" else "/login"
         return RedirectResponse(
-            url=f"{settings.frontend_url}/?auth_error={str(exc)}",
+            url=f"{settings.frontend_url}{auth_path}?auth_error={quote(str(exc))}",
             status_code=302,
         )
 
@@ -451,9 +515,7 @@ async def oauth_callback(
         email=user.email,
         name=user.name,
     )
-    redirect_url = request.session.pop("oauth_next", None) or _redirect_after_auth(
-        user, is_new_user
-    )
+    redirect_url = _resolve_oauth_redirect(request, user, tenant, is_new_user)
     if redirect_url.startswith("/"):
         redirect_url = f"{get_settings().frontend_url}{redirect_url}"
 
