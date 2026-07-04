@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { GitBranch } from "lucide-react";
 
 import { OrgWorkspace } from "@/components/org-workspace/OrgWorkspace";
+import { PanelDataLoader } from "@/components/ui/PanelDataLoader";
 import { consolidateOrgComponents, deleteOrgEmployee, deleteOrgComponent, fetchOrgChart, ingestOrgChart, updateOrgComponent, updateOrgEmployee } from "@/lib/api";
 import { mergeOrgChartForSave, removeEmployeeFromOrgChart, wouldCreateCycle } from "@/lib/org-tree-utils";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
@@ -228,9 +229,17 @@ export function SettingsOrgChartPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center text-zinc-500">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-        Loading organization chart…
+      <div className="mx-auto max-w-6xl p-6 sm:p-8">
+        <PanelDataLoader
+          icon={GitBranch}
+          label="Loading organization chart…"
+          sublabel="Fetching employees, reporting lines, and component assignments."
+          steps={[
+            "Loading employee roster",
+            "Building hierarchy",
+            "Resolving component ownership",
+          ]}
+        />
       </div>
     );
   }
@@ -260,8 +269,6 @@ export function SettingsOrgChartPage() {
       onDeleteEmployee={handleDeleteEmployee}
       onAddEmployee={handleAddEmployee}
       onSave={handleSave}
-      backHref="/settings"
-      backLabel="Back to Settings"
       onRefreshOrgChart={reloadOrgChart}
       isRefreshingOrgChart={isRefreshing}
       onUpdateComponent={handleUpdateComponent}

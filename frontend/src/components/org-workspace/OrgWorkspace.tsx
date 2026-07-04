@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Boxes, FileSpreadsheet, LayoutGrid, Loader2, Network, Sparkles } from "lucide-react";
+import { ArrowLeft, Boxes, FileSpreadsheet, LayoutGrid, Loader2, Network, Sparkles, Users } from "lucide-react";
 
 import { EmployeeEditModal } from "@/components/onboarding/EmployeeEditModal";
 import { AddEmployeeModal, type NewEmployeeDraft } from "@/components/org-workspace/AddEmployeeModal";
@@ -333,6 +333,18 @@ export function OrgWorkspace({
       )}
 
       <div className="flex flex-col gap-3 sm:flex-row">
+        {mode === "settings" ? (
+          <Link
+            href="/settings/identity-mapping"
+            className="flex flex-1 items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3 text-sm text-zinc-400 transition hover:border-zinc-700 hover:text-zinc-200"
+          >
+            <Users className="h-4 w-4 shrink-0 text-zinc-500" />
+            <span>
+              Link GitHub, Slack, Jira, and Notion identities in{" "}
+              <span className="text-zinc-200">Identity Mapping</span>
+            </span>
+          </Link>
+        ) : null}
         {mode === "onboarding" && (
           <button
             type="button"

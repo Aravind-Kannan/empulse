@@ -1,5 +1,5 @@
 /**
- * Lightweight global error toast bus (decoupled from api-client bundling).
+ * Global error toast bus for api-client (decoupled from React context).
  */
 
 type ToastErrorReporter = (message: string) => void;

@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+import logging
+
 from app.database import get_db
 from app.schemas.exit import (
     DashboardMetrics,
     EmployeeOption,
     HandoverResponse,
+    HandoverSlackSendRequest,
     HandoverSlackSendResponse,
 )
 from app.services.dashboard import get_dashboard_metrics
@@ -14,6 +17,7 @@ from app.services.exit_slack_delivery import send_handover_slack_dm
 from app.tenancy import CurrentTenant
 
 router = APIRouter(tags=["exit"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/api/exit/employees", response_model=list[EmployeeOption])
@@ -53,19 +57,29 @@ async def send_handover_slack(
         None,
         description="When set to 'era', enrich handover with ERA evidence sections",
     ),
+    body: HandoverSlackSendRequest | None = None,
     db: Session = Depends(get_db),
 ) -> HandoverSlackSendResponse:
+    payload = body or HandoverSlackSendRequest()
     try:
         return await send_handover_slack_dm(
             db,
             tenant,
             id,
             prefill_era=prefill == "era",
+            markdown=payload.markdown,
+            filename=payload.filename,
         )
     except ValueError as exc:
         detail = str(exc)
         status = 404 if "not found" in detail.lower() else 400
         raise HTTPException(status_code=status, detail=detail) from exc
+    except Exception as exc:
+        logger.exception("send_handover_slack failed tenant=%s employee=%s", tenant.id, id)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Slack delivery failed: {exc}",
+        ) from exc
 
 
 @router.get("/api/dashboard/metrics", response_model=DashboardMetrics)

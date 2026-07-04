@@ -4,6 +4,8 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Download, FileText, Loader2, Send, UserRound } from "lucide-react";
 
+import { PanelDataLoader } from "@/components/ui/PanelDataLoader";
+
 import { EmployeeSearchCombobox } from "@/components/exit/EmployeeSearchCombobox";
 import { HandoverMarkdownPreview } from "@/components/exit/HandoverMarkdownPreview";
 import { useToast } from "@/context/ToastContext";
@@ -34,7 +36,6 @@ function ExitHandoverContent() {
   const [loadingEmployees, setLoadingEmployees] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [sendingSlack, setSendingSlack] = useState(false);
-  const [slackSuccess, setSlackSuccess] = useState<string | null>(null);
   const { pushToast } = useToast();
 
   useEffect(() => {
@@ -60,7 +61,6 @@ function ExitHandoverContent() {
     let cancelled = false;
     setHandover(null);
     setGenerating(true);
-    setSlackSuccess(null);
 
     fetchHandover(selectedId, { prefillEra })
       .then((data) => {
@@ -101,13 +101,20 @@ function ExitHandoverContent() {
   async function handleSendSlack() {
     if (!handover || !selectedId) return;
     setSendingSlack(true);
-    setSlackSuccess(null);
     try {
-      const result = await sendHandoverSlack(selectedId, { prefillEra });
-      setSlackSuccess(result.message);
+      const result = await sendHandoverSlack(selectedId, {
+        prefillEra,
+        markdown: handoverMarkdownContent(handover),
+        filename: handover.filename,
+      });
       pushToast(result.message, "success");
-    } catch {
-      // Global API toast handles the error message.
+    } catch (error) {
+      pushToast(
+        error instanceof Error
+          ? error.message
+          : "Failed to send handover to Slack",
+        "error",
+      );
     } finally {
       setSendingSlack(false);
     }
@@ -115,9 +122,27 @@ function ExitHandoverContent() {
 
   if (loadingEmployees) {
     return (
-      <div className="flex h-64 items-center justify-center text-zinc-400">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-        Loading employees…
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-zinc-100">
+            Employee Knowledge Handover
+          </h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Generate and deliver knowledge handover documentation for departing engineers.
+          </p>
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+          <PanelDataLoader
+            icon={FileText}
+            label="Loading employee roster…"
+            sublabel="Fetching engineers available for handover compilation."
+            steps={[
+              "Loading org roster",
+              "Checking integration coverage",
+              "Preparing handover workspace",
+            ]}
+          />
+        </div>
       </div>
     );
   }
@@ -162,12 +187,6 @@ function ExitHandoverContent() {
           disabled={generating}
         />
       </div>
-
-      {slackSuccess ? (
-        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-200">
-          {slackSuccess}
-        </div>
-      ) : null}
 
       <section className="relative min-h-[28rem] overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
         <div className="flex flex-col gap-3 border-b border-zinc-800 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -242,12 +261,18 @@ function ExitHandoverContent() {
         </div>
 
         {generating ? (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/55 backdrop-blur-[2px]">
-            <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/90 px-5 py-3 shadow-xl">
-              <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
-              <span className="text-sm text-zinc-300">
-                Generating handover pack…
-              </span>
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/60 backdrop-blur-[2px]">
+            <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-950/95 px-2 py-2 shadow-xl">
+              <PanelDataLoader
+                icon={FileText}
+                label="Generating handover pack…"
+                sublabel="Compiling ownership, tasks, Slack context, and documentation gaps."
+                steps={[
+                  "Querying knowledge graph",
+                  "Gathering open Jira tasks",
+                  "Assembling handover document",
+                ]}
+              />
             </div>
           </div>
         ) : null}
@@ -258,9 +283,12 @@ function ExitHandoverContent() {
 
 function ExitHandoverFallback() {
   return (
-    <div className="flex h-64 items-center justify-center text-zinc-400">
-      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-      Loading knowledge handover…
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+      <PanelDataLoader
+        icon={FileText}
+        label="Loading knowledge handover…"
+        sublabel="Preparing the handover workspace."
+      />
     </div>
   );
 }

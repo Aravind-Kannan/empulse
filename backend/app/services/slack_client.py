@@ -114,7 +114,13 @@ def _retry_after_seconds(response: requests.Response, attempt: int) -> float:
 
 def _format_slack_api_error(error: str, *, method: str) -> str:
     if error in ("missing_scope",):
-        if method in {"conversations.open", "files.upload", "users.lookupByEmail"}:
+        if method in {
+            "conversations.open",
+            "files.upload",
+            "files.getUploadURLExternal",
+            "files.completeUploadExternal",
+            "users.lookupByEmail",
+        }:
             scopes = ", ".join(DM_WRITE_SCOPES)
             return (
                 f"Slack bot token is missing DM delivery scopes ({method}). "
@@ -122,6 +128,11 @@ def _format_slack_api_error(error: str, *, method: str) -> str:
                 "and copy a fresh xoxb- token."
             )
         return _format_slack_conversations_error(error)
+    if error in ("method_deprecated", "unknown_method"):
+        return (
+            f"Slack rejected {method} ({error}). Reinstall the Slack app with "
+            "files:write, im:write, and chat:write scopes, then refresh the bot token."
+        )
     if error in ("invalid_auth", "token_revoked"):
         return _format_slack_conversations_error(error)
     if error == "rate_limited":
@@ -206,6 +217,66 @@ def _slack_api_post(
                 url,
                 headers=slack_headers(token),
                 data=data or {},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise ValueError(f"Could not reach {context}: {exc}") from exc
+
+        if response.status_code == 429:
+            wait = _retry_after_seconds(response, attempt)
+            logger.warning(
+                "%s HTTP 429; backing off %.1fs (attempt %s/%s)",
+                context,
+                wait,
+                attempt + 1,
+                SLACK_MAX_RETRIES,
+            )
+            time.sleep(wait)
+            continue
+
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("ok"):
+            return payload
+
+        error = str(payload.get("error", "unknown_error"))
+        if error == "rate_limited" and attempt + 1 < SLACK_MAX_RETRIES:
+            wait = _retry_after_seconds(response, attempt)
+            logger.warning(
+                "%s rate_limited; backing off %.1fs (attempt %s/%s)",
+                context,
+                wait,
+                attempt + 1,
+                SLACK_MAX_RETRIES,
+            )
+            time.sleep(wait)
+            continue
+
+        raise ValueError(_format_slack_api_error(error, method=context))
+
+    raise ValueError(
+        f"{context} rate limited after {SLACK_MAX_RETRIES} retries. "
+        "Wait a minute and retry."
+    )
+
+
+def _slack_api_post_json(
+    url: str,
+    *,
+    token: str,
+    json_body: dict[str, Any],
+    context: str = "Slack API",
+) -> dict[str, Any]:
+    """POST JSON to Slack Web API with pacing and 429/rate_limited retries."""
+    headers = slack_headers(token)
+    headers["Content-Type"] = "application/json; charset=utf-8"
+    for attempt in range(SLACK_MAX_RETRIES):
+        _pace_slack_request()
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=json_body,
                 timeout=30,
             )
         except requests.RequestException as exc:
@@ -1037,25 +1108,52 @@ def upload_markdown_to_channel(
     title: str,
     initial_comment: str,
 ) -> str:
-    """Upload a markdown document to a channel or DM (files.upload)."""
+    """Upload a markdown document to a channel or DM via Slack external upload APIs."""
     encoded = content.encode("utf-8")
     if len(encoded) > _SLACK_FILE_UPLOAD_MAX_BYTES:
         raise ValueError(
             f"Handover file is {len(encoded)} bytes; Slack upload limit is "
             f"{_SLACK_FILE_UPLOAD_MAX_BYTES} bytes. Download the .md file instead."
         )
-    payload = _slack_api_post(
-        "https://slack.com/api/files.upload",
+
+    upload_meta = _slack_api_post(
+        "https://slack.com/api/files.getUploadURLExternal",
         token=token,
         data={
-            "channels": channel_id,
-            "content": content,
             "filename": filename,
-            "title": title,
+            "length": str(len(encoded)),
+        },
+        context="files.getUploadURLExternal",
+    )
+    upload_url = upload_meta.get("upload_url")
+    file_id = upload_meta.get("file_id")
+    if not upload_url or not file_id:
+        raise ValueError("Slack did not return an upload URL for the handover file.")
+
+    try:
+        upload_response = requests.post(
+            str(upload_url),
+            data=encoded,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=60,
+        )
+        upload_response.raise_for_status()
+    except requests.RequestException as exc:
+        raise ValueError(f"Slack file upload failed: {exc}") from exc
+
+    complete_payload = _slack_api_post_json(
+        "https://slack.com/api/files.completeUploadExternal",
+        token=token,
+        json_body={
+            "files": [{"id": str(file_id), "title": title}],
+            "channel_id": channel_id,
             "initial_comment": initial_comment,
         },
-        context="files.upload",
+        context="files.completeUploadExternal",
     )
-    file_obj = payload.get("file") or {}
-    file_id = file_obj.get("id")
-    return str(file_id) if file_id else ""
+    files = complete_payload.get("files") or []
+    if files:
+        completed_id = files[0].get("id")
+        if completed_id:
+            return str(completed_id)
+    return str(file_id)
