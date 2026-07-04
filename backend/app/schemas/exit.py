@@ -19,6 +19,17 @@ class HandoverResponse(BaseModel):
         return self.markdown
 
 
+class HandoverSlackSendRequest(BaseModel):
+    markdown: str | None = Field(
+        default=None,
+        description="Pre-generated handover markdown from the UI (skips slow recompilation).",
+    )
+    filename: str | None = Field(
+        default=None,
+        description="Optional filename for the Slack attachment.",
+    )
+
+
 class HandoverSlackSendResponse(BaseModel):
     employee_id: str
     employee_name: str

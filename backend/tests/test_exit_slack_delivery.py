@@ -65,7 +65,7 @@ def test_send_handover_slack_dm_success(client, db, tenant):
         "app.services.exit_slack_delivery.build_handover_markdown",
         new_callable=AsyncMock,
         return_value=handover_mock,
-    ), patch(
+    ) as build_handover, patch(
         "app.services.exit_slack_delivery.open_dm_channel",
         return_value="D999",
     ) as open_dm, patch(
@@ -75,6 +75,10 @@ def test_send_handover_slack_dm_success(client, db, tenant):
         response = client.post(
             f"/api/exit/handover/send-slack?id={employee.id}",
             headers={TENANT_HEADER: str(tenant.id)},
+            json={
+                "markdown": "# Handover\n\nBody",
+                "filename": "handover-slack-exit-engineer.md",
+            },
         )
 
     assert response.status_code == 200
@@ -82,7 +86,9 @@ def test_send_handover_slack_dm_success(client, db, tenant):
     assert payload["slack_user_id"] == "U123HANDOVER"
     assert payload["channel_id"] == "D999"
     assert payload["file_id"] == "F123"
+    build_handover.assert_not_called()
     open_dm.assert_called_once_with("xoxb-test-token", "U123HANDOVER")
     upload.assert_called_once()
     assert upload.call_args.kwargs["channel_id"] == "D999"
     assert upload.call_args.kwargs["filename"].endswith(".md")
+    assert upload.call_args.kwargs["content"].startswith("# Handover")

@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Search } from "lucide-react";
+
+import { PanelDataLoader } from "@/components/ui/PanelDataLoader";
 
 import { fetchIncidents, updateIncidentStatus } from "@/lib/api";
 import { useWorkspace } from "@/context/WorkspaceContext";
@@ -671,9 +673,27 @@ export function InvestigationDashboard() {
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center text-zinc-400">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-        Loading incidents…
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-zinc-100">
+            Incident Investigation
+          </h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Active issues from Jira and Slack incident channels.
+          </p>
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+          <PanelDataLoader
+            icon={Search}
+            label="Loading incidents…"
+            sublabel="Pulling open issues from connected Jira and Slack sources."
+            steps={[
+              "Fetching incident feed",
+              "Resolving workspace context",
+              "Preparing investigation panels",
+            ]}
+          />
+        </div>
       </div>
     );
   }

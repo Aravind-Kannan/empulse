@@ -12,7 +12,9 @@ import {
   BrainCircuit,
   Lock,
   FileText,
-  Sparkles,
+  ChevronRight,
+  Plug,
+  GitBranch,
   type LucideIcon,
 } from "lucide-react";
 
@@ -62,9 +64,30 @@ const navGroups: NavGroup[] = [
   },
   {
     title: "Workspace",
-    items: [{ href: "/settings", label: "Settings", icon: Settings }],
+    items: [
+      { href: "/settings/integrations", label: "Integrations", icon: Plug },
+      { href: "/settings/org-chart", label: "Org Chart", icon: GitBranch },
+      { href: "/settings", label: "Settings", icon: Settings },
+    ],
   },
 ];
+
+const PROMOTED_SETTINGS_PATHS = [
+  "/settings/integrations",
+  "/settings/org-chart",
+];
+
+function isNavItemActive(pathname: string, href: string): boolean {
+  if (pathname === href) return true;
+  if (!pathname.startsWith(`${href}/`)) return false;
+  if (href === "/settings") {
+    return !PROMOTED_SETTINGS_PATHS.some(
+      (promoted) =>
+        pathname === promoted || pathname.startsWith(`${promoted}/`),
+    );
+  }
+  return true;
+}
 
 function integrationHint(path: string): string {
   const required = workspaceRequiresIntegrations(path);
@@ -72,7 +95,7 @@ function integrationHint(path: string): string {
   const names = required
     .map((id) => INTEGRATION_CATALOG.find((app) => app.id === id)?.name ?? id)
     .join(" or ");
-  return `Connect ${names} in Settings → Integrations`;
+  return `Connect ${names} in Integrations`;
 }
 
 function NavLink({
@@ -144,8 +167,10 @@ function NavLink({
         ) : null}
       </span>
       {isActive ? (
-        <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-300/70" />
-      ) : null}
+        <ChevronRight className="h-4 w-4 shrink-0 text-violet-300/80" />
+      ) : (
+        <ChevronRight className="h-4 w-4 shrink-0 text-zinc-700 opacity-0 transition group-hover:opacity-100" />
+      )}
     </Link>
   );
 }
@@ -190,8 +215,7 @@ export function Sidebar() {
             </p>
             <div className="space-y-1">
               {group.items.map((item) => {
-                const isActive =
-                  pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const isActive = isNavItemActive(pathname, item.href);
                 const unlocked = isWorkspaceUnlocked(item.href, config);
                 return (
                   <NavLink

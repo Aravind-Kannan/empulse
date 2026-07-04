@@ -36,24 +36,32 @@ from app.services.integration_telemetry import (
     hydrate_integration_telemetry,
 )
 from app.services.role_utils import is_leadership_role
+from app.services.slack_client import (
+    is_incident_feed_channel,
+    thread_has_incident_signal,
+    thread_title,
+)
+from app.services.slack_types import SlackThreadRecord
 from app.services.tenant_cognee import tenant_cognee_context
 from app.tenancy import tenant_dataset_name
 
 logger = logging.getLogger(__name__)
 
 _DOC_KINDS = frozenset({"runbook", "architecture", "playbook", "postmortem", "wiki"})
-_TROUBLESHOOTING_HINTS = (
-    "root cause",
-    "investigat",
-    "diagnos",
-    "outage",
+_INCIDENT_GRAPH_TERMS = (
     "incident",
-    "failed",
-    "error",
-    "timeout",
+    "outage",
+    "sev1",
+    "sev2",
+    "sev3",
+    "on-call",
+    "on call",
+    "troubleshoot",
+    "root cause",
+    "production",
+    "pager",
+    "escalat",
     "mitigat",
-    "resolved",
-    "sev",
 )
 _SOLE_OWNERSHIP_PCT = 85.0
 
@@ -150,8 +158,8 @@ async def _cognee_handover_research(
             f"on components: {components_clause}"
         ),
         "incidents": (
-            f"Open incidents outages production failures troubleshooting threads "
-            f"involving {name} on {components_clause}"
+            f"Slack incident channel on-call troubleshooting resolution threads "
+            f"where {name} participated on {components_clause}"
         ),
         "operations": (
             f"Jira tickets tasks backlog assigned to {name} for {components_clause}"
@@ -522,6 +530,14 @@ def _compile_open_incidents(
     for thread in get_cached_slack_threads():
         if thread.resolved_at:
             continue
+        if not (
+            thread.is_incident_channel
+            or thread.is_on_call_channel
+            or is_incident_feed_channel(thread.channel_name)
+        ):
+            continue
+        if not thread_has_incident_signal(thread):
+            continue
         channel = thread.channel_name.lstrip("#") or thread.channel_id
         involved = any(
             message.user_id in slack_ids
@@ -531,7 +547,7 @@ def _compile_open_incidents(
         if not involved:
             continue
         lines.append(
-            f"- #{channel} — active incident thread: {thread.parent_text.strip()[:200]}"
+            f"- #{channel} — active incident thread: {thread_title(thread.parent_text, max_len=200)}"
         )
         if len(lines) >= 12:
             break
@@ -541,51 +557,178 @@ def _compile_open_incidents(
     return lines[:12]
 
 
+def _employee_participated_in_thread(
+    thread: SlackThreadRecord,
+    slack_ids: set[str],
+    employee_id: str,
+) -> bool:
+    if thread.resolved_by_employee_id == employee_id:
+        return True
+    if any(slack_id in thread.mentioned_user_ids for slack_id in slack_ids):
+        return True
+    return any(
+        not message.is_bot and message.user_id in slack_ids
+        for message in thread.messages
+    )
+
+
+def _is_relevant_troubleshooting_thread(
+    thread: SlackThreadRecord,
+    slack_ids: set[str],
+    employee_id: str,
+) -> bool:
+    if not _employee_participated_in_thread(thread, slack_ids, employee_id):
+        return False
+    if thread.is_incident_channel or thread.is_on_call_channel:
+        return thread_has_incident_signal(thread) or bool(thread.resolved_at)
+    if is_incident_feed_channel(thread.channel_name):
+        return thread_has_incident_signal(thread)
+    return thread_has_incident_signal(thread)
+
+
+def _thread_participation_label(
+    thread: SlackThreadRecord,
+    slack_ids: set[str],
+    employee_id: str,
+) -> str:
+    if thread.resolved_by_employee_id == employee_id:
+        return "resolver"
+    if any(slack_id in thread.mentioned_user_ids for slack_id in slack_ids):
+        return "mentioned"
+    reply_count = sum(
+        1
+        for message in thread.messages
+        if not message.is_bot and message.user_id in slack_ids
+    )
+    if reply_count >= 3:
+        return f"{reply_count} replies"
+    if reply_count:
+        return "participant"
+    return "participant"
+
+
+def _format_thread_link(thread: SlackThreadRecord) -> str:
+    if thread.thread_url:
+        return f" — [thread]({thread.thread_url})"
+    return ""
+
+
+def _filter_incident_graph_snippets(
+    snippets: list[str],
+    employee_name: str,
+    owned_names: list[str],
+) -> list[str]:
+    name_lower = employee_name.lower()
+    owned_lower = [name.lower() for name in owned_names if name]
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for snippet in snippets:
+        normalized = re.sub(r"\s+", " ", snippet).strip()
+        if len(normalized) < 40 or normalized in seen:
+            continue
+        lowered = normalized.lower()
+        if not any(term in lowered for term in _INCIDENT_GRAPH_TERMS):
+            continue
+        if name_lower not in lowered and not any(
+            owned in lowered for owned in owned_lower
+        ):
+            continue
+        seen.add(normalized)
+        filtered.append(normalized[:280])
+    return filtered[:3]
+
+
 def _compile_slack_troubleshooting(
     db: Session,
     tenant_id: uuid.UUID,
     employee: Employee,
     graph_snippets: list[str],
+    owned_names: list[str],
 ) -> list[str]:
     hydrate_integration_telemetry(db, tenant_id)
     lines: list[str] = []
     slack_ids = _provider_user_ids(db, tenant_id, employee.id, "slack")
+    seen_threads: set[str] = set()
 
     signals = get_slack_employee_signals(employee.id)
     if signals:
-        for evidence in signals.thread_evidence[:8]:
+        channel_counts: dict[str, int] = {}
+        for evidence in signals.thread_evidence:
+            channel = evidence.channel_name.lstrip("#") or "unknown"
+            channel_counts[channel] = channel_counts.get(channel, 0) + 1
+            if evidence.thread_url:
+                seen_threads.add(evidence.thread_url)
             lines.append(
-                f"- #{evidence.channel_name}: **{evidence.title[:120]}** "
-                f"({evidence.kind}) — {evidence.thread_url}"
+                f"- #{channel}: **{evidence.title[:120]}** "
+                f"({evidence.kind.replace('_', ' ')})"
+                + (
+                    f" — [thread]({evidence.thread_url})"
+                    if evidence.thread_url
+                    else ""
+                )
             )
+        if channel_counts:
+            summary = ", ".join(
+                f"#{channel} ({count})"
+                for channel, count in sorted(
+                    channel_counts.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )
+            )
+            lines.insert(0, f"**Incident channels:** {summary}")
+
+    incident_channels: dict[str, int] = {}
+    thread_lines: list[str] = []
 
     for thread in get_cached_slack_threads():
+        if not _is_relevant_troubleshooting_thread(thread, slack_ids, employee.id):
+            continue
+        thread_key = thread.thread_url or f"{thread.channel_id}:{thread.thread_ts}"
+        if thread_key in seen_threads:
+            continue
+        seen_threads.add(thread_key)
+
         channel = thread.channel_name.lstrip("#") or thread.channel_id
-        for message in thread.messages:
-            if message.is_bot or not message.user_id:
-                continue
-            if message.user_id not in slack_ids:
-                continue
-            lowered = message.text.lower()
-            if not any(hint in lowered for hint in _TROUBLESHOOTING_HINTS):
-                continue
-            lines.append(
-                f"- #{channel} thread `{thread.thread_ts}`: {message.text.strip()[:220]}"
-            )
-            if len(lines) >= 12:
-                break
-        if len(lines) >= 12:
+        incident_channels[channel] = incident_channels.get(channel, 0) + 1
+        status = "resolved" if thread.resolved_at else "active"
+        role = _thread_participation_label(thread, slack_ids, employee.id)
+        thread_lines.append(
+            f"- #{channel} ({status}, {role}): "
+            f"**{thread_title(thread.parent_text, max_len=160)}**"
+            f"{_format_thread_link(thread)}"
+        )
+        if len(thread_lines) >= 10:
             break
 
-    for snippet in graph_snippets:
-        lowered = snippet.lower()
-        if not any(hint in lowered for hint in _TROUBLESHOOTING_HINTS):
-            continue
-        lines.append(f"- Retrieved context: {snippet[:280]}")
+    if thread_lines:
+        if not signals:
+            summary = ", ".join(
+                f"#{channel} ({count})"
+                for channel, count in sorted(
+                    incident_channels.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )
+            )
+            lines.insert(0, f"**Incident channels:** {summary}")
+        lines.append("")
+        lines.append("**Relevant incident threads**")
+        lines.extend(thread_lines)
+
+    graph_lines = _filter_incident_graph_snippets(
+        graph_snippets,
+        employee.name,
+        owned_names,
+    )
+    if graph_lines:
+        lines.append("")
+        lines.append("**Knowledge graph context (incident-related)**")
+        lines.extend(f"- {snippet}" for snippet in graph_lines)
 
     if not lines:
-        lines.append("- No Slack troubleshooting threads attributed to this engineer.")
-    return lines[:15]
+        lines.append(
+            "- No incident-channel troubleshooting context attributed to this engineer."
+        )
+    return lines[:18]
 
 
 def _compile_documentation_gaps(
@@ -686,7 +829,7 @@ def _render_markdown(compilation: HandoverCompilation) -> str:
             "## 2. Active Open Tasks (Jira Operations)",
             "\n".join(section_two),
             "## 3. Implicit Troubleshooting Areas (Slack Context Extracted)",
-            "\n".join(compilation.slack_lines + compilation.graph_insight_lines),
+            "\n".join(compilation.slack_lines),
             "## 4. Documentation Gaps & Untracked Hotfixes Needing Writeups",
             "\n".join(compilation.gap_lines),
         ]
@@ -736,7 +879,8 @@ async def compile_exit_handover_file(
             db,
             tenant_id,
             employee,
-            graph_buckets.get("incidents", []) + graph_buckets.get("blast_radius", []),
+            graph_buckets.get("incidents", []),
+            owned_names,
         ),
         gap_lines=_compile_documentation_gaps(
             db,

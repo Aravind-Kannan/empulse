@@ -58,7 +58,7 @@ import {
   type IntegrationConfigMap,
   type IntegrationId,
 } from "./integrations";
-import { API_BASE, apiFetch } from "./api-client";
+import { API_BASE, apiFetch, formatFetchError } from "./api-client";
 
 export async function fetchOrgChart(): Promise<OrgChartPayload> {
   const response = await apiFetch(`${API_BASE}/api/ingest/org-chart`, {
@@ -717,20 +717,39 @@ export async function fetchHandover(
 
 export async function sendHandoverSlack(
   employeeId: string,
-  options?: { prefillEra?: boolean },
+  options?: {
+    prefillEra?: boolean;
+    markdown?: string;
+    filename?: string;
+  },
 ): Promise<HandoverSlackSendResponse> {
   const params = new URLSearchParams({ id: employeeId });
   if (options?.prefillEra) {
     params.set("prefill", "era");
   }
-  const response = await apiFetch(
-    `${API_BASE}/api/exit/handover/send-slack?${params.toString()}`,
-    { method: "POST" },
-  );
-  if (!response.ok) {
-    throw new Error(await parseApiError(response, "Failed to send handover to Slack"));
+  try {
+    const response = await apiFetch(
+      `${API_BASE}/api/exit/handover/send-slack?${params.toString()}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          markdown: options?.markdown,
+          filename: options?.filename,
+        }),
+        timeoutMs: 60_000,
+        skipErrorToast: true,
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        await parseApiError(response, "Failed to send handover to Slack"),
+      );
+    }
+    return response.json();
+  } catch (error) {
+    throw new Error(formatFetchError(error, "Failed to send handover to Slack"));
   }
-  return response.json();
 }
 
 async function parseApiError(response: Response, fallback: string): Promise<string> {
