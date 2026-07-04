@@ -14,7 +14,6 @@ import { jobsForIntegration, latestJobPerSource } from "@/lib/sync-jobs";
 
 import { IntegrationRow } from "./IntegrationRow";
 import { GlobalSyncProgressBar } from "./GlobalSyncProgressBar";
-import { CogneeDatasetResetPanel } from "./CogneeDatasetResetPanel";
 import {
   IntegrationConfigDrawer,
   useSelectedIntegration,
@@ -155,10 +154,6 @@ export function IntegrationsDirectory({
             })}
           </ul>
         </section>
-
-        {showSyncToolbar && (
-          <CogneeDatasetResetPanel />
-        )}
       </div>
 
       {selectedApp && (

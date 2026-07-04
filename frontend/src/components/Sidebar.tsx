@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Plug,
   GitBranch,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 
@@ -65,6 +66,7 @@ const navGroups: NavGroup[] = [
     title: "Workspace",
     items: [
       { href: "/settings/integrations", label: "Integrations", icon: Plug },
+      { href: "/settings/knowledge-graph-reset", label: "Knowledge graph reset", icon: Waypoints },
       { href: "/settings/org-chart", label: "Org Hub", icon: GitBranch },
     ],
   },
