@@ -12,6 +12,7 @@ import {
 
 import { fetchDashboardMetrics } from "@/lib/api";
 import type { DashboardMetrics, DigestSettings } from "@/lib/types";
+import { useAuth } from "@/context/AuthContext";
 
 const DIGEST_STORAGE_KEY = "empulse-digest-settings";
 
@@ -45,6 +46,7 @@ function loadDigestSettings(): DigestSettings {
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
+  const { isAuthenticated } = useAuth();
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [digest, setDigestState] = useState<DigestSettings>(DEFAULT_DIGEST);
   const [loading, setLoading] = useState(true);
@@ -66,8 +68,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setDigestState(loadDigestSettings());
+
+    if (!isAuthenticated) {
+      setMetrics(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     refreshMetrics().finally(() => setLoading(false));
-  }, [refreshMetrics]);
+  }, [isAuthenticated, refreshMetrics]);
 
   const setDigest = useCallback((settings: Partial<DigestSettings>) => {
     setDigestState((prev) => {

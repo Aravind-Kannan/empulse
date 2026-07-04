@@ -5,20 +5,14 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { GlobalPageLoader } from "@/components/ui/GlobalPageLoader";
 import { useAuth } from "@/context/AuthContext";
+import {
+  isAuthPath,
+  isOnboardingPath,
+  isProtectedPath,
+  isPublicPath,
+} from "@/lib/routes";
 
-const PUBLIC_PATHS = ["/", "/login", "/signup"];
-
-function isPublicPath(pathname: string) {
-  return PUBLIC_PATHS.includes(pathname);
-}
-
-function isAuthPath(pathname: string) {
-  return pathname === "/login" || pathname === "/signup";
-}
-
-function isOnboardingPath(pathname: string) {
-  return pathname.startsWith("/onboarding");
-}
+export { isPublicPath } from "@/lib/routes";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { authStatus, session } = useAuth();
@@ -27,6 +21,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   const isLoading = authStatus === "loading";
   const isAuthenticated = authStatus === "authenticated";
+  const protectedRoute = isProtectedPath(pathname);
 
   useEffect(() => {
     if (isLoading) return;
@@ -40,7 +35,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!isAuthenticated && !publicRoute && !authRoute) {
+    if (!isAuthenticated && protectedRoute) {
       router.replace("/login");
       return;
     }
@@ -53,24 +48,27 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     if (
       isAuthenticated &&
       !session?.onboarded &&
-      !onboardingRoute &&
-      !publicRoute &&
-      !authRoute
+      protectedRoute &&
+      !onboardingRoute
     ) {
       router.replace("/onboarding");
     }
-  }, [authStatus, isLoading, isAuthenticated, pathname, router, session?.onboarded]);
+  }, [
+    authStatus,
+    isLoading,
+    isAuthenticated,
+    pathname,
+    protectedRoute,
+    router,
+    session?.onboarded,
+  ]);
 
-  if (isLoading && !isAuthPath(pathname)) {
+  if (isLoading && protectedRoute) {
     return <GlobalPageLoader label="Verifying session" />;
   }
 
-  if (
-    !isAuthenticated &&
-    !isPublicPath(pathname) &&
-    !isAuthPath(pathname)
-  ) {
-    return <GlobalPageLoader label="Redirecting" />;
+  if (!isLoading && !isAuthenticated && protectedRoute) {
+    return <GlobalPageLoader label="Redirecting to sign in" />;
   }
 
   return <>{children}</>;

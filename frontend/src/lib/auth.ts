@@ -167,6 +167,8 @@ export async function fetchCurrentSession(): Promise<{
 } | null> {
   const response = await apiFetch(`${API_BASE}/api/auth/me`, {
     cache: "no-store",
+    timeoutMs: 8_000,
+    skipErrorToast: true,
   });
   if (response.status === 401) {
     clearAuthCredentials();
@@ -190,6 +192,8 @@ export async function fetchCurrentUser(): Promise<AuthSession | null> {
 export async function fetchLinkedTenants(): Promise<TenantMembership[]> {
   const response = await apiFetch(`${API_BASE}/api/auth/tenants`, {
     cache: "no-store",
+    timeoutMs: 8_000,
+    skipErrorToast: true,
   });
   if (!response.ok) {
     throw new Error(await parseAuthError(response, "Failed to load tenants"));

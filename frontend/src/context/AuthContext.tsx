@@ -85,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setActiveTenant(current.activeTenant);
       setAccessToken(current.accessToken);
       setAuthStatus("authenticated");
-      await loadLinkedTenants();
+      void loadLinkedTenants();
     } catch {
       setUser(null);
       setActiveTenant(null);
@@ -96,7 +96,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [loadLinkedTenants]);
 
   useEffect(() => {
-    void refreshSession();
+    let cancelled = false;
+    const watchdog = window.setTimeout(() => {
+      if (!cancelled) {
+        setAuthStatus((current) =>
+          current === "loading" ? "unauthenticated" : current,
+        );
+      }
+    }, 10_000);
+
+    void refreshSession().finally(() => {
+      if (!cancelled) {
+        window.clearTimeout(watchdog);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(watchdog);
+    };
   }, [refreshSession]);
 
   const signUp = useCallback(

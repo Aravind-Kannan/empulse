@@ -11,13 +11,13 @@ interface LandingNavProps {
 export function LandingNav({ topOffset = 0 }: LandingNavProps) {
   return (
     <header
-      className="fixed inset-x-0 z-50 border-b border-white/5 bg-black/40 backdrop-blur-md transition-[top] duration-200"
+      className="fixed inset-x-0 z-50 border-b border-zinc-800/80 bg-slate-950/60 backdrop-blur-md transition-[top] duration-200"
       style={{ top: topOffset }}
     >
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
         <Link href="/" className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 ring-1 ring-white/10">
-            <BrainCircuit className="h-4 w-4 text-zinc-200" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800/80 bg-slate-900/40">
+            <BrainCircuit className="h-4 w-4 text-violet-300" />
           </div>
           <span className="text-sm font-semibold tracking-tight text-zinc-100">
             Empulse
@@ -26,22 +26,22 @@ export function LandingNav({ topOffset = 0 }: LandingNavProps) {
 
         <nav className="hidden items-center gap-8 md:flex">
           <a
+            href="#pillars"
+            className="text-sm text-zinc-400 transition hover:text-zinc-100"
+          >
+            Core pillars
+          </a>
+          <a
             href="#platform"
             className="text-sm text-zinc-400 transition hover:text-zinc-100"
           >
             Platform
           </a>
           <a
-            href="#how-it-works"
+            href="#architecture"
             className="text-sm text-zinc-400 transition hover:text-zinc-100"
           >
-            How it works
-          </a>
-          <a
-            href="#capabilities"
-            className="text-sm text-zinc-400 transition hover:text-zinc-100"
-          >
-            Capabilities
+            Architecture
           </a>
         </nav>
 
@@ -50,13 +50,13 @@ export function LandingNav({ topOffset = 0 }: LandingNavProps) {
             href="/login"
             className="text-sm text-zinc-400 transition hover:text-zinc-100"
           >
-            Login
+            Sign in
           </Link>
           <Link
             href="/signup"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-zinc-200 transition hover:bg-white/10"
+            className="rounded-full border border-zinc-700/80 bg-slate-900/40 px-4 py-1.5 text-sm text-zinc-200 backdrop-blur-sm transition hover:border-zinc-600 hover:bg-slate-900/70"
           >
-            Get Started
+            Get started
           </Link>
         </div>
       </div>

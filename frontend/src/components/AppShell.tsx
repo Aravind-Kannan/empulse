@@ -3,14 +3,20 @@
 import { usePathname } from "next/navigation";
 
 import { Sidebar } from "@/components/Sidebar";
+import {
+  isAuthPath,
+  isKnownAppPath,
+  isOnboardingPath,
+  isPublicPath,
+} from "@/lib/routes";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isBareLayout =
-    pathname === "/" ||
-    pathname.startsWith("/onboarding") ||
-    pathname === "/login" ||
-    pathname === "/signup";
+    isPublicPath(pathname) ||
+    isOnboardingPath(pathname) ||
+    isAuthPath(pathname) ||
+    !isKnownAppPath(pathname);
 
   if (isBareLayout) {
     return <>{children}</>;
