@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 
 import type { FileRiskItem, FileRiskQuadrant } from "@/lib/types";
 
@@ -56,6 +56,12 @@ const QUADRANT_PRIORITY: FileRiskQuadrant[] = [
   "active_shared",
   "healthy",
 ];
+
+/** FileRiskRow height incl. space-y-2 gap — keeps list area stable across quadrants */
+const FILE_ROW_HEIGHT_PX = 76;
+const LIST_BODY_PADDING_PX = 24;
+const PAGINATION_HEIGHT_PX = 44;
+const FILES_PER_PAGE = 5;
 
 interface FileRiskMatrixProps {
   files: FileRiskItem[];
@@ -148,10 +154,16 @@ export function FileRiskMatrix({
 }: FileRiskMatrixProps) {
   const [selectedQuadrant, setSelectedQuadrant] =
     useState<FileRiskQuadrant>("critical");
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     setSelectedQuadrant("critical");
+    setPage(0);
   }, [files]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [selectedQuadrant]);
 
   const byQuadrant = useMemo(
     () =>
@@ -164,6 +176,32 @@ export function FileRiskMatrix({
       ),
     [files],
   );
+
+  const listBodyMinHeightPx = useMemo(() => {
+    const tallestQuadrantCount = Math.max(
+      ...QUADRANT_PRIORITY.map((quadrant) => byQuadrant[quadrant].length),
+    );
+    const rowCount = Math.max(
+      Math.min(tallestQuadrantCount, FILES_PER_PAGE),
+      1,
+    );
+    const needsPagination = tallestQuadrantCount > FILES_PER_PAGE;
+    return (
+      rowCount * FILE_ROW_HEIGHT_PX +
+      LIST_BODY_PADDING_PX +
+      (needsPagination ? PAGINATION_HEIGHT_PX : 0)
+    );
+  }, [byQuadrant]);
+
+  const selectedFiles = byQuadrant[selectedQuadrant];
+  const totalPages = Math.ceil(selectedFiles.length / FILES_PER_PAGE);
+  const paginatedFiles = selectedFiles.slice(
+    page * FILES_PER_PAGE,
+    (page + 1) * FILES_PER_PAGE,
+  );
+  const rangeStart =
+    selectedFiles.length === 0 ? 0 : page * FILES_PER_PAGE + 1;
+  const rangeEnd = Math.min((page + 1) * FILES_PER_PAGE, selectedFiles.length);
 
   const priorityFiles =
     crossTrainingPriority.length > 0
@@ -256,20 +294,52 @@ export function FileRiskMatrix({
             {QUADRANT_META[selectedQuadrant].description}
           </p>
         </div>
-        {byQuadrant[selectedQuadrant].length > 0 ? (
-          <ul className="space-y-2 px-3 py-3">
-            {byQuadrant[selectedQuadrant].map((file) => (
-              <FileRiskRow
-                key={`${file.component_id}-${file.file_path}`}
-                file={file}
-              />
-            ))}
-          </ul>
-        ) : (
-          <p className="px-4 py-4 text-sm text-zinc-500">
-            No files in this category.
-          </p>
-        )}
+        <div
+          className="flex flex-col px-3 py-3"
+          style={{ minHeight: listBodyMinHeightPx }}
+        >
+          {selectedFiles.length > 0 ? (
+            <>
+              <ul className="space-y-2">
+                {paginatedFiles.map((file) => (
+                  <FileRiskRow
+                    key={`${file.component_id}-${file.file_path}`}
+                    file={file}
+                  />
+                ))}
+              </ul>
+              {totalPages > 1 ? (
+                <div className="mt-3 flex items-center justify-between border-t border-zinc-800/80 pt-3">
+                  <button
+                    type="button"
+                    disabled={page === 0}
+                    onClick={() => setPage((current) => current - 1)}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    Previous
+                  </button>
+                  <span className="text-xs tabular-nums text-zinc-500">
+                    {rangeStart}–{rangeEnd} of {selectedFiles.length}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={page >= totalPages - 1}
+                    onClick={() => setPage((current) => current + 1)}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    Next
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+              No files in this category.
+            </p>
+          )}
+        </div>
       </div>
     </section>
   );
