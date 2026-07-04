@@ -44,6 +44,7 @@ Re-run **Integration sync** after saving identity mappings so historical quarant
 
 ## Related
 
+- [KRA](../kra/README.md) — system-centric SPOF and doc coverage
 - [Employee Knowledge Handover](../employee-exit/README.md)
 - [Identity Mapping](../identity-mapping/README.md)
 - [Integration Sync](../integration-sync/README.md)

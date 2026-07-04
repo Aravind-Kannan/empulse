@@ -66,6 +66,7 @@ FEATURE_DOC_PREFIXES = (
     "features/",
     "modules/",
 )
+FEATURE_DOC_IGNORED_SEGMENTS = frozenset({"readme.md", "readme"})
 METADATA_ROOT_FILES = ("README.md", "package.json", "pyproject.toml")
 ARCHITECTURAL_REPO_SUFFIXES = frozenset(
     {
@@ -342,8 +343,16 @@ def _discover_feature_doc_partitions(paths: list[str]) -> list[RepoPartition]:
             if not path.startswith(prefix):
                 continue
             remainder = path[len(prefix) :]
-            feature = remainder.split("/", 1)[0]
-            if not feature or feature in EXCLUDED_TOP_LEVEL or feature.startswith("."):
+            segments = [segment for segment in remainder.split("/") if segment]
+            if len(segments) < 2:
+                break
+            feature = segments[0]
+            if (
+                not feature
+                or feature in EXCLUDED_TOP_LEVEL
+                or feature.startswith(".")
+                or feature.lower() in FEATURE_DOC_IGNORED_SEGMENTS
+            ):
                 break
             key = (prefix, feature)
             counts[key] = counts.get(key, 0) + 1

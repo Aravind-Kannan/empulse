@@ -67,15 +67,27 @@ def test_parse_mapped_source_paths_from_feature_readme():
 def test_discover_repo_partitions_from_feature_docs():
     paths = [
         "docs/features/auth/login.md",
-        "docs/features/auth/session.md",
+        "docs/features/auth/README.md",
         "docs/features/payments/checkout.md",
-        "docs/features/payments/refunds.md",
+        "docs/features/payments/README.md",
+        "docs/features/README.md",
         "README.md",
     ]
     partitions = discover_repo_partitions(paths)
     assert len(partitions) == 2
     assert {partition.slug for partition in partitions} == {"auth", "payments"}
     assert {partition.display_name for partition in partitions} == {"Auth", "Payments"}
+
+
+def test_discover_repo_partitions_ignores_features_root_readme():
+    paths = [
+        "docs/features/README.md",
+        "docs/features/era/README.md",
+        "docs/features/kra/README.md",
+    ]
+    partitions = discover_repo_partitions(paths)
+    assert len(partitions) == 2
+    assert {partition.slug for partition in partitions} == {"era", "kra"}
 
 
 def test_humanize_repo_name_prefers_architectural_suffix():

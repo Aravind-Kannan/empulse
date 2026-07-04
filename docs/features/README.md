@@ -2,7 +2,7 @@
 
 Feature folders under `docs/features/` serve two purposes:
 
-1. **Component provisioning** — On GitHub integration sync, each feature folder becomes an org-chart **component** (e.g. `Era`, `Integration Sync`).
+1. **Component provisioning** — On GitHub integration sync, each feature folder becomes an org-chart **component** (e.g. `Era`, `Kra`, `Integration Sync`).
 2. **Path attribution** — Each feature `README.md` lists **mapped source paths**. Those paths are registered in the GitHub `path_component_map` so blame, PRs, and code ingest attribute activity to the right component. Combined with **identity mapping**, contributors resolve to the correct employees in ERA/KRA.
 
 ## Features
@@ -10,6 +10,7 @@ Feature folders under `docs/features/` serve two purposes:
 | Folder | Component | Route |
 |--------|-----------|-------|
 | [era](./era/README.md) | Era | `/era` |
+| [kra](./kra/README.md) | Kra | `/kra` |
 | [employee-exit](./employee-exit/README.md) | Employee Knowledge Handover | `/exit` |
 | [incident-investigation](./incident-investigation/README.md) | Incident Investigation | `/investigation` |
 | [identity-mapping](./identity-mapping/README.md) | Identity Mapping | `/settings/identity-mapping` |
