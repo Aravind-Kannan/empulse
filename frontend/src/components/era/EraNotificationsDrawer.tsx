@@ -37,7 +37,7 @@ function severityClass(severity: string) {
 
 function warningActionLink(code: string): string | null {
   if (code === "partial_identity") {
-    return "/settings/identity-mapping";
+    return "/settings/org-chart?tab=identity";
   }
   if (code === "github_not_synced" || code === "github_stale") {
     return "/settings/integrations";
@@ -53,7 +53,7 @@ function warningActionLink(code: string): string | null {
 
 function alertActionLink(alert: EraAlertItem): string | null {
   if (alert.rule_id === "identity_gap") {
-    return "/settings/identity-mapping";
+    return "/settings/org-chart?tab=identity";
   }
   if (alert.rule_id === "stale_sync") {
     return "/settings/integrations";
@@ -288,7 +288,7 @@ export function EraNotificationsDrawer({
                         {unmappedCount === 1 ? "" : "s"} — scores may be understated.
                       </p>
                       <Link
-                        href="/settings/identity-mapping"
+                        href="/settings/org-chart?tab=identity"
                         className="mt-2 inline-block text-xs font-medium text-amber-200 underline-offset-2 hover:underline"
                       >
                         Open identity mapping

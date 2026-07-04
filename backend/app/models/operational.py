@@ -77,6 +77,7 @@ class EmployeeIdentity(Base):
     )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_username_or_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_display_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confidence: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

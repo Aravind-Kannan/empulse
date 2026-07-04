@@ -32,14 +32,14 @@ function EmployeeFlowNodeComponent({
 
   return (
     <div
-      className={`w-[180px] rounded-xl border p-3 shadow-lg transition-all duration-300 ${
+      className={`w-[188px] rounded-2xl border p-3 shadow-lg shadow-black/30 transition-all duration-300 ${
         isHighlighted
-          ? "border-amber-400/80 bg-amber-500/15 ring-2 ring-amber-400/50"
+          ? "border-amber-400/80 bg-gradient-to-br from-amber-500/20 to-amber-500/5 ring-2 ring-amber-400/40"
           : isSelected
-            ? "border-violet-500/60 bg-violet-500/15 ring-2 ring-violet-500/30"
+            ? "border-violet-500/50 bg-gradient-to-br from-violet-500/15 to-indigo-500/5 ring-2 ring-violet-500/30"
             : isDropTarget
-              ? "scale-105 border-sky-400/80 bg-sky-500/15 ring-2 ring-sky-400/60"
-              : "border-zinc-700 bg-zinc-900/95 hover:border-zinc-500"
+              ? "scale-105 border-sky-400/80 bg-gradient-to-br from-sky-500/15 to-cyan-500/5 ring-2 ring-sky-400/50"
+              : "border-zinc-700/80 bg-zinc-900/90 hover:border-zinc-500"
       }`}
     >
       <Handle
@@ -61,7 +61,7 @@ function EmployeeFlowNodeComponent({
         className="w-full text-left"
       >
         <div className="mb-2 flex items-center gap-2">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 text-xs font-semibold text-zinc-100">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500/30 to-violet-600/25 text-xs font-semibold text-zinc-100 ring-1 ring-white/10">
             {getInitials(employee.name) || <User className="h-4 w-4" />}
           </div>
           <div className="min-w-0 flex-1">

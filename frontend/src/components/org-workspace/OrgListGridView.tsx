@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -13,9 +13,14 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, GripVertical, Pencil } from "lucide-react";
+import { ChevronDown, ChevronRight, GripVertical, Loader2, Pencil, Trash2 } from "lucide-react";
 
 import { AddEmployeeButton } from "@/components/org-workspace/AddEmployeeButton";
+import {
+  DEFAULT_LIST_PAGE_SIZE,
+  ListPagination,
+  paginateItems,
+} from "@/components/ui/ListPagination";
 
 import {
   buildEmployeeTree,
@@ -32,7 +37,10 @@ interface OrgListGridViewProps {
   onToggleSelect: (employeeId: string) => void;
   onReparent: (employeeId: string, managerId: string | null) => void;
   onEditEmployee?: (employee: Employee) => void;
+  onDeleteEmployee?: (employeeId: string) => void | Promise<void>;
+  deletingEmployeeId?: string | null;
   onAddEmployee?: () => void;
+  embedded?: boolean;
 }
 
 function DraggableRow({
@@ -43,6 +51,8 @@ function DraggableRow({
   onToggleSelect,
   isDropTarget,
   onEditEmployee,
+  onDeleteEmployee,
+  deletingEmployeeId = null,
   componentLabel,
 }: {
   row: FlatRow;
@@ -52,6 +62,8 @@ function DraggableRow({
   onToggleSelect: () => void;
   isDropTarget: boolean;
   onEditEmployee?: (employee: Employee) => void;
+  onDeleteEmployee?: (employeeId: string) => void | Promise<void>;
+  deletingEmployeeId?: string | null;
   componentLabel?: string;
 }) {
   const { employee, depth, hasChildren } = row;
@@ -71,6 +83,9 @@ function DraggableRow({
     opacity: isDragging ? 0.45 : 1,
   };
 
+  const isDeleting = deletingEmployeeId === employee.id;
+  const showActions = onEditEmployee || onDeleteEmployee;
+
   return (
     <tr
       ref={(node) => {
@@ -78,9 +93,13 @@ function DraggableRow({
         setDropRef(node);
       }}
       style={style}
-      className={`border-b border-zinc-800/80 transition-colors ${
-        isOver || isDropTarget ? "bg-sky-500/10" : "hover:bg-zinc-900/50"
-      } ${depth > 0 ? "bg-zinc-950/20" : ""}`}
+      className={`border-b border-zinc-800/50 transition-colors ${
+        isSelected
+          ? "bg-violet-500/10"
+          : isOver || isDropTarget
+            ? "bg-sky-500/10"
+            : "hover:bg-zinc-900/40"
+      } ${depth > 0 ? "bg-zinc-950/30" : ""}`}
     >
       <td className="px-3 py-2">
         <input
@@ -139,18 +158,46 @@ function DraggableRow({
       <td className="px-3 py-3 text-sm text-zinc-400">
         {componentLabel ?? "—"}
       </td>
-      {onEditEmployee && (
+      {showActions ? (
         <td className="px-3 py-3">
-          <button
-            type="button"
-            onClick={() => onEditEmployee(employee)}
-            className="rounded-lg border border-zinc-700 p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-            title="Edit employee"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            {onEditEmployee ? (
+              <button
+                type="button"
+                onClick={() => onEditEmployee(employee)}
+                disabled={isDeleting}
+                className="rounded-lg border border-zinc-700 p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
+                title="Edit employee"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {onDeleteEmployee ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Remove ${employee.name} from the organization? This cannot be undone.`,
+                    )
+                  ) {
+                    void onDeleteEmployee(employee.id);
+                  }
+                }}
+                disabled={isDeleting}
+                className="rounded-lg border border-red-500/30 p-1.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
+                title="Delete employee"
+              >
+                {isDeleting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+              </button>
+            ) : null}
+          </div>
         </td>
-      )}
+      ) : null}
     </tr>
   );
 }
@@ -183,11 +230,15 @@ export function OrgListGridView({
   onToggleSelect,
   onReparent,
   onEditEmployee,
+  onDeleteEmployee,
+  deletingEmployeeId = null,
   onAddEmployee,
+  embedded = false,
 }: OrgListGridViewProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -199,8 +250,21 @@ export function OrgListGridView({
     [tree, collapsed],
   );
 
+  const paginatedRows = useMemo(
+    () => paginateItems(rows, page, DEFAULT_LIST_PAGE_SIZE),
+    [rows, page],
+  );
+
+  useEffect(() => {
+    const maxPage = Math.max(0, Math.ceil(rows.length / DEFAULT_LIST_PAGE_SIZE) - 1);
+    if (page > maxPage) {
+      setPage(maxPage);
+    }
+  }, [rows.length, page]);
+
   const activeEmployee = employees.find((employee) => employee.id === activeId);
-  const columnCount = onEditEmployee ? 7 : 6;
+  const showActions = Boolean(onEditEmployee || onDeleteEmployee);
+  const columnCount = showActions ? 7 : 6;
 
   const componentNamesById = useMemo(
     () => new Map(components.map((component) => [component.id, component.name])),
@@ -257,14 +321,18 @@ export function OrgListGridView({
       }}
     >
       {onAddEmployee && (
-        <div className="mb-3 flex justify-end">
+        <div className={`flex justify-end ${embedded ? "border-b border-zinc-800/60 px-4 py-3" : "mb-3"}`}>
           <AddEmployeeButton onClick={onAddEmployee} />
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-zinc-800">
+      <div
+        className={
+          embedded ? "overflow-x-auto" : "overflow-x-auto rounded-xl border border-zinc-800"
+        }
+      >
         <table className="min-w-full text-left text-sm">
-          <thead className="border-b border-zinc-800 bg-zinc-900/60">
+          <thead className="border-b border-zinc-800/60 bg-zinc-900/40 text-xs uppercase tracking-[0.12em] text-zinc-500">
             <tr>
               <th className="px-3 py-3 font-medium text-zinc-400">Select</th>
               <th className="px-3 py-3 font-medium text-zinc-400">Drag</th>
@@ -272,14 +340,14 @@ export function OrgListGridView({
               <th className="px-3 py-3 font-medium text-zinc-300">Email</th>
               <th className="px-3 py-3 font-medium text-zinc-300">Team</th>
               <th className="px-3 py-3 font-medium text-zinc-300">Components</th>
-              {onEditEmployee && (
-                <th className="px-3 py-3 font-medium text-zinc-300">Edit</th>
-              )}
+              {showActions ? (
+                <th className="px-3 py-3 font-medium text-zinc-300">Actions</th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
-            <RootDropZone colSpan={columnCount} />
-            {rows.map((row) => (
+            {page === 0 ? <RootDropZone colSpan={columnCount} /> : null}
+            {paginatedRows.map((row) => (
               <DraggableRow
                 key={row.employee.id}
                 row={row}
@@ -289,12 +357,20 @@ export function OrgListGridView({
                 onToggleSelect={() => onToggleSelect(row.employee.id)}
                 isDropTarget={dropTargetId === `drop-${row.employee.id}`}
                 onEditEmployee={onEditEmployee}
+                onDeleteEmployee={onDeleteEmployee}
+                deletingEmployeeId={deletingEmployeeId}
                 componentLabel={assignmentLabel(row.employee.id)}
               />
             ))}
           </tbody>
         </table>
       </div>
+
+      <ListPagination
+        page={page}
+        totalItems={rows.length}
+        onPageChange={setPage}
+      />
 
       <DragOverlay>
         {activeEmployee ? (

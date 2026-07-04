@@ -188,7 +188,7 @@ export function IncidentHistoryBar({
             <p className="text-[11px] text-zinc-500">
               {jiraOn || slackOn
                 ? `Monitoring ${[jiraOn && "Jira", slackOn && "Slack"].filter(Boolean).join(" & ")} · past 14 days`
-                : "Connect Jira and Slack in Settings → Integrations"}
+                : "Connect Jira and Slack in Integrations"}
             </p>
             {syncingCount > 0 && (
               <p className="mt-0.5 text-[10px] text-sky-400/90">

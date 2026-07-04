@@ -2,6 +2,7 @@
 
 import { Plug } from "lucide-react";
 
+import { TenantSwitcher } from "@/components/settings/TenantSwitcher";
 import { IntegrationsDirectory } from "./IntegrationsDirectory";
 
 export function IntegrationsPage() {
@@ -23,6 +24,10 @@ export function IntegrationsPage() {
           </div>
         </div>
       </header>
+
+      <div className="mb-6">
+        <TenantSwitcher />
+      </div>
 
       <IntegrationsDirectory showSyncToolbar />
     </div>

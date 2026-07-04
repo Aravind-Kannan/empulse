@@ -44,6 +44,7 @@ interface OrgHierarchyChartViewProps {
   onAddEmployee?: () => void;
   focusEmployeeId?: string | null;
   onFocusHandled?: () => void;
+  embedded?: boolean;
 }
 
 function buildGraphElements(
@@ -82,7 +83,7 @@ function buildGraphElements(
     target: to.employee.id,
     type: "smoothstep",
     animated: false,
-    style: { stroke: "#52525b", strokeWidth: 2 },
+    style: { stroke: "#6366f1", strokeWidth: 2, opacity: 0.55 },
   }));
 
   return { nodes, edges };
@@ -97,6 +98,7 @@ function OrgHierarchyCanvas({
   onAddEmployee,
   focusEmployeeId,
   onFocusHandled,
+  embedded = false,
 }: OrgHierarchyChartViewProps) {
   const { fitView, zoomIn, zoomOut, setCenter, getIntersectingNodes } =
     useReactFlow();
@@ -296,8 +298,14 @@ function OrgHierarchyCanvas({
   }, [selectedIds]);
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60">
-      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 bg-zinc-900/70 px-3 py-2">
+    <div
+      className={
+        embedded
+          ? "relative overflow-hidden"
+          : "relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60"
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800/60 bg-zinc-900/30 px-3 py-2.5 backdrop-blur-sm">
         <button
           type="button"
           onClick={() => zoomIn({ duration: 200 })}
@@ -356,7 +364,7 @@ function OrgHierarchyCanvas({
         {onAddEmployee && <AddEmployeeButton onClick={onAddEmployee} />}
       </div>
 
-      <div className="h-[560px]">
+      <div className="h-[min(68vh,720px)] min-h-[480px]">
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -372,11 +380,11 @@ function OrgHierarchyCanvas({
           maxZoom={1.8}
           proOptions={{ hideAttribution: true }}
         >
-          <Background gap={20} size={1} color="#27272a" />
+          <Background gap={24} size={1} color="#1f1f23" />
         </ReactFlow>
       </div>
 
-      <p className="border-t border-zinc-800 px-3 py-2 text-xs text-zinc-500">
+      <p className="border-t border-zinc-800/60 px-4 py-2.5 text-xs text-zinc-500">
         Drag a node onto another to re-parent. Double-click a node to edit role and
         reporting details.
       </p>

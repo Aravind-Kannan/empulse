@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from app.models.tenant import Tenant
 from app.schemas.employee_master import FetchUsersRequest
 from app.schemas.identity import ProviderMember
-from app.services.identity_auto_map import auto_map_provider_member_identities
+from app.services.identity_auto_map import (
+    auto_map_provider_member_identities,
+    backfill_identity_display_labels,
+)
 from app.services.identity_mapping import PROVIDERS
 from app.services.integration_config_store import get_github_config
 from app.services.provider_members import (
@@ -82,6 +85,7 @@ def sync_provider_identity_members(
         }
 
     created = auto_map_provider_member_identities(db, tenant_id, normalized, members)
+    backfill_identity_display_labels(db, tenant_id, normalized, members)
     return {
         "provider": normalized,
         "members_fetched": len(members),

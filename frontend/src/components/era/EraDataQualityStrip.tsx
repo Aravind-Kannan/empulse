@@ -60,7 +60,7 @@ export function EraDataQualityStrip({ employee }: EraDataQualityStripProps) {
             <>
               Map {missing.map((p) => PROVIDER_LABELS[p]).join(", ")} in{" "}
               <Link
-                href="/settings/identity-mapping"
+                href="/settings/org-chart?tab=identity"
                 className="text-violet-300 hover:text-violet-200"
               >
                 identity settings

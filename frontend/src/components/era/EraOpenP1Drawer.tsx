@@ -215,7 +215,7 @@ export function EraOpenP1Drawer({ open, onClose }: EraOpenP1DrawerProps) {
                   </dl>
                   {issue.assignee_unmapped ? (
                     <Link
-                      href="/settings/identity-mapping"
+                      href="/settings/org-chart?tab=identity"
                       className="mt-2 inline-block text-xs text-amber-300 hover:text-amber-200"
                     >
                       Map assignee in identity settings

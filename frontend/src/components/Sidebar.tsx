@@ -8,7 +8,6 @@ import {
   Network,
   Search,
   LogOut,
-  Settings,
   BrainCircuit,
   Lock,
   FileText,
@@ -66,27 +65,13 @@ const navGroups: NavGroup[] = [
     title: "Workspace",
     items: [
       { href: "/settings/integrations", label: "Integrations", icon: Plug },
-      { href: "/settings/org-chart", label: "Org Chart", icon: GitBranch },
-      { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/settings/org-chart", label: "Org Hub", icon: GitBranch },
     ],
   },
 ];
 
-const PROMOTED_SETTINGS_PATHS = [
-  "/settings/integrations",
-  "/settings/org-chart",
-];
-
 function isNavItemActive(pathname: string, href: string): boolean {
-  if (pathname === href) return true;
-  if (!pathname.startsWith(`${href}/`)) return false;
-  if (href === "/settings") {
-    return !PROMOTED_SETTINGS_PATHS.some(
-      (promoted) =>
-        pathname === promoted || pathname.startsWith(`${promoted}/`),
-    );
-  }
-  return true;
+  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 function integrationHint(path: string): string {

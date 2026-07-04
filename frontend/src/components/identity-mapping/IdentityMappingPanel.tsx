@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, Loader2, RefreshCw, Save, Users } from "lucide-react";
+import { CheckCircle2, Loader2, RefreshCw, Save } from "lucide-react";
 
 import { useIntegrations } from "@/context/IntegrationsContext";
 import { useAuth } from "@/context/AuthContext";
@@ -69,15 +69,31 @@ function memberLabel(
   return match.email ? `${match.label} (${match.email})` : match.label;
 }
 
-export function IdentityMappingPage() {
+interface IdentityMappingPanelProps {
+  focusEmployeeId?: string | null;
+  /** When true, fetch all connected provider directories in the background. */
+  preloadProviderMembers?: boolean;
+  /** When false, panel stays mounted but hidden (for background preload). */
+  visible?: boolean;
+}
+
+export function IdentityMappingPanel({
+  focusEmployeeId = null,
+  preloadProviderMembers = false,
+  visible = true,
+}: IdentityMappingPanelProps) {
   const { config } = useIntegrations();
   const { activeTenant } = useAuth();
   const [data, setData] = useState<IdentityReconciliationResponse | null>(null);
   const [rows, setRows] = useState<EmployeeIdentityRow[]>([]);
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
-  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
-  const [membersLoadComplete, setMembersLoadComplete] = useState(false);
-  const [membersLoadSummary, setMembersLoadSummary] = useState<
+  const [loadedProviders, setLoadedProviders] = useState<Set<IdentityProvider>>(
+    () => new Set(),
+  );
+  const [loadingProviders, setLoadingProviders] = useState<Set<IdentityProvider>>(
+    () => new Set(),
+  );
+  const [providerMemberCounts, setProviderMemberCounts] = useState<
     Partial<Record<IdentityProvider, number>>
   >({});
   const [isSaving, setIsSaving] = useState(false);
@@ -86,7 +102,12 @@ export function IdentityMappingPage() {
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const membersRequestId = useRef(0);
+  const providerRequestIds = useRef<Partial<Record<IdentityProvider, number>>>(
+    {},
+  );
+  const loadingProvidersRef = useRef<Set<IdentityProvider>>(new Set());
+  const loadedProvidersRef = useRef<Set<IdentityProvider>>(new Set());
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const connectedProviders = useMemo(() => {
     return INTEGRATION_CATALOG.filter((app) =>
@@ -119,113 +140,121 @@ export function IdentityMappingPage() {
   );
 
   const loadProviderMembers = useCallback(
-    async (providers: IdentityProvider[]) => {
-      if (providers.length === 0) {
-        setIsLoadingMembers(false);
+    async (provider: IdentityProvider) => {
+      if (
+        loadedProvidersRef.current.has(provider) ||
+        loadingProvidersRef.current.has(provider)
+      ) {
         return;
       }
 
-      const requestId = membersRequestId.current + 1;
-      membersRequestId.current = requestId;
-      setIsLoadingMembers(true);
-      setMembersLoadComplete(false);
-      setMembersLoadSummary({});
+      const requestId = (providerRequestIds.current[provider] ?? 0) + 1;
+      providerRequestIds.current[provider] = requestId;
+      loadingProvidersRef.current.add(provider);
+      setLoadingProviders((prev) => new Set(prev).add(provider));
 
       try {
-        const bundle = await fetchProviderMembersBundle(providers);
-        if (membersRequestId.current !== requestId) {
+        const bundle = await fetchProviderMembersBundle([provider]);
+        if (providerRequestIds.current[provider] !== requestId) {
           return;
         }
 
-        const summary: Partial<Record<IdentityProvider, number>> = {};
-        for (const provider of providers) {
-          summary[provider] = bundle.provider_members[provider]?.length ?? 0;
-        }
-
+        const members = bundle.provider_members[provider] ?? [];
         setData((prev) =>
           prev
             ? {
                 ...prev,
                 provider_members: {
                   ...prev.provider_members,
-                  ...bundle.provider_members,
+                  [provider]: members,
                 },
                 provider_warnings: {
                   ...prev.provider_warnings,
-                  ...bundle.provider_warnings,
+                  ...(bundle.provider_warnings?.[provider]
+                    ? { [provider]: bundle.provider_warnings[provider]! }
+                    : {}),
                 },
               }
             : prev,
         );
-
-        setRows((prev) => {
-          let next = prev;
-          for (const provider of providers) {
-            const members = bundle.provider_members[provider] ?? [];
-            next = applyMemberGuesses(next, provider, members);
-          }
-          return next;
-        });
-        setMembersLoadSummary(summary);
-        setMembersLoadComplete(true);
+        setRows((prev) => applyMemberGuesses(prev, provider, members));
+        setProviderMemberCounts((prev) => ({
+          ...prev,
+          [provider]: members.length,
+        }));
+        loadedProvidersRef.current.add(provider);
+        setLoadedProviders(new Set(loadedProvidersRef.current));
       } catch (err) {
-        if (membersRequestId.current === requestId) {
-          setMembersLoadComplete(false);
-          setMembersLoadSummary({});
+        if (providerRequestIds.current[provider] === requestId) {
           setError(
             err instanceof Error
               ? err.message
-              : "Failed to load provider member directories",
+              : `Failed to load ${PROVIDER_LABELS[provider]} members`,
           );
         }
       } finally {
-        if (membersRequestId.current === requestId) {
-          setIsLoadingMembers(false);
+        if (providerRequestIds.current[provider] === requestId) {
+          loadingProvidersRef.current.delete(provider);
+          setLoadingProviders((prev) => {
+            const next = new Set(prev);
+            next.delete(provider);
+            return next;
+          });
         }
       }
     },
     [applyMemberGuesses],
   );
 
-  const loadReconciliation = useCallback(
-    async (options?: { background?: boolean }) => {
-      const background = options?.background ?? false;
-      if (!background) {
-        setIsLoadingEmployees(true);
-      }
-      setError(null);
+  const loadReconciliation = useCallback(async () => {
+    setIsLoadingEmployees(true);
+    setError(null);
 
-      if (connectedProviders.length === 0) {
-        setData(null);
-        setRows([]);
-        setIsLoadingEmployees(false);
-        setIsLoadingMembers(false);
-        setMembersLoadComplete(false);
-        setMembersLoadSummary({});
-        return;
-      }
+    if (connectedProviders.length === 0) {
+      setData(null);
+      setRows([]);
+      setIsLoadingEmployees(false);
+      return;
+    }
 
-      try {
-        const response = await fetchIdentityReconciliation(connectedProviders, {
-          includeLiveMembers: false,
-        });
-        setData(response);
-        setRows(response.employees);
-        void loadProviderMembers(connectedProviders);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load mappings");
-      } finally {
-        if (!background) {
-          setIsLoadingEmployees(false);
-        }
-      }
-    },
-    [connectedProviders, loadProviderMembers],
-  );
+    try {
+      const response = await fetchIdentityReconciliation(connectedProviders, {
+        includeLiveMembers: false,
+      });
+      setData(response);
+      setRows(response.employees);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load mappings");
+    } finally {
+      setIsLoadingEmployees(false);
+    }
+  }, [connectedProviders]);
 
   useEffect(() => {
     void loadReconciliation();
   }, [loadReconciliation]);
+
+  useEffect(() => {
+    if (!preloadProviderMembers || connectedProviders.length === 0) {
+      return;
+    }
+    void Promise.all(
+      connectedProviders.map((provider) => loadProviderMembers(provider)),
+    );
+  }, [preloadProviderMembers, connectedProviders, loadProviderMembers]);
+
+  useEffect(() => {
+    if (!focusEmployeeId) return;
+    const row = rowRefs.current[focusEmployeeId];
+    if (row) {
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      row.classList.add("bg-sky-500/10");
+      const timer = window.setTimeout(() => {
+        row.classList.remove("bg-sky-500/10");
+      }, 2000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [focusEmployeeId, rows]);
 
   function updateMapping(
     employeeId: string,
@@ -272,7 +301,10 @@ export function IdentityMappingPage() {
       setSyncMessage(
         `Synced identities — ${result.total_mappings_created} new mapping(s). ${providerNote}.${rosterNote}`,
       );
-      await loadReconciliation({ background: true });
+      setLoadedProviders(new Set());
+      loadedProvidersRef.current = new Set();
+      setProviderMemberCounts({});
+      await loadReconciliation();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Identity sync failed");
     } finally {
@@ -292,10 +324,13 @@ export function IdentityMappingPage() {
       for (const provider of data.connected_providers) {
         const value = row.mappings[provider];
         if (value) {
+          const members = data.provider_members[provider] ?? [];
+          const label = memberLabel(members, value);
           mappings.push({
             employee_id: row.employee_id,
             provider,
             provider_username_or_id: value,
+            provider_display_label: label || value,
           });
         }
       }
@@ -304,7 +339,7 @@ export function IdentityMappingPage() {
     try {
       await saveIdentityMappings(mappings);
       setSavedMessage("Identity mappings saved.");
-      await loadReconciliation({ background: true });
+      await loadReconciliation();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -312,162 +347,102 @@ export function IdentityMappingPage() {
     }
   }
 
-  const loadingMembersLabel = connectedProviders
-    .map((provider) => PROVIDER_LABELS[provider])
-    .join(", ");
-
-  const membersLoadedLabel = connectedProviders
-    .map((provider) => {
-      const count = membersLoadSummary[provider];
-      if (count === undefined) {
-        return PROVIDER_LABELS[provider];
-      }
-      return `${PROVIDER_LABELS[provider]} (${count})`;
-    })
-    .join(", ");
-
   const showWorkspace =
     !isLoadingEmployees && data && connectedProviders.length > 0;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8 p-8">
-      <header className="space-y-4">
-        <Link
-          href="/settings"
-          className="inline-flex items-center gap-2 text-sm text-zinc-500 transition hover:text-zinc-300"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Settings
-        </Link>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900">
-              <Users className="h-5 w-5 text-zinc-400" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold text-zinc-100">
-                Identity Mapping
-              </h1>
-              <p className="text-sm text-zinc-500">
-                Link employee records to GitHub, Jira, Slack, and Notion
-                identities so Cognee merges graph nodes accurately.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 text-sm text-zinc-400">
-              <input
-                type="checkbox"
-                checked={importRoster}
-                onChange={(e) => setImportRoster(e.target.checked)}
-                className="rounded border-zinc-600 bg-zinc-950"
-              />
-              Also import employee roster
-            </label>
-            <button
-              type="button"
-              onClick={() => void handleSync()}
-              disabled={
-                isSyncing || isLoadingEmployees || connectedProviders.length === 0
-              }
-              className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isSyncing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              Sync from integrations
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={
-                isSaving || isLoadingEmployees || connectedProviders.length === 0
-              }
-              className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isSaving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              Save mappings
-            </button>
-          </div>
+    <div className={visible ? "space-y-5" : "hidden"} aria-hidden={!visible}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-zinc-500">
+          Saved mappings load from your workspace with stored display names. Provider
+          directories preload in the background while you browse People.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-zinc-400">
+            <input
+              type="checkbox"
+              checked={importRoster}
+              onChange={(e) => setImportRoster(e.target.checked)}
+              className="rounded border-zinc-600 bg-zinc-950"
+            />
+            Also import employee roster
+          </label>
+          <button
+            type="button"
+            onClick={() => void handleSync()}
+            disabled={
+              isSyncing || isLoadingEmployees || connectedProviders.length === 0
+            }
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSyncing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Sync &amp; auto-map
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={
+              isSaving || isLoadingEmployees || connectedProviders.length === 0
+            }
+            className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSaving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Save mappings
+          </button>
         </div>
-      </header>
+      </div>
 
       {connectedProviders.length === 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           No integrations connected yet. Connect apps in{" "}
           <Link href="/settings/integrations" className="underline">
-            Settings → Integrations
+            Integrations
           </Link>{" "}
-          to load provider member lists for mapping.
+          to map provider identities.
         </div>
       )}
 
-      {error && (
+      {error ? (
         <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
           {error}
         </div>
-      )}
+      ) : null}
 
-      {data?.provider_warnings &&
-        Object.entries(data.provider_warnings).map(([provider, warning]) => (
-          <div
-            key={provider}
-            className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
-          >
-            <span className="font-medium capitalize">{provider}:</span> {warning}
-          </div>
-        ))}
+      {data?.provider_warnings
+        ? Object.entries(data.provider_warnings).map(([provider, warning]) => (
+            <div
+              key={provider}
+              className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+            >
+              <span className="font-medium capitalize">{provider}:</span> {warning}
+            </div>
+          ))
+        : null}
 
-      {isLoadingMembers && connectedProviders.length > 0 && (
-        <div className="flex items-start gap-3 rounded-xl border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
-          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-          <div>
-            <p className="font-medium">Pulling member directories from integrations</p>
-            <p className="mt-1 text-sky-200/80">
-              Loading {loadingMembersLabel} accounts to populate dropdown options.
-              Saved mappings stay visible while this finishes.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {!isLoadingMembers && membersLoadComplete && connectedProviders.length > 0 && (
-        <div className="flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-          <div>
-            <p className="font-medium text-emerald-100">
-              Member directories loaded — dropdowns ready
-            </p>
-            <p className="mt-1 text-emerald-200/80">
-              Pulled from {membersLoadedLabel}. Review auto-suggested mappings and
-              save any changes.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {syncMessage && (
+      {syncMessage ? (
         <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
           {syncMessage}
         </div>
-      )}
+      ) : null}
 
-      {savedMessage && (
+      {savedMessage ? (
         <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
           {savedMessage}
         </div>
-      )}
+      ) : null}
 
       {isLoadingEmployees ? (
-        <div className="flex items-center justify-center py-20 text-zinc-500">
+        <div className="flex items-center justify-center py-16 text-zinc-500">
           <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-          Loading employee roster and saved mappings…
+          Loading saved mappings…
         </div>
       ) : showWorkspace ? (
         <div className="overflow-x-auto rounded-xl border border-zinc-800">
@@ -477,8 +452,9 @@ export function IdentityMappingPage() {
                 <th className="px-4 py-3 font-medium text-zinc-300">Employee</th>
                 <th className="px-4 py-3 font-medium text-zinc-300">Email</th>
                 {data.connected_providers.map((provider) => {
-                  const memberCount = data.provider_members[provider]?.length ?? 0;
-                  const membersReady = memberCount > 0 || !isLoadingMembers;
+                  const isLoading = loadingProviders.has(provider);
+                  const isLoaded = loadedProviders.has(provider);
+                  const memberCount = providerMemberCounts[provider];
                   return (
                     <th
                       key={provider}
@@ -486,15 +462,15 @@ export function IdentityMappingPage() {
                     >
                       <span className="inline-flex items-center gap-2">
                         {PROVIDER_LABELS[provider]}
-                        {isLoadingMembers && (
+                        {isLoading ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />
-                        )}
-                        {!isLoadingMembers && membersLoadComplete && (
+                        ) : null}
+                        {isLoaded && memberCount !== undefined ? (
                           <span className="inline-flex items-center gap-1 text-xs font-normal text-emerald-400">
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             {memberCount}
                           </span>
-                        )}
+                        ) : null}
                       </span>
                     </th>
                   );
@@ -503,7 +479,13 @@ export function IdentityMappingPage() {
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.employee_id} className="border-b border-zinc-800/80">
+                <tr
+                  key={row.employee_id}
+                  ref={(node) => {
+                    rowRefs.current[row.employee_id] = node;
+                  }}
+                  className="border-b border-zinc-800/80 transition-colors"
+                >
                   <td className="px-4 py-3">
                     <p className="font-medium text-zinc-100">{row.name}</p>
                     <p className="text-xs text-zinc-500">{row.role}</p>
@@ -513,11 +495,14 @@ export function IdentityMappingPage() {
                     const members = data.provider_members[provider] ?? [];
                     const selected = row.mappings[provider] ?? "";
                     const selectedLabel = memberLabel(members, selected);
+                    const isLoading = loadingProviders.has(provider);
+                    const isLoaded = loadedProviders.has(provider);
 
                     return (
                       <td key={provider} className="px-4 py-3">
                         <select
                           value={selected}
+                          onFocus={() => void loadProviderMembers(provider)}
                           onChange={(e) =>
                             updateMapping(
                               row.employee_id,
@@ -525,15 +510,21 @@ export function IdentityMappingPage() {
                               e.target.value,
                             )
                           }
-                          disabled={isLoadingMembers && !selected}
-                          className="w-full min-w-[10rem] rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-500 disabled:cursor-wait disabled:opacity-70"
+                          className="w-full min-w-[10rem] rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-500"
                         >
                           <option value="">
-                            {isLoadingMembers ? "Loading members…" : "Unmapped"}
+                            {isLoading
+                              ? `Loading ${PROVIDER_LABELS[provider]}…`
+                              : isLoaded
+                                ? "Unmapped"
+                                : `Open to load ${PROVIDER_LABELS[provider]}`}
                           </option>
-                          {selected && !members.some((member) => member.id === selected) && (
-                            <option value={selected}>{selectedLabel || selected}</option>
-                          )}
+                          {selected &&
+                          !members.some((member) => member.id === selected) ? (
+                            <option value={selected}>
+                              {selectedLabel || selected}
+                            </option>
+                          ) : null}
                           {members.map((member) => (
                             <option key={member.id} value={member.id}>
                               {member.label}
@@ -550,17 +541,6 @@ export function IdentityMappingPage() {
           </table>
         </div>
       ) : null}
-
-      {showWorkspace && (
-        <p className="text-xs text-zinc-500">
-          Employee rows load from your org chart first. Provider member lists
-          fill in shortly after from connected integrations. Use Sync from
-          integrations to refresh directories (including GitHub repo
-          contributors) and auto-map by email. Check &quot;Also import employee
-          roster&quot; to merge new people into your org chart. Review and save
-          manual overrides before re-syncing Cognee.
-        </p>
-      )}
     </div>
   );
 }

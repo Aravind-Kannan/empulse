@@ -1,16 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { GitBranch } from "lucide-react";
 
-import { OrgWorkspace } from "@/components/org-workspace/OrgWorkspace";
+import {
+  OrgWorkspace,
+  type OrgMainTab,
+} from "@/components/org-workspace/OrgWorkspace";
 import { PanelDataLoader } from "@/components/ui/PanelDataLoader";
 import { consolidateOrgComponents, deleteOrgEmployee, deleteOrgComponent, fetchOrgChart, ingestOrgChart, updateOrgComponent, updateOrgEmployee } from "@/lib/api";
 import { mergeOrgChartForSave, removeEmployeeFromOrgChart, wouldCreateCycle } from "@/lib/org-tree-utils";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
 import { useWorkspace } from "@/context/WorkspaceContext";
 
+function parseMainTab(value: string | null): OrgMainTab {
+  if (value === "components" || value === "identity") {
+    return value;
+  }
+  return "people";
+}
+
 export function SettingsOrgChartPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialTab = parseMainTab(searchParams.get("tab"));
+  const focusIdentityEmployeeId = searchParams.get("employee");
   const { refreshOperationalState } = useWorkspace();
   const [orgChart, setOrgChart] = useState<OrgChartPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -21,6 +36,24 @@ export function SettingsOrgChartPage() {
   const [isSavingComponent, setIsSavingComponent] = useState(false);
   const [isDeletingComponent, setIsDeletingComponent] = useState(false);
   const dirtyReportingEmployeeIds = useRef(new Set<string>());
+
+  const handleTabChange = useCallback(
+    (tab: OrgMainTab, employeeId?: string | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("tab", tab);
+      if (tab === "identity" && employeeId) {
+        params.set("employee", employeeId);
+      } else {
+        params.delete("employee");
+      }
+      const query = params.toString();
+      router.replace(
+        query ? `/settings/org-chart?${query}` : "/settings/org-chart",
+        { scroll: false },
+      );
+    },
+    [router, searchParams],
+  );
 
   const reloadOrgChart = useCallback(async () => {
     setIsRefreshing(true);
@@ -256,6 +289,9 @@ export function SettingsOrgChartPage() {
     <OrgWorkspace
       mode="settings"
       orgChart={orgChart}
+      initialTab={initialTab}
+      focusIdentityEmployeeId={focusIdentityEmployeeId}
+      onTabChange={handleTabChange}
       isSaving={isSaving}
       savingLabel={savingLabel}
       error={error}

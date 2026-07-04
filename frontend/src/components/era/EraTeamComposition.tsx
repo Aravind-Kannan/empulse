@@ -106,7 +106,7 @@ export function EraTeamComposition({
             ))}
           </ul>
           <Link
-            href="/settings/identity-mapping"
+            href="/settings/org-chart?tab=identity"
             className="mt-2 inline-block text-xs text-violet-300 hover:text-violet-200"
           >
             Fix mappings →

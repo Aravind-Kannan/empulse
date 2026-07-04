@@ -100,6 +100,7 @@ def list_identity_mappings(db: Session, tenant) -> list[EmployeeIdentityRecord]:
             employee_id=row.employee_id,
             provider=row.provider,
             provider_username_or_id=row.provider_username_or_id,
+            provider_display_label=row.provider_display_label,
         )
         for row in rows
     ]
@@ -119,6 +120,29 @@ def _guess_mapping(
         if name_slug in member.label.lower().replace("-", "").replace(".", ""):
             return member.id
     return None
+
+
+def _saved_mapping_provider_members(
+    existing: list[EmployeeIdentity],
+    active_providers: list[str],
+) -> dict[str, list[ProviderMember]]:
+    """Build minimal member stubs from persisted labels (no live integration fetch)."""
+    members_by_provider: dict[str, list[ProviderMember]] = {
+        provider: [] for provider in active_providers
+    }
+    seen: dict[str, set[str]] = {provider: set() for provider in active_providers}
+    for row in existing:
+        if row.provider not in active_providers:
+            continue
+        provider_id = row.provider_username_or_id.strip()
+        if not provider_id or provider_id in seen[row.provider]:
+            continue
+        label = (row.provider_display_label or "").strip() or provider_id
+        members_by_provider[row.provider].append(
+            ProviderMember(id=provider_id, label=label, email=None)
+        )
+        seen[row.provider].add(provider_id)
+    return members_by_provider
 
 
 def load_provider_members_bundle(
@@ -172,7 +196,7 @@ def get_reconciliation(
             active_providers,
         )
     else:
-        provider_members = {provider: [] for provider in active_providers}
+        provider_members = _saved_mapping_provider_members(existing, active_providers)
         provider_warnings = {}
 
     reconcile_and_prune_unmapped_activity(db, tenant.id, commit=True)
@@ -235,9 +259,12 @@ def save_identity_mappings(
             continue
 
         value = mapping.provider_username_or_id.strip()
+        display_label = (mapping.provider_display_label or "").strip() or None
         now = datetime.utcnow()
         if row:
             row.provider_username_or_id = value
+            if display_label:
+                row.provider_display_label = display_label
             row.confidence = "confirmed"
             row.verified_at = now
         else:
@@ -246,6 +273,7 @@ def save_identity_mappings(
                 employee_id=mapping.employee_id,
                 provider=mapping.provider,
                 provider_username_or_id=value,
+                provider_display_label=display_label,
                 confidence="confirmed",
                 verified_at=now,
             )
@@ -265,6 +293,7 @@ def save_identity_mappings(
                     employee_id=row.employee_id,
                     provider=row.provider,
                     provider_username_or_id=row.provider_username_or_id,
+                    provider_display_label=row.provider_display_label,
                 )
             )
 

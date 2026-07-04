@@ -138,6 +138,15 @@ def apply_schema_patches(engine: Engine) -> None:
                         "ADD COLUMN verified_at TIMESTAMP"
                     )
                 )
+            identity_columns = _column_names(inspector, "employee_identities")
+            if "provider_display_label" not in identity_columns:
+                logger.info("Adding provider_display_label column to employee_identities")
+                conn.execute(
+                    text(
+                        "ALTER TABLE employee_identities "
+                        "ADD COLUMN provider_display_label VARCHAR(255)"
+                    )
+                )
 
         if inspector.has_table("components"):
             component_columns = _column_names(inspector, "components")

@@ -878,6 +878,7 @@ export interface EmployeeIdentityMapping {
   employee_id: string;
   provider: IdentityProvider;
   provider_username_or_id: string;
+  provider_display_label?: string | null;
 }
 
 export interface EmployeeIdentityRow {

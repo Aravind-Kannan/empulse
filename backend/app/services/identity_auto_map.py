@@ -90,6 +90,7 @@ def auto_map_provider_member_identities(
             employee_id=employee_id,
             provider=provider,
             provider_username_or_id=provider_id,
+            provider_display_label=member.label.strip() or None,
             confidence="high",
             verified_at=now,
         )
@@ -108,3 +109,43 @@ def auto_map_provider_member_identities(
         )
 
     return created
+
+
+def backfill_identity_display_labels(
+    db: Session,
+    tenant_id: uuid.UUID,
+    provider: str,
+    members: list[ProviderMember],
+) -> int:
+    """Attach human-readable labels to saved mappings when integrations are synced."""
+    if provider not in PROVIDERS or not members:
+        return 0
+
+    labels_by_id = {
+        member.id.strip(): member.label.strip()
+        for member in members
+        if member.id.strip() and member.label.strip()
+    }
+    if not labels_by_id:
+        return 0
+
+    rows = (
+        db.query(EmployeeIdentity)
+        .filter(
+            EmployeeIdentity.tenant_id == tenant_id,
+            EmployeeIdentity.provider == provider,
+        )
+        .all()
+    )
+    updated = 0
+    for row in rows:
+        label = labels_by_id.get(row.provider_username_or_id.strip())
+        if not label:
+            continue
+        if row.provider_display_label != label:
+            row.provider_display_label = label
+            updated += 1
+
+    if updated:
+        db.commit()
+    return updated

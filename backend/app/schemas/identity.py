@@ -15,6 +15,7 @@ class EmployeeIdentityMapping(BaseModel):
     employee_id: str
     provider: str
     provider_username_or_id: str
+    provider_display_label: str | None = None
 
 
 class EmployeeIdentityRecord(EmployeeIdentityMapping):

@@ -94,3 +94,42 @@ def test_reconciliation_uses_live_jira_members(db, tenant):
 def test_get_provider_members_falls_back_to_mock_without_config(db, tenant):
     members = get_provider_members("jira", db, tenant.id)
     assert any(member.email == "alice.chen@acme.com" for member in members)
+
+
+def test_reconciliation_without_live_members_uses_saved_display_labels(db, tenant):
+    from app.models.operational import EmployeeIdentity
+
+    add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-001",
+        name="Alice Chen",
+        email="alice@acme.com",
+    )
+    db.add(
+        EmployeeIdentity(
+            tenant_id=tenant.id,
+            employee_id="emp-001",
+            provider="slack",
+            provider_username_or_id="U01ALICE",
+            provider_display_label="@alice.chen",
+            confidence="confirmed",
+        )
+    )
+    db.commit()
+
+    response = get_reconciliation(
+        db,
+        tenant,
+        connected_providers=["slack"],
+        include_live_members=False,
+    )
+
+    assert response.provider_members["slack"] == [
+        __import__("app.schemas.identity", fromlist=["ProviderMember"]).ProviderMember(
+            id="U01ALICE",
+            label="@alice.chen",
+            email=None,
+        )
+    ]
+    assert response.employees[0].mappings["slack"] == "U01ALICE"

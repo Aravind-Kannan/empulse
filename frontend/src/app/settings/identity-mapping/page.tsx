@@ -1,5 +1,5 @@
-import { IdentityMappingPage } from "@/components/identity-mapping/IdentityMappingPage";
+import { redirect } from "next/navigation";
 
 export default function IdentityMappingSettingsPage() {
-  return <IdentityMappingPage />;
+  redirect("/settings/org-chart?tab=identity");
 }
