@@ -57,12 +57,79 @@ export function wouldCreateCycle(
   if (!newManagerId) return false;
 
   let current: string | null = newManagerId;
+  const visited = new Set<string>();
   while (current) {
     if (current === employeeId) return true;
+    if (visited.has(current)) return false;
+    visited.add(current);
     const manager = employees.find((employee) => employee.id === current);
     current = manager?.manager_id ?? null;
   }
   return false;
+}
+
+export function employeeDepth(employees: Employee[], employeeId: string): number {
+  const byId = new Map(employees.map((employee) => [employee.id, employee]));
+  let depth = 0;
+  let current = byId.get(employeeId);
+  const visited = new Set<string>();
+  while (current?.manager_id) {
+    if (visited.has(current.id)) break;
+    visited.add(current.id);
+    depth += 1;
+    current = byId.get(current.manager_id);
+  }
+  return depth;
+}
+
+/** Pick the best drop target when several org nodes overlap (e.g. manager + report). */
+export function selectReparentTarget(
+  employees: Employee[],
+  draggedId: string,
+  candidateIds: string[],
+): string | null {
+  const valid = candidateIds.filter((id) => {
+    if (id === draggedId) return false;
+    return !wouldCreateCycle(employees, draggedId, id);
+  });
+  if (valid.length === 0) return null;
+  return [...valid].sort(
+    (left, right) => employeeDepth(employees, left) - employeeDepth(employees, right),
+  )[0];
+}
+
+export function mergeOrgChartForSave(
+  local: OrgChartPayload,
+  fresh: OrgChartPayload,
+  dirtyReportingEmployeeIds: ReadonlySet<string>,
+): OrgChartPayload {
+  const localById = new Map(local.employees.map((employee) => [employee.id, employee]));
+  const freshIds = new Set(fresh.employees.map((employee) => employee.id));
+
+  const mergedEmployees: Employee[] = fresh.employees.map((remote) => {
+    const edited = localById.get(remote.id);
+    if (!edited || !dirtyReportingEmployeeIds.has(remote.id)) {
+      return remote;
+    }
+    return {
+      ...remote,
+      manager_id: edited.manager_id,
+      team_name: edited.team_name ?? remote.team_name ?? null,
+    };
+  });
+
+  for (const employee of local.employees) {
+    if (!freshIds.has(employee.id)) {
+      mergedEmployees.push(employee);
+    }
+  }
+
+  return {
+    company: local.company || fresh.company,
+    employees: mergedEmployees,
+    components: fresh.components,
+    assignments: fresh.assignments,
+  };
 }
 
 export function flattenTree(

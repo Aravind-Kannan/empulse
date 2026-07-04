@@ -205,3 +205,78 @@ def test_persist_org_chart_preserves_auto_provisioned_components(db, tenant):
         scope_component_id("comp-manual", tenant.id),
         "comp-gh-auto",
     }
+
+
+def test_persist_org_chart_incremental_reporting_lines(db, tenant):
+    employees = [
+        EmployeeSchema(
+            id="emp-a",
+            name="A",
+            role="Team Member",
+            email="a@example.com",
+            tenure_years=1.0,
+        ),
+        EmployeeSchema(
+            id="emp-b",
+            name="B",
+            role="Team Member",
+            email="b@example.com",
+            tenure_years=1.0,
+        ),
+        EmployeeSchema(
+            id="emp-c",
+            name="C",
+            role="Team Member",
+            email="c@example.com",
+            tenure_years=1.0,
+        ),
+        EmployeeSchema(
+            id="emp-d",
+            name="D",
+            role="Team Member",
+            email="d@example.com",
+            tenure_years=1.0,
+        ),
+    ]
+    persist_org_chart(db, _payload(employees), tenant.id)
+
+    a_id = scope_employee_id("emp-a", tenant.id)
+    b_id = scope_employee_id("emp-b", tenant.id)
+    c_id = scope_employee_id("emp-c", tenant.id)
+    d_id = scope_employee_id("emp-d", tenant.id)
+
+    persist_org_chart(
+        db,
+        _payload(
+            [
+                employees[0],
+                employees[1].model_copy(update={"manager_id": "emp-a"}),
+                employees[2],
+                employees[3],
+            ]
+        ),
+        tenant.id,
+    )
+    row_b = db.get(Employee, b_id)
+    assert row_b is not None
+    assert row_b.manager_id == a_id
+
+    persist_org_chart(
+        db,
+        _payload(
+            [
+                employees[0],
+                employees[1].model_copy(update={"manager_id": "emp-a"}),
+                employees[2].model_copy(update={"manager_id": "emp-a"}),
+                employees[3].model_copy(update={"manager_id": "emp-a"}),
+            ]
+        ),
+        tenant.id,
+    )
+    managers = {
+        row.id: row.manager_id
+        for row in db.query(Employee).filter(Employee.tenant_id == tenant.id).all()
+    }
+    assert managers[b_id] == a_id
+    assert managers[c_id] == a_id
+    assert managers[d_id] == a_id

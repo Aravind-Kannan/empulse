@@ -10,9 +10,10 @@ from cognee.modules.pipelines.models.DataItemStatus import DataItemStatus
 
 from app.ontology.datapoints import ChangeEvent, CodeArtifact
 from app.ontology.relations import REL_AUTHORED, REL_DOCUMENTS
-from app.services.cognee_ingest import GraphComponent, GraphEmployee
+from app.services.cognee_ingest import GraphComponent, GraphEmployee, assign_org_graph_edges
 from app.services.integration_disconnect import external_key_to_node_ids
 from app.services.integration_sync import GraphCodeFile
+from app.schemas.org import EmployeeSchema, OrgChartIngestRequest
 from app.services.tenant_graph_purge import (
     _ensure_structured_ingest_stub_file,
     _sync_structured_ingest_data_row,
@@ -58,6 +59,58 @@ def test_tag_datapoints_tags_nested_edge_targets():
     assert tagged[0].belongs_to_set == [dataset]
     assert tagged[0].documents[1].belongs_to_set == [dataset]
     assert tagged[0].authored[1].belongs_to_set == [dataset]
+
+
+def test_tag_datapoints_with_cyclic_org_reporting_edges():
+    """Org-chart reportsTo/manages cycles must not blow the Python stack."""
+    payload = OrgChartIngestRequest(
+        company="Acme",
+        employees=[
+            EmployeeSchema(
+                id="emp-alice",
+                name="Alice",
+                role="Team Member",
+                email="alice@acme.com",
+                tenure_years=1.0,
+                manager_id="emp-bob",
+            ),
+            EmployeeSchema(
+                id="emp-bob",
+                name="Bob",
+                role="Team Member",
+                email="bob@acme.com",
+                tenure_years=2.0,
+                manager_id=None,
+            ),
+        ],
+        components=[],
+        assignments=[],
+    )
+    employee_nodes = {
+        employee.id: GraphEmployee(
+            external_id=employee.id,
+            name=employee.name,
+            role=employee.role,
+            email=employee.email,
+            tenure_years=employee.tenure_years,
+        )
+        for employee in payload.employees
+    }
+    assign_org_graph_edges(payload, employee_nodes, {})
+    dataset = "empulse_tenant_cyclic"
+    tagged = tag_datapoints_with_dataset(
+        list(employee_nodes.values()),
+        dataset,
+    )
+    assert len(tagged) == 2
+    for node in tagged:
+        assert node.belongs_to_set == [dataset]
+    alice = employee_nodes["emp-alice"]
+    bob = employee_nodes["emp-bob"]
+    assert alice.reportsTo is not None
+    assert bob.manages is not None
+    assert alice.reportsTo[1] is bob
+    assert bob.manages[1] is alice
 
 
 def test_expand_ingest_with_org_anchors_adds_referenced_nodes():

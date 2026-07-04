@@ -122,48 +122,93 @@ def _merge_dataset_tag(point: DataPoint, dataset_name: str) -> None:
     point.belongs_to_set = _belongs_to_tags(getattr(point, "belongs_to_set", None), dataset_name)
 
 
-def _tag_datapoint_tree(target: Any, dataset_name: str) -> None:
+def _tag_datapoint_tree(
+    target: Any,
+    dataset_name: str,
+    *,
+    visited: set[int] | None = None,
+) -> None:
+    if visited is None:
+        visited = set()
     if isinstance(target, list):
         for item in target:
-            _tag_datapoint_tree(item, dataset_name)
+            _tag_datapoint_tree(item, dataset_name, visited=visited)
         return
     if not isinstance(target, DataPoint):
         return
+    object_id = id(target)
+    if object_id in visited:
+        return
+    visited.add(object_id)
     _merge_dataset_tag(target, dataset_name)
     for attr in GRAPH_EDGE_FIELD_ATTRS:
-        _tag_edge_field_targets(getattr(target, attr, None), dataset_name)
+        _tag_edge_field_targets(
+            getattr(target, attr, None),
+            dataset_name,
+            visited=visited,
+        )
 
 
-def _tag_edge_field_targets(field: Any, dataset_name: str) -> None:
+def _tag_edge_field_targets(
+    field: Any,
+    dataset_name: str,
+    *,
+    visited: set[int] | None = None,
+) -> None:
     if field is None:
         return
     if isinstance(field, tuple) and len(field) == 2:
-        _tag_datapoint_tree(field[1], dataset_name)
+        _tag_datapoint_tree(field[1], dataset_name, visited=visited)
         return
     if isinstance(field, list):
         for item in field:
             if isinstance(item, tuple) and len(item) == 2:
-                _tag_datapoint_tree(item[1], dataset_name)
+                _tag_datapoint_tree(item[1], dataset_name, visited=visited)
             else:
-                _tag_datapoint_tree(item, dataset_name)
+                _tag_datapoint_tree(item, dataset_name, visited=visited)
         return
-    _tag_datapoint_tree(field, dataset_name)
+    _tag_datapoint_tree(field, dataset_name, visited=visited)
 
 
-def _walk_edge_field_targets(field: Any, visit: Any) -> None:
+def _walk_edge_field_targets(
+    field: Any,
+    visit: Any,
+    *,
+    visited: set[int] | None = None,
+) -> None:
     if field is None:
         return
     if isinstance(field, tuple) and len(field) == 2:
-        visit(field[1])
+        _visit_datapoint_target(field[1], visit, visited=visited)
         return
     if isinstance(field, list):
         for item in field:
             if isinstance(item, tuple) and len(item) == 2:
-                visit(item[1])
+                _visit_datapoint_target(item[1], visit, visited=visited)
             else:
-                visit(item)
+                _visit_datapoint_target(item, visit, visited=visited)
         return
-    visit(field)
+    _visit_datapoint_target(field, visit, visited=visited)
+
+
+def _visit_datapoint_target(
+    target: Any,
+    visit: Any,
+    *,
+    visited: set[int] | None = None,
+) -> None:
+    if visited is None:
+        visited = set()
+    if isinstance(target, list):
+        for item in target:
+            _visit_datapoint_target(item, visit, visited=visited)
+        return
+    if isinstance(target, DataPoint):
+        object_id = id(target)
+        if object_id in visited:
+            return
+        visited.add(object_id)
+    visit(target)
 
 
 def _collect_referenced_org_external_ids(data_points: list[Any]) -> tuple[set[str], set[str]]:
@@ -245,7 +290,8 @@ def tag_datapoints_with_dataset(data_points: list[Any], dataset_name: str) -> li
     """Stamp belongs_to_set on nodes and nested edge targets for shared Neo4j scope."""
     tagged: list[Any] = []
     for point in data_points:
-        copy = point.model_copy(deep=True)
+        # Shallow copy only: org-chart reporting edges form cycles (reportsTo ↔ manages).
+        copy = point.model_copy(deep=False)
         _tag_datapoint_tree(copy, dataset_name)
         tagged.append(copy)
     return tagged

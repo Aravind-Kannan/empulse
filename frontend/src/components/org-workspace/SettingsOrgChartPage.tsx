@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { OrgWorkspace } from "@/components/org-workspace/OrgWorkspace";
 import { consolidateOrgComponents, deleteOrgEmployee, deleteOrgComponent, fetchOrgChart, ingestOrgChart, updateOrgComponent, updateOrgEmployee } from "@/lib/api";
-import { removeEmployeeFromOrgChart, wouldCreateCycle } from "@/lib/org-tree-utils";
+import { mergeOrgChartForSave, removeEmployeeFromOrgChart, wouldCreateCycle } from "@/lib/org-tree-utils";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
 import { useWorkspace } from "@/context/WorkspaceContext";
 
@@ -19,21 +19,15 @@ export function SettingsOrgChartPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingComponent, setIsSavingComponent] = useState(false);
   const [isDeletingComponent, setIsDeletingComponent] = useState(false);
+  const dirtyReportingEmployeeIds = useRef(new Set<string>());
 
   const reloadOrgChart = useCallback(async () => {
     setIsRefreshing(true);
     try {
       await consolidateOrgComponents();
       const fresh = await fetchOrgChart();
-      setOrgChart((prev) =>
-        prev
-          ? {
-              ...prev,
-              components: fresh.components,
-              assignments: fresh.assignments,
-            }
-          : fresh,
-      );
+      setOrgChart(fresh);
+      dirtyReportingEmployeeIds.current.clear();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh org chart");
     } finally {
@@ -56,6 +50,7 @@ export function SettingsOrgChartPage() {
         if (!prev || wouldCreateCycle(prev.employees, employeeId, managerId)) {
           return prev;
         }
+        dirtyReportingEmployeeIds.current.add(employeeId);
         return {
           ...prev,
           employees: prev.employees.map((employee) =>
@@ -100,6 +95,8 @@ export function SettingsOrgChartPage() {
           component_ids: assignments.map((item) => item.component_id),
         },
       });
+
+      dirtyReportingEmployeeIds.current.delete(employee.id);
 
       setOrgChart((prev) => {
         if (!prev) return prev;
@@ -206,22 +203,21 @@ export function SettingsOrgChartPage() {
     setError(null);
     try {
       const fresh = await fetchOrgChart();
-      await ingestOrgChart(
-        {
-          ...orgChart,
-          components: fresh.components,
-        },
-        {
+      const payload = mergeOrgChartForSave(
+        orgChart,
+        fresh,
+        dirtyReportingEmployeeIds.current,
+      );
+      await ingestOrgChart(payload, {
         onStatus: (status) => {
           if (status.status === "queued" || status.status === "running") {
             setSavingLabel("Syncing to Cognee…");
           }
         },
-      },
-      );
-      setOrgChart((prev) =>
-        prev ? { ...prev, components: fresh.components } : fresh,
-      );
+      });
+      const saved = await fetchOrgChart();
+      setOrgChart(saved);
+      dirtyReportingEmployeeIds.current.clear();
       await refreshOperationalState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");

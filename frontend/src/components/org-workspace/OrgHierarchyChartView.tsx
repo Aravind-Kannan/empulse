@@ -30,6 +30,7 @@ import {
   collectLayoutNodes,
   layoutEmployeeTree,
   NODE_WIDTH,
+  selectReparentTarget,
   wouldCreateCycle,
 } from "@/lib/org-tree-utils";
 import type { Employee } from "@/lib/types";
@@ -198,7 +199,11 @@ function OrgHierarchyCanvas({
       const intersections = getIntersectingNodes(node).filter(
         (item) => item.id !== node.id,
       );
-      const nextTarget = intersections[0]?.id ?? null;
+      const nextTarget = selectReparentTarget(
+        employees,
+        node.id,
+        intersections.map((item) => item.id),
+      );
       setDropTargetId(nextTarget);
 
       setNodes((current) =>
@@ -219,7 +224,11 @@ function OrgHierarchyCanvas({
       const intersections = getIntersectingNodes(node).filter(
         (item) => item.id !== node.id,
       );
-      const targetId = intersections[0]?.id ?? null;
+      const targetId = selectReparentTarget(
+        employees,
+        node.id,
+        intersections.map((item) => item.id),
+      );
 
       setDropTargetId(null);
 

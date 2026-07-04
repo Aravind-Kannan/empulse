@@ -245,9 +245,11 @@ def persist_org_chart(
 
     db.flush()
     db.query(Employee).filter(Employee.tenant_id == tenant_id).update(
-        {Employee.manager_id: None}, synchronize_session=False
+        {Employee.manager_id: None},
+        synchronize_session=False,
     )
     db.flush()
+    db.expire_all()
 
     for component in payload.components:
         row = db.get(Component, component.id)
