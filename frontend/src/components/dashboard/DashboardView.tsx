@@ -9,6 +9,7 @@ import {
   Clock,
   Loader2,
   Network,
+  Plug,
   RefreshCw,
   Search,
   Sparkles,
@@ -26,6 +27,7 @@ import {
 import type { DashboardMetrics } from "@/lib/types";
 
 import { AnimatedMetricValue } from "./AnimatedMetricValue";
+import { DashboardCharts } from "./DashboardCharts";
 import { SetupChecklist } from "./SetupChecklist";
 
 const REVEAL_EASE = [0.16, 1, 0.3, 1] as const;
@@ -110,8 +112,8 @@ function MetricCard({
       className={`group relative overflow-hidden rounded-2xl border p-5 backdrop-blur-sm transition-colors ${
         alert
           ? "border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-zinc-900/60 to-zinc-950/80"
-          : "border-zinc-800/80 bg-gradient-to-br from-zinc-900/70 via-zinc-900/40 to-zinc-950/60"
-      } ${href ? "hover:border-zinc-600/80" : ""}`}
+          : "border-zinc-700/80 bg-gradient-to-br from-zinc-900/70 via-zinc-900/40 to-zinc-950/60"
+      } ${href ? "hover:border-zinc-500/80" : ""}`}
     >
       {glow && !reducedMotion && (
         <motion.div
@@ -129,11 +131,11 @@ function MetricCard({
       )}
 
       <div className="relative mb-4 flex items-start justify-between gap-3">
-        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-300">
           {label}
         </p>
         <div
-          className={`flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800/80 bg-zinc-950/60 ${accent}`}
+          className={`flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700/80 bg-zinc-950/60 ${accent}`}
         >
           <Icon className="h-4 w-4" />
         </div>
@@ -148,13 +150,13 @@ function MetricCard({
       </p>
 
       {hint && (
-        <p className="relative mt-2 text-xs text-zinc-500 group-hover:text-zinc-400">
+        <p className="relative mt-2 text-xs text-zinc-400 group-hover:text-zinc-300">
           {hint}
         </p>
       )}
 
       {href && (
-        <ArrowUpRight className="absolute bottom-4 right-4 h-4 w-4 text-zinc-600 opacity-0 transition group-hover:opacity-100 group-hover:text-zinc-400" />
+        <ArrowUpRight className="absolute bottom-4 right-4 h-4 w-4 text-zinc-500 opacity-0 transition group-hover:opacity-100 group-hover:text-zinc-300" />
       )}
     </motion.div>
   );
@@ -169,17 +171,13 @@ function DashboardSkeleton() {
   return (
     <div className="space-y-8">
       <div className="h-16 animate-pulse rounded-xl border border-zinc-800/60 bg-zinc-900/40" />
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, index) => (
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 6 }).map((_, index) => (
           <div
             key={index}
             className="h-36 animate-pulse rounded-2xl border border-zinc-800/60 bg-zinc-900/40"
           />
         ))}
-      </div>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="h-64 animate-pulse rounded-2xl border border-zinc-800/60 bg-zinc-900/40 lg:col-span-2" />
-        <div className="h-64 animate-pulse rounded-2xl border border-zinc-800/60 bg-zinc-900/40" />
       </div>
     </div>
   );
@@ -238,16 +236,8 @@ export function DashboardView() {
             Dashboard
           </h1>
           <p className="mt-1 text-sm text-zinc-400">
-            Live aggregates across all workspaces.
+            Key signals across your workspace — each metric shown once.
           </p>
-          <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
-            <span className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-1.5">
-              {resolvedMetrics.employee_count} team members
-            </span>
-            <span className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-1.5">
-              {connectedCount}/{totalIntegrations} integrations
-            </span>
-          </div>
         </div>
 
         <button
@@ -261,20 +251,30 @@ export function DashboardView() {
           ) : (
             <RefreshCw className="h-3.5 w-3.5" />
           )}
-          Refresh metrics
+          Refresh
         </button>
       </motion.header>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <MetricCard
-          label="Average Attrition"
-          numericValue={resolvedMetrics.average_attrition_rate}
-          suffix="%"
-          icon={TrendingDown}
-          accent="text-rose-400"
-          glow="bg-rose-500/30"
-          hint="Rolling org-wide departure rate"
+          label="Team Members"
+          numericValue={resolvedMetrics.employee_count}
+          icon={Users}
+          accent="text-violet-400"
+          glow="bg-violet-500/30"
+          hint="People on your org chart"
           delay={0.05}
+        />
+        <MetricCard
+          label="Integrations Live"
+          numericValue={connectedCount}
+          suffix={` / ${totalIntegrations}`}
+          icon={Plug}
+          accent="text-emerald-400"
+          glow="bg-emerald-500/30"
+          href="/settings/integrations"
+          hint="Connected data sources"
+          delay={0.08}
         />
         <MetricCard
           label="Average Tenure"
@@ -285,7 +285,17 @@ export function DashboardView() {
           accent="text-sky-400"
           glow="bg-sky-500/30"
           hint="Mean years with the organization"
-          delay={0.1}
+          delay={0.11}
+        />
+        <MetricCard
+          label="Average Attrition"
+          numericValue={resolvedMetrics.average_attrition_rate}
+          suffix="%"
+          icon={TrendingDown}
+          accent="text-rose-400"
+          glow="bg-rose-500/30"
+          hint="Rolling org-wide departure rate"
+          delay={0.14}
         />
         <MetricCard
           label="Open Incidents"
@@ -295,8 +305,8 @@ export function DashboardView() {
           glow="bg-amber-500/30"
           href="/investigation"
           alert={resolvedMetrics.open_incident_count > 0}
-          hint="Active investigation workspace items"
-          delay={0.15}
+          hint="Active investigation items"
+          delay={0.17}
         />
         <MetricCard
           label="Active SPOFs"
@@ -306,10 +316,12 @@ export function DashboardView() {
           glow="bg-orange-500/30"
           href="/kra?filter=spof"
           alert={resolvedMetrics.active_spof_count > 0}
-          hint="Single points of failure in KRA graph"
+          hint="Single points of failure in KRA"
           delay={0.2}
         />
       </div>
+
+      <DashboardCharts />
 
       <SetupChecklist />
 
@@ -322,10 +334,10 @@ export function DashboardView() {
         >
           <div className="mb-5 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-400">
+              <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-200">
                 Workspace shortcuts
               </h2>
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-zinc-400">
                 Jump into specialized risk surfaces
               </p>
             </div>
@@ -353,7 +365,7 @@ export function DashboardView() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-zinc-100">{label}</p>
-                    <p className="mt-0.5 text-xs text-zinc-500">{description}</p>
+                    <p className="mt-0.5 text-xs text-zinc-400">{description}</p>
                   </div>
                   <ArrowUpRight className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600 transition group-hover:text-zinc-300" />
                 </Link>
@@ -371,10 +383,10 @@ export function DashboardView() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,_rgba(56,189,248,0.08),_transparent_60%)]" />
 
           <div className="relative">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-200">
               Executive digest
             </h2>
-            <p className="mt-1 text-xs text-zinc-500">
+            <p className="mt-1 text-xs text-zinc-400">
               Scheduled summary for leadership inboxes
             </p>
 
@@ -400,7 +412,7 @@ export function DashboardView() {
               </label>
 
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-wide text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-wide text-zinc-400">
                   Schedule
                 </label>
                 <select
@@ -417,9 +429,8 @@ export function DashboardView() {
                 </select>
               </div>
 
-              <p className="text-xs leading-relaxed text-zinc-600">
-                Covers {resolvedMetrics.employee_count} employees across connected
-                workspaces. Settings persist locally for this session.
+              <p className="text-xs leading-relaxed text-zinc-400">
+                Settings persist locally for this session.
               </p>
             </div>
           </div>
