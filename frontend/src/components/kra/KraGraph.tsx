@@ -32,24 +32,39 @@ const MIN_GRAPH_WIDTH = 720;
 const MIN_GRAPH_HEIGHT = 280;
 /** Scroll viewport cap — layout keeps full node spacing inside viewBox. */
 const SCROLL_VIEWPORT_MAX = 560;
-const PADDING_Y = 48;
+const GRAPH_PADDING_TOP = 40;
+const GRAPH_PADDING_BOTTOM = 36;
 const COLUMN_INSET = 140;
-const ENGINEER_MIN_GAP = 88;
+const ENGINEER_MIN_GAP = 92;
 const COMPONENT_MIN_GAP = 84;
 const ENGINEER_RADIUS = 22;
+const ENGINEER_NAME_OFFSET = 12;
 const COMPONENT_HALF_W = 52;
 const COMPONENT_HALF_H = 26;
+const ENGINEER_ABOVE = ENGINEER_RADIUS;
+const ENGINEER_BELOW = ENGINEER_RADIUS + ENGINEER_NAME_OFFSET;
+const COMPONENT_ABOVE = COMPONENT_HALF_H + 14;
+const COMPONENT_BELOW = COMPONENT_HALF_H;
 
-function columnPositions(count: number, minGap: number, height: number): number[] {
+function columnPositions(
+  count: number,
+  minGap: number,
+  height: number,
+  extentAbove: number,
+  extentBelow: number,
+): number[] {
   if (count === 0) return [];
-  if (count === 1) return [height / 2];
 
-  const available = height - PADDING_Y * 2;
-  const gap = Math.max(minGap, available / (count - 1));
+  const minY = GRAPH_PADDING_TOP + extentAbove;
+  const maxY = height - GRAPH_PADDING_BOTTOM - extentBelow;
+  if (count === 1) return [(minY + maxY) / 2];
+
+  const span = maxY - minY;
+  const gap = Math.max(minGap, span / (count - 1));
   const totalSpan = (count - 1) * gap;
-  const top = (height - totalSpan) / 2;
+  const start = minY + (span - totalSpan) / 2;
 
-  return Array.from({ length: count }, (_, index) => top + index * gap);
+  return Array.from({ length: count }, (_, index) => start + index * gap);
 }
 
 function layoutGraph(graph: KraAnalyticsResponse, graphWidth: number): GraphLayout {
@@ -64,14 +79,26 @@ function layoutGraph(graph: KraAnalyticsResponse, graphWidth: number): GraphLayo
     components.length <= 1 ? 0 : (components.length - 1) * COMPONENT_MIN_GAP;
   const height = Math.max(
     MIN_GRAPH_HEIGHT,
-    Math.max(engineerSpan, componentSpan, 96) + PADDING_Y * 2,
+    Math.max(engineerSpan, componentSpan, 96) +
+      GRAPH_PADDING_TOP +
+      GRAPH_PADDING_BOTTOM +
+      ENGINEER_ABOVE +
+      ENGINEER_BELOW,
   );
 
-  const engineerYs = columnPositions(engineers.length, ENGINEER_MIN_GAP, height);
+  const engineerYs = columnPositions(
+    engineers.length,
+    ENGINEER_MIN_GAP,
+    height,
+    ENGINEER_ABOVE,
+    ENGINEER_BELOW,
+  );
   const componentYs = columnPositions(
     components.length,
     COMPONENT_MIN_GAP,
     height,
+    COMPONENT_ABOVE,
+    COMPONENT_BELOW,
   );
 
   const nodes: PositionedNode[] = [
@@ -90,14 +117,55 @@ function layoutGraph(graph: KraAnalyticsResponse, graphWidth: number): GraphLayo
   return { nodes, width: graphWidth, height };
 }
 
+function linkEndpoints(
+  source: PositionedNode,
+  target: PositionedNode,
+): { x1: number; y1: number; x2: number; y2: number; midX: number } {
+  const x1 = source.x + (source.type === "engineer" ? ENGINEER_RADIUS : COMPONENT_HALF_W);
+  const x2 = target.x - (target.type === "component" ? COMPONENT_HALF_W : ENGINEER_RADIUS);
+  const midX = (x1 + x2) / 2;
+  return { x1, y1: source.y, x2, y2: target.y, midX };
+}
+
 function linkPath(
   source: PositionedNode,
   target: PositionedNode,
 ): string {
-  const x1 = source.x + (source.type === "engineer" ? ENGINEER_RADIUS : COMPONENT_HALF_W);
-  const x2 = target.x - (target.type === "component" ? COMPONENT_HALF_W : ENGINEER_RADIUS);
-  const midX = (x1 + x2) / 2;
-  return `M ${x1} ${source.y} C ${midX} ${source.y}, ${midX} ${target.y}, ${x2} ${target.y}`;
+  const { x1, y1, x2, y2, midX } = linkEndpoints(source, target);
+  return `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+}
+
+function getEngineerInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+function cubicBezierMidpoint(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x3: number,
+  y3: number,
+): { x: number; y: number } {
+  const t = 0.5;
+  const mt = 1 - t;
+  return {
+    x:
+      mt ** 3 * x0 +
+      3 * mt ** 2 * t * x1 +
+      3 * mt * t ** 2 * x2 +
+      t ** 3 * x3,
+    y:
+      mt ** 3 * y0 +
+      3 * mt ** 2 * t * y1 +
+      3 * mt * t ** 2 * y2 +
+      t ** 3 * y3,
+  };
 }
 
 export function KraGraph({
@@ -112,6 +180,7 @@ export function KraGraph({
   const dotPatternId = `kra-dots-${uid}`;
   const viewportRef = useRef<HTMLDivElement>(null);
   const [graphWidth, setGraphWidth] = useState(MIN_GRAPH_WIDTH);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -137,6 +206,17 @@ export function KraGraph({
     [layout.nodes],
   );
 
+  const hoveredLinkKeys = useMemo(() => {
+    if (!hoveredNodeId) return null;
+    const keys = new Set<string>();
+    for (const link of graph.links) {
+      if (link.source === hoveredNodeId || link.target === hoveredNodeId) {
+        keys.add(`${link.source}-${link.target}`);
+      }
+    }
+    return keys;
+  }, [graph.links, hoveredNodeId]);
+
   const engineerCount = graph.nodes.filter((node) => node.type === "engineer").length;
   const componentCount = graph.nodes.filter((node) => node.type === "component").length;
   const scrollViewportHeight = Math.min(layout.height, SCROLL_VIEWPORT_MAX);
@@ -149,13 +229,31 @@ export function KraGraph({
             Ownership map
           </h2>
           <p className="mt-0.5 text-[10px] text-zinc-500">
-            {engineerCount} engineer{engineerCount === 1 ? "" : "s"} · {componentCount}{" "}
-            component{componentCount === 1 ? "" : "s"}
+            Who owns which codebase areas
           </p>
         </div>
-        <p className="hidden text-[10px] text-zinc-600 sm:block">
-          Select a component for detail
+        <p className="hidden text-[10px] text-zinc-500 sm:block">
+          Hover a node · click a component for detail
         </p>
+      </div>
+
+      <div className="grid grid-cols-2 border-b border-zinc-800/60 bg-zinc-950/50">
+        <div className="border-r border-zinc-800/40 px-3 py-2 text-center">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-sky-400/90">
+            Engineers
+          </p>
+          <p className="mt-0.5 text-[10px] tabular-nums text-zinc-500">
+            {engineerCount} linked
+          </p>
+        </div>
+        <div className="px-3 py-2 text-center">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-400/90">
+            Components
+          </p>
+          <p className="mt-0.5 text-[10px] tabular-nums text-zinc-500">
+            {componentCount} in scope
+          </p>
+        </div>
       </div>
 
       <div
@@ -228,9 +326,9 @@ export function KraGraph({
 
           <rect
             x={16}
-            y={14}
+            y={8}
             width={layout.width / 2 - 32}
-            height={layout.height - 28}
+            height={layout.height - 16}
             rx={10}
             fill="#0ea5e906"
             stroke="#0ea5e912"
@@ -238,36 +336,33 @@ export function KraGraph({
           />
           <rect
             x={layout.width / 2 + 16}
-            y={14}
+            y={8}
             width={layout.width / 2 - 32}
-            height={layout.height - 28}
+            height={layout.height - 16}
             rx={10}
             fill="#f9731606"
             stroke="#f9731612"
             strokeWidth={1}
           />
 
-          <text
-            x={COLUMN_INSET}
-            y={28}
-            textAnchor="middle"
-            className="fill-sky-400/60 text-[9px] font-medium uppercase tracking-[0.14em]"
-          >
-            Engineers
-          </text>
-          <text
-            x={layout.width - COLUMN_INSET}
-            y={28}
-            textAnchor="middle"
-            className="fill-amber-400/60 text-[9px] font-medium uppercase tracking-[0.14em]"
-          >
-            Components
-          </text>
+          <line
+            x1={layout.width / 2}
+            y1={8}
+            x2={layout.width / 2}
+            y2={layout.height - 8}
+            stroke="#3f3f46"
+            strokeOpacity={0.35}
+            strokeDasharray="4 4"
+          />
 
           {graph.links.map((link) => {
             const source = positionById.get(link.source);
             const target = positionById.get(link.target);
             if (!source || !target) return null;
+
+            const linkKey = `${link.source}-${link.target}`;
+            const isHoveredLink = hoveredLinkKeys?.has(linkKey) ?? false;
+            const hoverActive = hoveredLinkKeys != null;
 
             const targetDimmed =
               filterActive &&
@@ -280,12 +375,22 @@ export function KraGraph({
 
             return (
               <path
-                key={`${link.source}-${link.target}`}
+                key={linkKey}
                 d={linkPath(source, target)}
                 fill="none"
-                stroke={targetDimmed ? "#3f3f46" : "#52525b"}
-                strokeWidth={strokeWidth}
-                strokeOpacity={targetDimmed ? 0.12 : 0.45}
+                stroke={
+                  isHoveredLink ? "#38bdf8" : targetDimmed ? "#3f3f46" : "#52525b"
+                }
+                strokeWidth={isHoveredLink ? Math.max(strokeWidth, 2) : strokeWidth}
+                strokeOpacity={
+                  isHoveredLink
+                    ? 0.9
+                    : hoverActive
+                      ? 0.1
+                      : targetDimmed
+                        ? 0.12
+                        : 0.45
+                }
               />
             );
           })}
@@ -306,11 +411,15 @@ export function KraGraph({
               !highlightCriticalSpofIds.has(node.id);
 
             if (node.type === "engineer") {
+              const isHovered = hoveredNodeId === node.id;
               return (
                 <g
                   key={node.id}
                   transform={`translate(${node.x}, ${node.y})`}
-                  opacity={filterActive ? 0.4 : 1}
+                  opacity={filterActive && !isHovered ? 0.4 : 1}
+                  onMouseEnter={() => setHoveredNodeId(node.id)}
+                  onMouseLeave={() => setHoveredNodeId(null)}
+                  className="cursor-default"
                 >
                   <circle
                     r={ENGINEER_RADIUS}
@@ -319,22 +428,21 @@ export function KraGraph({
                     strokeWidth={1.5}
                     strokeOpacity={0.85}
                   />
+                  <title>{node.label}</title>
                   <text
                     textAnchor="middle"
-                    y={3}
-                    className="fill-zinc-100 text-[9px] font-medium"
+                    y={4}
+                    className="fill-zinc-100 text-[10px] font-semibold"
                   >
-                    {truncateComponentLabel(node.label.split(" ")[0] ?? node.label, 11)}
+                    {getEngineerInitials(node.label)}
                   </text>
-                  {node.role && (
-                    <text
-                      textAnchor="middle"
-                      y={ENGINEER_RADIUS + 11}
-                      className="fill-zinc-500 text-[8px]"
-                    >
-                      {truncateComponentLabel(node.role, 18)}
-                    </text>
-                  )}
+                  <text
+                    textAnchor="middle"
+                    y={ENGINEER_RADIUS + ENGINEER_NAME_OFFSET}
+                    className="fill-zinc-300 text-[8px] font-medium"
+                  >
+                    {truncateComponentLabel(node.label.split(" ")[0] ?? node.label, 14)}
+                  </text>
                 </g>
               );
             }
@@ -345,13 +453,17 @@ export function KraGraph({
               node.label,
             );
 
+            const isHovered = hoveredNodeId === node.id;
+
             return (
               <g
                 key={node.id}
                 transform={`translate(${node.x}, ${node.y})`}
                 className="cursor-pointer"
-                opacity={dimmed ? 0.22 : 1}
+                opacity={dimmed && !isHovered ? 0.22 : 1}
                 onClick={() => onSelectComponent(node)}
+                onMouseEnter={() => setHoveredNodeId(node.id)}
+                onMouseLeave={() => setHoveredNodeId(null)}
               >
                 <rect
                   x={-COMPONENT_HALF_W}
@@ -445,6 +557,46 @@ export function KraGraph({
               </g>
             );
           })}
+
+          {hoveredLinkKeys &&
+            graph.links.map((link) => {
+              if (!hoveredLinkKeys.has(`${link.source}-${link.target}`)) return null;
+              if (link.codebase_share_pct == null) return null;
+
+              const source = positionById.get(link.source);
+              const target = positionById.get(link.target);
+              if (!source || !target) return null;
+
+              const { x1, y1, x2, y2, midX } = linkEndpoints(source, target);
+              const labelPos = cubicBezierMidpoint(x1, y1, midX, y1, midX, y2, x2, y2);
+              const label = `${link.codebase_share_pct.toFixed(1)}%`;
+              const labelWidth = label.length * 5.2 + 8;
+
+              return (
+                <g key={`label-${link.source}-${link.target}`} pointerEvents="none">
+                  <rect
+                    x={labelPos.x - labelWidth / 2}
+                    y={labelPos.y - 8}
+                    width={labelWidth}
+                    height={16}
+                    rx={4}
+                    fill="#09090b"
+                    fillOpacity={0.92}
+                    stroke="#38bdf8"
+                    strokeOpacity={0.35}
+                    strokeWidth={1}
+                  />
+                  <text
+                    x={labelPos.x}
+                    y={labelPos.y + 3}
+                    textAnchor="middle"
+                    className="fill-sky-300 text-[9px] font-medium"
+                  >
+                    {label}
+                  </text>
+                </g>
+              );
+            })}
         </svg>
       </div>
 

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.operational import Component, Employee, FileRiskSnapshot
 from app.services.github_doa import DOA_AUTHOR_THRESHOLD, _should_exclude_path, compute_doa_for_file
+from app.services.role_utils import is_leadership_role
 from app.services.github_touch import FileTouch as DoaFileTouch
 from app.services.github_touch import build_file_touch_indexes
 from app.services.github_types import GitHubCommitActivity, GitHubPullRequestActivity
@@ -20,8 +21,13 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_WINDOW_DAYS = 90
 HIGH_CHURN_PR_THRESHOLD = 3
-FEW_CONTRIBUTORS_THRESHOLD = 2
 MIN_TOUCHES = 3
+SMALL_TEAM_SIZE_THRESHOLD = 8
+SMALL_TEAM_HIGH_CHURN_THRESHOLD = 2
+SMALL_TEAM_MIN_TOUCHES = 2
+MIN_CONTRIBUTOR_COVERAGE_PCT = 50.0
+MIN_BUS_FACTOR_COVERAGE_PCT = 25.0
+MAX_PRIMARY_OWNER_DOA_PCT = 75.0
 
 TEST_PATH_MARKERS = (
     "/test/",
@@ -73,12 +79,71 @@ def should_exclude_file_path(path: str) -> bool:
     return _should_exclude_path(path)
 
 
-def classify_quadrant(*, churn_score: int, contributor_count: int) -> Quadrant:
-    high_churn = churn_score >= HIGH_CHURN_PR_THRESHOLD
-    few_contributors = contributor_count <= FEW_CONTRIBUTORS_THRESHOLD
-    if few_contributors and high_churn:
+def _active_engineering_team_size(db: Session, tenant_id: uuid.UUID) -> int:
+    team = [
+        employee
+        for employee in db.query(Employee)
+        .filter(Employee.tenant_id == tenant_id, Employee.active.is_(True))
+        .all()
+        if not is_leadership_role(employee.role)
+    ]
+    return max(len(team), 1)
+
+
+def _high_churn_threshold(team_size: int) -> int:
+    if team_size <= SMALL_TEAM_SIZE_THRESHOLD:
+        return SMALL_TEAM_HIGH_CHURN_THRESHOLD
+    return HIGH_CHURN_PR_THRESHOLD
+
+
+def _min_touches_threshold(team_size: int) -> int:
+    if team_size <= SMALL_TEAM_SIZE_THRESHOLD:
+        return SMALL_TEAM_MIN_TOUCHES
+    return MIN_TOUCHES
+
+
+def _contributor_coverage_pct(contributor_count: int, team_size: int) -> float:
+    return (contributor_count / max(team_size, 1)) * 100.0
+
+
+def _bus_factor_coverage_pct(bus_factor: int, team_size: int) -> float:
+    return (bus_factor / max(team_size, 1)) * 100.0
+
+
+def _has_ownership_risk(
+    *,
+    contributor_count: int,
+    team_size: int,
+    bus_factor: int,
+    primary_owner_doa_pct: float | None,
+) -> bool:
+    if _contributor_coverage_pct(contributor_count, team_size) < MIN_CONTRIBUTOR_COVERAGE_PCT:
+        return True
+    if _bus_factor_coverage_pct(bus_factor, team_size) < MIN_BUS_FACTOR_COVERAGE_PCT:
+        return True
+    if primary_owner_doa_pct is not None and primary_owner_doa_pct >= MAX_PRIMARY_OWNER_DOA_PCT:
+        return True
+    return False
+
+
+def classify_quadrant(
+    *,
+    churn_score: int,
+    contributor_count: int,
+    team_size: int = 20,
+    bus_factor: int = 1,
+    primary_owner_doa_pct: float | None = None,
+) -> Quadrant:
+    high_churn = churn_score >= _high_churn_threshold(team_size)
+    ownership_risk = _has_ownership_risk(
+        contributor_count=contributor_count,
+        team_size=team_size,
+        bus_factor=bus_factor,
+        primary_owner_doa_pct=primary_owner_doa_pct,
+    )
+    if ownership_risk and high_churn:
         return "critical"
-    if few_contributors:
+    if ownership_risk:
         return "stable_niche"
     if high_churn:
         return "active_shared"
@@ -102,6 +167,8 @@ def compute_file_risk_from_activities(
 ) -> list[FileRiskRecord]:
     now = computed_at or datetime.now(UTC)
     cutoff = now - timedelta(days=window_days)
+    team_size = _active_engineering_team_size(db, tenant_id)
+    min_touches = _min_touches_threshold(team_size)
 
     file_events, _ = build_file_touch_indexes(
         db,
@@ -129,7 +196,7 @@ def compute_file_risk_from_activities(
     for key, churn_keys in pr_ids_by_file.items():
         component_id, file_path = key
         churn_score = len(churn_keys)
-        if churn_score < MIN_TOUCHES:
+        if churn_score < min_touches:
             continue
 
         contributor_count = len(contributors_by_file[key])
@@ -148,6 +215,9 @@ def compute_file_risk_from_activities(
         quadrant = classify_quadrant(
             churn_score=churn_score,
             contributor_count=contributor_count,
+            team_size=team_size,
+            bus_factor=bus_factor,
+            primary_owner_doa_pct=primary_doa,
         )
         records.append(
             FileRiskRecord(

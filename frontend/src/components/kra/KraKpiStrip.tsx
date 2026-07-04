@@ -282,14 +282,11 @@ function formatDocAge(lastEdit: string | null): string | null {
   return `${days}d ago`;
 }
 
-function resolveDocLink(
-  sources: string[],
-  urls: string[],
-): { label: string; url: string | null } {
-  const url = urls.find((entry) => entry.startsWith("http")) ?? null;
-  const rawLabel = sources[0]?.replace(/^Notion:\s*/i, "").trim() ?? "";
-  const label = rawLabel || "Documentation";
-  return { label, url };
+function formatNotionSourceNames(sources: string[]): string | null {
+  const names = sources
+    .map((source) => source.replace(/^Notion:\s*/i, "").trim())
+    .filter(Boolean);
+  return names.length > 0 ? names.join(", ") : null;
 }
 
 function DocCoverageRow({
@@ -297,24 +294,18 @@ function DocCoverageRow({
   componentName,
   statusLabel,
   statusClass,
-  sources,
-  urls,
+  documentationNames,
   onSelectComponent,
   showStatus = true,
-  showDocumentation = true,
 }: {
   componentId: string;
   componentName: string;
   statusLabel?: string;
   statusClass?: string;
-  sources: string[];
-  urls: string[];
+  documentationNames?: string | null;
   onSelectComponent: (componentId: string) => void;
   showStatus?: boolean;
-  showDocumentation?: boolean;
 }) {
-  const doc = showDocumentation ? resolveDocLink(sources, urls) : null;
-
   return (
     <tr className="border-b border-zinc-800/60 hover:bg-zinc-900/40">
       <td className="py-3 pr-3 align-top">
@@ -331,22 +322,9 @@ function DocCoverageRow({
           {statusLabel}
         </td>
       )}
-      {showDocumentation && doc && (
-        <td className="py-3 align-top">
-          {doc.url ? (
-            <a
-              href={doc.url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sky-400 hover:text-sky-300"
-            >
-              {doc.label}
-            </a>
-          ) : doc.label ? (
-            <span className="text-zinc-400">{doc.label}</span>
-          ) : (
-            <span className="text-zinc-600">—</span>
-          )}
+      {documentationNames !== undefined && (
+        <td className="py-3 align-top text-zinc-400">
+          {documentationNames ?? <span className="text-zinc-600">—</span>}
         </td>
       )}
     </tr>
@@ -409,8 +387,7 @@ export function KraDocGapPanel({
                       key={item.component_id}
                       componentId={item.component_id}
                       componentName={item.component_name}
-                      sources={item.notion_sources}
-                      urls={item.notion_page_urls}
+                      documentationNames={formatNotionSourceNames(item.notion_sources)}
                       onSelectComponent={onSelectComponent}
                       showStatus={false}
                     />
@@ -448,10 +425,7 @@ export function KraDocGapPanel({
                             }`
                       }
                       statusClass="text-amber-300/90"
-                      sources={gap.notion_sources}
-                      urls={gap.notion_page_urls}
                       onSelectComponent={onSelectComponent}
-                      showDocumentation={false}
                     />
                   ))}
                 </tbody>

@@ -5,8 +5,13 @@ import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink } from "lucide-rea
 
 import type { FileRiskItem, FileRiskQuadrant } from "@/lib/types";
 
-const QUADRANT_META: Record<
-  FileRiskQuadrant,
+type FileRiskBucket = "needs_attention" | "healthy";
+
+const RISK_QUADRANTS: FileRiskQuadrant[] = ["critical", "stable_niche"];
+const HEALTHY_QUADRANTS: FileRiskQuadrant[] = ["active_shared", "healthy"];
+
+const BUCKET_META: Record<
+  FileRiskBucket,
   {
     label: string;
     shortLabel: string;
@@ -16,48 +21,35 @@ const QUADRANT_META: Record<
     badgeClass: string;
   }
 > = {
-  critical: {
-    label: "Needs cross-training",
+  needs_attention: {
+    label: "Needs attention",
     shortLabel: "At risk",
-    description: "Changes often, but only one or two people edit this file.",
+    description:
+      "Less than half the team edits this file, bus factor is low, or one person owns most of it.",
     accentClass: "text-red-300",
     borderClass: "border-red-500/30 bg-red-500/5",
     badgeClass: "bg-red-500/15 text-red-200 border-red-500/30",
   },
-  stable_niche: {
-    label: "Narrow ownership",
-    shortLabel: "Narrow",
-    description: "Rarely changes, but few people know it well.",
-    accentClass: "text-amber-300",
-    borderClass: "border-amber-500/25 bg-amber-500/5",
-    badgeClass: "bg-amber-500/10 text-amber-200 border-amber-500/25",
-  },
-  active_shared: {
-    label: "Active & shared",
-    shortLabel: "Shared",
-    description: "Many people edit this file — healthy distribution.",
-    accentClass: "text-sky-300",
-    borderClass: "border-sky-500/25 bg-sky-500/5",
-    badgeClass: "bg-sky-500/10 text-sky-200 border-sky-500/25",
-  },
   healthy: {
     label: "Healthy",
     shortLabel: "Healthy",
-    description: "Low change rate with enough people who know the code.",
+    description: "Enough teammates share ownership of this file.",
     accentClass: "text-emerald-300",
     borderClass: "border-emerald-500/25 bg-emerald-500/5",
     badgeClass: "bg-emerald-500/10 text-emerald-200 border-emerald-500/25",
   },
 };
 
-const QUADRANT_PRIORITY: FileRiskQuadrant[] = [
-  "critical",
-  "stable_niche",
-  "active_shared",
-  "healthy",
-];
+const BUCKET_PRIORITY: FileRiskBucket[] = ["needs_attention", "healthy"];
 
-/** FileRiskRow height incl. space-y-2 gap — keeps list area stable across quadrants */
+const RISK_QUADRANT_ORDER: Record<FileRiskQuadrant, number> = {
+  critical: 0,
+  stable_niche: 1,
+  active_shared: 2,
+  healthy: 3,
+};
+
+/** FileRiskRow height incl. space-y-2 gap — keeps list area stable across buckets */
 const FILE_ROW_HEIGHT_PX = 76;
 const LIST_BODY_PADDING_PX = 24;
 const PAGINATION_HEIGHT_PX = 44;
@@ -72,6 +64,22 @@ interface FileRiskMatrixProps {
   collapsible?: boolean;
   defaultExpanded?: boolean;
   emptyMessage?: string;
+}
+
+function fileRiskBucket(quadrant: FileRiskQuadrant): FileRiskBucket {
+  return RISK_QUADRANTS.includes(quadrant) ? "needs_attention" : "healthy";
+}
+
+function bucketCount(
+  bucket: FileRiskBucket,
+  quadrantCounts: Record<string, number>,
+  byBucket: Record<FileRiskBucket, FileRiskItem[]>,
+): number {
+  if (Object.keys(quadrantCounts).length > 0) {
+    const quadrants = bucket === "needs_attention" ? RISK_QUADRANTS : HEALTHY_QUADRANTS;
+    return quadrants.reduce((sum, quadrant) => sum + (quadrantCounts[quadrant] ?? 0), 0);
+  }
+  return byBucket[bucket].length;
 }
 
 function formatFileLabel(path: string): { name: string; folder: string | null } {
@@ -99,7 +107,8 @@ function changeLabel(churn: number): string {
 
 function FileRiskRow({ file, emphasize = false }: { file: FileRiskItem; emphasize?: boolean }) {
   const { name, folder } = formatFileLabel(file.file_path);
-  const meta = QUADRANT_META[file.quadrant];
+  const bucket = fileRiskBucket(file.quadrant);
+  const meta = BUCKET_META[bucket];
 
   return (
     <li
@@ -202,8 +211,7 @@ export function FileRiskMatrix({
   defaultExpanded = false,
   emptyMessage,
 }: FileRiskMatrixProps) {
-  const [selectedQuadrant, setSelectedQuadrant] =
-    useState<FileRiskQuadrant>("critical");
+  const [selectedBucket, setSelectedBucket] = useState<FileRiskBucket>("needs_attention");
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState(defaultExpanded);
 
@@ -212,43 +220,49 @@ export function FileRiskMatrix({
   }, [defaultExpanded, files]);
 
   useEffect(() => {
-    setSelectedQuadrant("critical");
+    setSelectedBucket("needs_attention");
     setPage(0);
   }, [files]);
 
   useEffect(() => {
     setPage(0);
-  }, [selectedQuadrant]);
+  }, [selectedBucket]);
 
-  const byQuadrant = useMemo(
-    () =>
-      QUADRANT_PRIORITY.reduce(
-        (acc, quadrant) => {
-          acc[quadrant] = files.filter((file) => file.quadrant === quadrant);
-          return acc;
-        },
-        {} as Record<FileRiskQuadrant, FileRiskItem[]>,
-      ),
-    [files],
-  );
+  const byBucket = useMemo(() => {
+    const needsAttention = files
+      .filter((file) => fileRiskBucket(file.quadrant) === "needs_attention")
+      .sort((a, b) => {
+        const order =
+          RISK_QUADRANT_ORDER[a.quadrant] - RISK_QUADRANT_ORDER[b.quadrant];
+        if (order !== 0) {
+          return order;
+        }
+        return b.churn_score - a.churn_score;
+      });
+    const healthy = files
+      .filter((file) => fileRiskBucket(file.quadrant) === "healthy")
+      .sort((a, b) => b.churn_score - a.churn_score);
+
+    return {
+      needs_attention: needsAttention,
+      healthy,
+    } satisfies Record<FileRiskBucket, FileRiskItem[]>;
+  }, [files]);
 
   const listBodyMinHeightPx = useMemo(() => {
-    const tallestQuadrantCount = Math.max(
-      ...QUADRANT_PRIORITY.map((quadrant) => byQuadrant[quadrant].length),
+    const tallestBucketCount = Math.max(
+      ...BUCKET_PRIORITY.map((bucket) => byBucket[bucket].length),
     );
-    const rowCount = Math.max(
-      Math.min(tallestQuadrantCount, FILES_PER_PAGE),
-      1,
-    );
-    const needsPagination = tallestQuadrantCount > FILES_PER_PAGE;
+    const rowCount = Math.max(Math.min(tallestBucketCount, FILES_PER_PAGE), 1);
+    const needsPagination = tallestBucketCount > FILES_PER_PAGE;
     return (
       rowCount * FILE_ROW_HEIGHT_PX +
       LIST_BODY_PADDING_PX +
       (needsPagination ? PAGINATION_HEIGHT_PX : 0)
     );
-  }, [byQuadrant]);
+  }, [byBucket]);
 
-  const selectedFiles = byQuadrant[selectedQuadrant];
+  const selectedFiles = byBucket[selectedBucket];
   const paginatedFiles = selectedFiles.slice(
     page * FILES_PER_PAGE,
     (page + 1) * FILES_PER_PAGE,
@@ -257,7 +271,7 @@ export function FileRiskMatrix({
   const priorityFiles =
     crossTrainingPriority.length > 0
       ? crossTrainingPriority
-      : byQuadrant.critical;
+      : byBucket.needs_attention;
 
   if (files.length === 0) {
     if (compact && collapsible) {
@@ -369,21 +383,22 @@ export function FileRiskMatrix({
       <div className="mb-5">
         <h3 className="text-sm font-medium text-zinc-200">{title}</h3>
         <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-500">
-          Shows which files change often but are owned by only one or two people.
-          Those are the best candidates for pairing and knowledge sharing.
+          Files are at risk when fewer than half the engineering team edits them,
+          bus factor is low relative to team size, or one person holds most of the
+          ownership (DOA).
         </p>
       </div>
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {QUADRANT_PRIORITY.map((quadrant) => {
-          const meta = QUADRANT_META[quadrant];
-          const count = quadrantCounts[quadrant] ?? byQuadrant[quadrant].length;
-          const isSelected = selectedQuadrant === quadrant;
+      <div className="mb-5 grid gap-3 sm:grid-cols-2">
+        {BUCKET_PRIORITY.map((bucket) => {
+          const meta = BUCKET_META[bucket];
+          const count = bucketCount(bucket, quadrantCounts, byBucket);
+          const isSelected = selectedBucket === bucket;
           return (
             <button
-              key={quadrant}
+              key={bucket}
               type="button"
-              onClick={() => setSelectedQuadrant(quadrant)}
+              onClick={() => setSelectedBucket(bucket)}
               className={`rounded-lg border px-3 py-3 text-left transition-colors hover:brightness-110 ${
                 meta.borderClass
               } ${isSelected ? "ring-2 ring-zinc-400/50" : ""}`}
@@ -402,17 +417,15 @@ export function FileRiskMatrix({
         })}
       </div>
 
-      <div
-        className={`rounded-xl border ${QUADRANT_META[selectedQuadrant].borderClass}`}
-      >
+      <div className={`rounded-xl border ${BUCKET_META[selectedBucket].borderClass}`}>
         <div className="border-b border-zinc-800/80 px-4 py-3">
           <h4
-            className={`text-sm font-medium ${QUADRANT_META[selectedQuadrant].accentClass}`}
+            className={`text-sm font-medium ${BUCKET_META[selectedBucket].accentClass}`}
           >
-            {QUADRANT_META[selectedQuadrant].label}
+            {BUCKET_META[selectedBucket].label}
           </h4>
           <p className="mt-1 text-xs text-zinc-500">
-            {QUADRANT_META[selectedQuadrant].description}
+            {BUCKET_META[selectedBucket].description}
           </p>
         </div>
         <div

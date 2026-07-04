@@ -8,11 +8,9 @@ import {
   ArrowUpRight,
   Clock,
   Loader2,
-  Network,
   Plug,
   RefreshCw,
   Search,
-  Sparkles,
   TrendingDown,
   Users,
 } from "lucide-react";
@@ -31,48 +29,6 @@ import { DashboardCharts } from "./DashboardCharts";
 import { SetupChecklist } from "./SetupChecklist";
 
 const REVEAL_EASE = [0.16, 1, 0.3, 1] as const;
-
-const CRON_OPTIONS = [
-  { value: "0 9 * * 1", label: "Monday 9:00 AM" },
-  { value: "0 8 * * 1", label: "Monday 8:00 AM" },
-  { value: "0 17 * * 5", label: "Friday 5:00 PM" },
-  { value: "0 6 1 * *", label: "1st of month 6:00 AM" },
-];
-
-const SHORTCUTS = [
-  {
-    href: "/era",
-    label: "Employee Risk Assessment",
-    description: "Continuity posture & attrition signals",
-    icon: Users,
-    accent: "from-violet-500/20 to-indigo-500/5",
-    iconColor: "text-violet-400",
-  },
-  {
-    href: "/kra",
-    label: "Knowledge Risk Graph",
-    description: "SPOF detection & doc coverage",
-    icon: Network,
-    accent: "from-fuchsia-500/20 to-pink-500/5",
-    iconColor: "text-fuchsia-400",
-  },
-  {
-    href: "/investigation",
-    label: "Incident Investigation",
-    description: "Open incidents & root-cause trails",
-    icon: Search,
-    accent: "from-amber-500/20 to-orange-500/5",
-    iconColor: "text-amber-400",
-  },
-  {
-    href: "/exit",
-    label: "Knowledge Handover",
-    description: "Exit workflows & transfer plans",
-    icon: Users,
-    accent: "from-sky-500/20 to-cyan-500/5",
-    iconColor: "text-sky-400",
-  },
-] as const;
 
 interface MetricCardProps {
   label: string;
@@ -184,7 +140,7 @@ function DashboardSkeleton() {
 }
 
 export function DashboardView() {
-  const { metrics, loading, digest, setDigest, refreshMetrics } = useWorkspace();
+  const { metrics, loading, refreshMetrics } = useWorkspace();
   const { config } = useIntegrations();
   const [refreshing, setRefreshing] = useState(false);
   const reducedMotion = useReducedMotion();
@@ -324,118 +280,6 @@ export function DashboardView() {
       <DashboardCharts />
 
       <SetupChecklist />
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <motion.section
-          initial={reducedMotion ? false : { opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.65, ease: REVEAL_EASE, delay: 0.25 }}
-          className="relative overflow-hidden rounded-2xl border border-zinc-800/80 bg-gradient-to-br from-zinc-900/60 to-zinc-950/80 p-6 lg:col-span-2"
-        >
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-200">
-                Workspace shortcuts
-              </h2>
-              <p className="mt-1 text-xs text-zinc-400">
-                Jump into specialized risk surfaces
-              </p>
-            </div>
-            <Sparkles className="h-4 w-4 text-violet-400/70" />
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            {SHORTCUTS.map(({ href, label, description, icon: Icon, accent, iconColor }, index) => (
-              <motion.div
-                key={href}
-                initial={reducedMotion ? false : { opacity: 0, x: -12 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{
-                  duration: 0.5,
-                  ease: REVEAL_EASE,
-                  delay: 0.3 + index * 0.06,
-                }}
-              >
-                <Link
-                  href={href}
-                  className={`group flex items-start gap-3 rounded-xl border border-zinc-800/80 bg-gradient-to-br ${accent} px-4 py-4 transition hover:border-zinc-600/80 hover:bg-zinc-900/50`}
-                >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-800/80 bg-zinc-950/70">
-                    <Icon className={`h-4 w-4 ${iconColor}`} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-zinc-100">{label}</p>
-                    <p className="mt-0.5 text-xs text-zinc-400">{description}</p>
-                  </div>
-                  <ArrowUpRight className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600 transition group-hover:text-zinc-300" />
-                </Link>
-              </motion.div>
-            ))}
-          </div>
-        </motion.section>
-
-        <motion.section
-          initial={reducedMotion ? false : { opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.65, ease: REVEAL_EASE, delay: 0.3 }}
-          className="relative overflow-hidden rounded-2xl border border-zinc-800/80 bg-gradient-to-br from-zinc-900/60 via-zinc-950/80 to-black p-6"
-        >
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,_rgba(56,189,248,0.08),_transparent_60%)]" />
-
-          <div className="relative">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-200">
-              Executive digest
-            </h2>
-            <p className="mt-1 text-xs text-zinc-400">
-              Scheduled summary for leadership inboxes
-            </p>
-
-            <div className="mt-5 space-y-5">
-              <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800/80 bg-zinc-950/50 px-4 py-3">
-                <span className="text-sm text-zinc-200">Weekly digest</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={digest.enabled}
-                  onClick={() => setDigest({ enabled: !digest.enabled })}
-                  className={`relative h-6 w-11 rounded-full transition-colors ${
-                    digest.enabled ? "bg-emerald-600" : "bg-zinc-700"
-                  }`}
-                >
-                  <motion.span
-                    layout
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                    className="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm"
-                    style={{ left: digest.enabled ? "1.25rem" : "0.125rem" }}
-                  />
-                </button>
-              </label>
-
-              <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-wide text-zinc-400">
-                  Schedule
-                </label>
-                <select
-                  value={digest.cron}
-                  onChange={(e) => setDigest({ cron: e.target.value })}
-                  disabled={!digest.enabled}
-                  className="w-full rounded-xl border border-zinc-700/80 bg-zinc-950/80 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-zinc-500 disabled:opacity-50"
-                >
-                  {CRON_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <p className="text-xs leading-relaxed text-zinc-400">
-                Settings persist locally for this session.
-              </p>
-            </div>
-          </div>
-        </motion.section>
-      </div>
     </div>
   );
 }

@@ -96,10 +96,44 @@ def test_should_exclude_test_and_vendor_paths():
 
 
 def test_classify_quadrant():
-    assert classify_quadrant(churn_score=4, contributor_count=1) == "critical"
-    assert classify_quadrant(churn_score=1, contributor_count=1) == "stable_niche"
-    assert classify_quadrant(churn_score=4, contributor_count=4) == "active_shared"
-    assert classify_quadrant(churn_score=1, contributor_count=4) == "healthy"
+    team_size = 20
+    assert (
+        classify_quadrant(churn_score=4, contributor_count=1, team_size=team_size)
+        == "critical"
+    )
+    assert (
+        classify_quadrant(churn_score=1, contributor_count=1, team_size=team_size)
+        == "stable_niche"
+    )
+    assert (
+        classify_quadrant(churn_score=4, contributor_count=10, team_size=team_size)
+        == "active_shared"
+    )
+    assert (
+        classify_quadrant(churn_score=1, contributor_count=10, team_size=team_size)
+        == "healthy"
+    )
+
+
+def test_classify_quadrant_uses_contributor_coverage_percent():
+    # 4-person org: <50% team coverage = at risk; exactly half = healthy.
+    assert classify_quadrant(churn_score=2, contributor_count=1, team_size=4) == "critical"
+    assert classify_quadrant(churn_score=2, contributor_count=2, team_size=4) == "active_shared"
+    assert classify_quadrant(churn_score=1, contributor_count=2, team_size=4) == "healthy"
+    assert classify_quadrant(churn_score=1, contributor_count=1, team_size=4) == "stable_niche"
+
+
+def test_classify_quadrant_concentrated_doa_percent_stays_at_risk():
+    assert (
+        classify_quadrant(
+            churn_score=4,
+            contributor_count=12,
+            team_size=20,
+            bus_factor=2,
+            primary_owner_doa_pct=92.0,
+        )
+        == "critical"
+    )
 
 
 def test_critical_file_persisted_and_surfaces_in_api(db, tenant):
