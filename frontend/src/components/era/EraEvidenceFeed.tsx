@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { AlertTriangle, Info } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Info } from "lucide-react";
 
 import type { EraDimensionKey } from "@/lib/types";
 
 import { DIMENSION_KEYS, ERA_DIMENSION_COLORS } from "./era-colors";
 import type { TeamEvidenceItem } from "./era-utils";
+
+const ITEMS_PER_PAGE = 5;
 
 interface EraEvidenceFeedProps {
   items: TeamEvidenceItem[];
@@ -29,16 +31,34 @@ export function EraEvidenceFeed({
   const [dimensionFilter, setDimensionFilter] = useState<EraDimensionKey | "all">(
     "all",
   );
+  const [page, setPage] = useState(0);
 
   const filtered = useMemo(() => {
     if (dimensionFilter === "all") return items;
     return items.filter((item) => item.dimension === dimensionFilter);
   }, [dimensionFilter, items]);
 
+  useEffect(() => {
+    setPage(0);
+  }, [dimensionFilter, items]);
+
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const paginated = filtered.slice(
+    page * ITEMS_PER_PAGE,
+    (page + 1) * ITEMS_PER_PAGE,
+  );
+  const rangeStart = filtered.length === 0 ? 0 : page * ITEMS_PER_PAGE + 1;
+  const rangeEnd = Math.min((page + 1) * ITEMS_PER_PAGE, filtered.length);
+
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/30">
       <div className="flex flex-col gap-3 border-b border-zinc-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Critical evidence feed</h2>
+        <h2 className="text-sm font-medium text-zinc-200">
+          Critical evidence feed
+          <span className="ml-2 font-normal tabular-nums text-zinc-500">
+            ({filtered.length} {filtered.length === 1 ? "item" : "items"})
+          </span>
+        </h2>
         <div className="flex flex-wrap gap-1">
           <button
             type="button"
@@ -74,7 +94,7 @@ export function EraEvidenceFeed({
             No evidence items for this filter.
           </p>
         ) : (
-          filtered.map((item) => {
+          paginated.map((item) => {
             const highlighted = item.employee_id === selectedId;
             return (
               <button
@@ -102,6 +122,32 @@ export function EraEvidenceFeed({
           })
         )}
       </div>
+
+      {totalPages > 1 ? (
+        <div className="flex items-center justify-between border-t border-zinc-800 px-4 py-3">
+          <button
+            type="button"
+            disabled={page === 0}
+            onClick={() => setPage((current) => current - 1)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Previous
+          </button>
+          <span className="text-xs tabular-nums text-zinc-500">
+            {rangeStart}–{rangeEnd} of {filtered.length}
+          </span>
+          <button
+            type="button"
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage((current) => current + 1)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+          >
+            Next
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

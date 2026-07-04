@@ -20,6 +20,8 @@ interface EraNotificationsDrawerProps {
   onClose: () => void;
   warnings: string[];
   unmappedCount: number;
+  onOpenAlertsSettings?: () => void;
+  onViewAlert?: (alert: EraAlertItem) => void;
   onUpdated?: () => void;
 }
 
@@ -56,7 +58,23 @@ function alertActionLink(alert: EraAlertItem): string | null {
   if (alert.rule_id === "stale_sync") {
     return "/settings/integrations";
   }
-  return "/era";
+  if (alert.rule_id === "critical_file" && alert.employee_id) {
+    return `/era?employee=${encodeURIComponent(alert.employee_id)}`;
+  }
+  if (alert.rule_id === "unassigned_p1") {
+    return "/era";
+  }
+  if (alert.rule_id === "spof_tier1") {
+    return "/era";
+  }
+  return null;
+}
+
+function alertViewUsesCallback(alert: EraAlertItem): boolean {
+  if (alert.rule_id === "critical_file") {
+    return Boolean(alert.employee_id);
+  }
+  return alert.rule_id === "unassigned_p1" || alert.rule_id === "spof_tier1";
 }
 
 export function eraNotificationCount(
@@ -77,6 +95,8 @@ export function EraNotificationsDrawer({
   onClose,
   warnings,
   unmappedCount,
+  onOpenAlertsSettings,
+  onViewAlert,
   onUpdated,
 }: EraNotificationsDrawerProps) {
   const [alerts, setAlerts] = useState<EraAlertItem[]>([]);
@@ -312,6 +332,8 @@ export function EraNotificationsDrawer({
 
               {alerts.map((alert) => {
                 const actionHref = alertActionLink(alert);
+                const useCallback = Boolean(onViewAlert && alertViewUsesCallback(alert));
+                const showView = useCallback || Boolean(actionHref);
                 return (
                   <div
                     key={alert.id}
@@ -328,13 +350,24 @@ export function EraNotificationsDrawer({
                       </p>
                     </div>
                     <div className="flex shrink-0 gap-2">
-                      {actionHref ? (
-                        <Link
-                          href={actionHref}
-                          className="rounded-md border border-current/30 px-2.5 py-1 text-xs hover:bg-black/10"
-                        >
-                          View
-                        </Link>
+                      {showView ? (
+                        useCallback ? (
+                          <button
+                            type="button"
+                            onClick={() => onViewAlert?.(alert)}
+                            className="rounded-md border border-current/30 px-2.5 py-1 text-xs hover:bg-black/10"
+                          >
+                            View
+                          </button>
+                        ) : (
+                          <Link
+                            href={actionHref!}
+                            onClick={handleClose}
+                            className="rounded-md border border-current/30 px-2.5 py-1 text-xs hover:bg-black/10"
+                          >
+                            View
+                          </Link>
+                        )
                       ) : null}
                       <button
                         type="button"
@@ -355,6 +388,18 @@ export function EraNotificationsDrawer({
             </>
           )}
         </div>
+
+        {onOpenAlertsSettings ? (
+          <div className="border-t border-zinc-800 px-5 py-4">
+            <button
+              type="button"
+              onClick={onOpenAlertsSettings}
+              className="text-xs font-medium text-violet-300 hover:text-violet-200"
+            >
+              Configure alert rules
+            </button>
+          </div>
+        ) : null}
       </aside>
     </>
   );

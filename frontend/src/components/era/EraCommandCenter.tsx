@@ -7,8 +7,9 @@ import { Loader2 } from "lucide-react";
 
 import { fetchEraMetrics } from "@/lib/api";
 import { useWorkspace } from "@/context/WorkspaceContext";
-import type { EraAnalyticsResponse, EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
+import type { EraAnalyticsResponse, EraAlertItem, EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
 
+import { EraAlertsSettingsDrawer } from "./EraAlertsSettingsDrawer";
 import { EraCommandHeader } from "./EraCommandHeader";
 import { EraNotificationsDrawer } from "./EraNotificationsDrawer";
 import { EraOpenP1Drawer } from "./EraOpenP1Drawer";
@@ -38,6 +39,7 @@ export function EraCommandCenter() {
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [alertsSettingsOpen, setAlertsSettingsOpen] = useState(false);
   const [openP1DrawerOpen, setOpenP1DrawerOpen] = useState(false);
   const [alertsRefreshKey, setAlertsRefreshKey] = useState(0);
 
@@ -61,6 +63,34 @@ export function EraCommandCenter() {
     const query = params.toString();
     router.replace(query ? `/era?${query}` : "/era", { scroll: false });
   }, [router, searchParams]);
+
+  const closeAlertsSettings = useCallback(() => {
+    setAlertsSettingsOpen(false);
+    if (searchParams.get("configureAlerts") === "1") {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("configureAlerts");
+      const query = params.toString();
+      router.replace(query ? `/era?${query}` : "/era", { scroll: false });
+    }
+  }, [router, searchParams]);
+
+  const handleViewAlert = useCallback(
+    (alert: EraAlertItem) => {
+      setNotificationsOpen(false);
+      if (alert.rule_id === "critical_file" && alert.employee_id) {
+        openDrawer(alert.employee_id, "knowledge");
+        return;
+      }
+      if (alert.rule_id === "unassigned_p1") {
+        setOpenP1DrawerOpen(true);
+        return;
+      }
+      if (alert.rule_id === "spof_tier1") {
+        return;
+      }
+    },
+    [openDrawer],
+  );
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -107,6 +137,12 @@ export function EraCommandCenter() {
   }, [searchParams]);
 
   useEffect(() => {
+    if (searchParams.get("configureAlerts") === "1") {
+      setAlertsSettingsOpen(true);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     if (!mounted) return;
     void load();
   }, [mounted, operationalRevision, load]);
@@ -127,7 +163,7 @@ export function EraCommandCenter() {
   }, [activeEmployees, selectedId]);
 
   const teamEvidence = useMemo(
-    () => buildTeamEvidenceFeed(activeEmployees, data?.team_evidence ?? [], 12),
+    () => buildTeamEvidenceFeed(activeEmployees, data?.team_evidence ?? []),
     [activeEmployees, data?.team_evidence],
   );
 
@@ -229,6 +265,7 @@ export function EraCommandCenter() {
         refreshing={refreshing}
         onRefresh={() => void load(true)}
         onOpenNotifications={() => setNotificationsOpen(true)}
+        onOpenAlertsSettings={() => setAlertsSettingsOpen(true)}
       />
 
       <EraKpiStrip
@@ -288,10 +325,22 @@ export function EraCommandCenter() {
           onClose={() => setNotificationsOpen(false)}
           warnings={data.warnings}
           unmappedCount={unmappedCount}
+          onOpenAlertsSettings={() => {
+            setNotificationsOpen(false);
+            setAlertsSettingsOpen(true);
+          }}
+          onViewAlert={handleViewAlert}
           onUpdated={() => {
             void load(true);
             setAlertsRefreshKey((key) => key + 1);
           }}
+        />
+      )}
+
+      {alertsSettingsOpen && (
+        <EraAlertsSettingsDrawer
+          open={alertsSettingsOpen}
+          onClose={closeAlertsSettings}
         />
       )}
 

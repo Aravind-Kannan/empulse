@@ -19,7 +19,7 @@ export interface TeamEvidenceItem extends EraEvidenceItem {
 export function buildTeamEvidenceFeed(
   employees: EraEmployeeMetrics[],
   teamEvidence: EraEvidenceItem[] = [],
-  limit = 10,
+  limit?: number,
 ): TeamEvidenceItem[] {
   const flat: TeamEvidenceItem[] = teamEvidence.map((item) => ({
     ...item,
@@ -35,9 +35,11 @@ export function buildTeamEvidenceFeed(
       });
     }
   }
-  return flat
-    .sort((a, b) => b.impact_points - a.impact_points)
-    .slice(0, limit);
+  const sorted = flat.sort((a, b) => b.impact_points - a.impact_points);
+  if (limit === undefined) {
+    return sorted;
+  }
+  return sorted.slice(0, limit);
 }
 
 export function totalUnmappedCount(

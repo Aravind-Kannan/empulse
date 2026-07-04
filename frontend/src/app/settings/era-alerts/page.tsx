@@ -1,9 +1,5 @@
-import { EraAlertsSettingsView } from "@/components/settings/EraAlertsSettingsView";
+import { redirect } from "next/navigation";
 
 export default function EraAlertsSettingsPage() {
-  return (
-    <div className="p-8">
-      <EraAlertsSettingsView />
-    </div>
-  );
+  redirect("/era?configureAlerts=1");
 }

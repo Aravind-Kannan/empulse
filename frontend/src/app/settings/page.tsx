@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, Settings2, Users, Bell, GitBranch } from "lucide-react";
+import { ChevronRight, Settings2, Users, GitBranch } from "lucide-react";
 
 import { TenantSwitcher } from "@/components/settings/TenantSwitcher";
 
@@ -12,16 +12,6 @@ const organizationSections = [
     description:
       "Map GitHub handles, Jira emails, Slack IDs, and Notion users to employee records.",
     icon: Users,
-  },
-];
-
-const workspaceSections = [
-  {
-    href: "/settings/era-alerts",
-    title: "ERA Alerts",
-    description:
-      "Team-channel Slack webhooks, review cadence, and alert thresholds.",
-    icon: Bell,
   },
 ];
 
@@ -36,7 +26,7 @@ export default function SettingsPage() {
           <div>
             <h1 className="text-2xl font-semibold text-zinc-100">Settings</h1>
             <p className="text-sm text-zinc-500">
-              Workspace preferences, identity reconciliation, and alerts.
+              Workspace preferences and identity reconciliation.
             </p>
           </div>
         </div>
@@ -72,21 +62,6 @@ export default function SettingsPage() {
           Organization
         </p>
         {organizationSections.map(({ href, title, description, icon: Icon }) => (
-          <SettingsLinkCard
-            key={href}
-            href={href}
-            title={title}
-            description={description}
-            icon={Icon}
-          />
-        ))}
-      </section>
-
-      <section className="space-y-3">
-        <p className="px-1 text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
-          Alerts &amp; workspace
-        </p>
-        {workspaceSections.map(({ href, title, description, icon: Icon }) => (
           <SettingsLinkCard
             key={href}
             href={href}

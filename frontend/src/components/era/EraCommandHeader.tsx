@@ -1,4 +1,4 @@
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2, RefreshCw, SlidersHorizontal } from "lucide-react";
 
 import type { EraEmployeeMetrics, EraRecoveryEstimate } from "@/lib/types";
 
@@ -16,6 +16,7 @@ interface EraCommandHeaderProps {
   refreshing: boolean;
   onRefresh: () => void;
   onOpenNotifications: () => void;
+  onOpenAlertsSettings: () => void;
 }
 
 export function EraCommandHeader({
@@ -29,6 +30,7 @@ export function EraCommandHeader({
   refreshing,
   onRefresh,
   onOpenNotifications,
+  onOpenAlertsSettings,
 }: EraCommandHeaderProps) {
   const sync = formatSyncFreshness(syncFreshness);
   const syncClass =
@@ -61,6 +63,14 @@ export function EraCommandHeader({
           refreshKey={alertsRefreshKey}
           onClick={onOpenNotifications}
         />
+        <button
+          type="button"
+          onClick={onOpenAlertsSettings}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800"
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Alerts
+        </button>
         <button
           type="button"
           onClick={() => exportEmployeesCsv(employees)}
