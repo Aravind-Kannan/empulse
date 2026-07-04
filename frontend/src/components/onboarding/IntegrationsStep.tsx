@@ -84,7 +84,7 @@ export function IntegrationsStep() {
         )}
       </div>
 
-      <IntegrationsDirectory />
+      <IntegrationsDirectory returnTo="/onboarding" />
 
       {error && (
         <div className="mt-6 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">

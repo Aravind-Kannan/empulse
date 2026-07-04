@@ -97,19 +97,19 @@ export function GlobalSyncBanner() {
           />
           <StatCard
             icon={Database}
-            label="Ingested"
+            label="Synced"
             value={stats.ingested || "—"}
             hint={
               stats.completedCount
                 ? `${stats.completedCount} source(s) finished`
-                : "Run sync to populate graph"
+                : "Run sync to import data"
             }
           />
           <StatCard
             icon={SkipForward}
             label="Skipped"
             value={stats.skipped || "—"}
-            hint="Already in Cognee (unchanged)"
+            hint="Unchanged since last sync"
           />
         </div>
 
@@ -122,12 +122,12 @@ export function GlobalSyncBanner() {
                   : allConnectedDone
                     ? "All connected sources synced"
                     : "Sync partially complete"
-                : "Ready to build your graph"}
+                : "Ready to sync your data"}
             </p>
             <p className="mt-1 max-w-xl text-xs text-zinc-500">
               {connectedCount === 0
                 ? "Connect at least one integration on the previous step."
-                : "Pull metadata, code, blame, docs, and tickets into your tenant Cognee dataset. Unchanged items are skipped automatically."}
+                : "Pull metadata, code, docs, and tickets into your workspace. Unchanged items are skipped automatically."}
             </p>
           </div>
 
@@ -150,7 +150,7 @@ export function GlobalSyncBanner() {
             ) : (
               <>
                 <Sparkles className="h-4 w-4" />
-                Start graph sync
+                Start sync
               </>
             )}
           </button>
@@ -159,7 +159,7 @@ export function GlobalSyncBanner() {
         {allConnectedDone && !isGlobalBusy && (
           <p className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
             <CheckCircle2 className="h-4 w-4 shrink-0" />
-            Knowledge graph ready — you can enter the dashboard or re-sync anytime.
+            Sync complete — you can enter the dashboard or re-sync anytime.
           </p>
         )}
       </div>

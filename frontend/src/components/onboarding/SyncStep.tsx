@@ -46,12 +46,12 @@ export function SyncStep() {
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-zinc-100">
-            Sync your knowledge graph
+            Sync your connected sources
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-zinc-400">
-            Pull PRs, source code, blame, docs, and tickets from connected apps
-            into your tenant Cognee dataset. Start sync when ready — unchanged
-            data is skipped automatically.
+            Pull PRs, source code, docs, and tickets from connected apps into
+            your workspace. Start sync when ready — unchanged data is skipped
+            automatically.
           </p>
         </div>
       </div>

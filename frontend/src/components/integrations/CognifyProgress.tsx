@@ -103,8 +103,8 @@ export function CognifyProgress({ job, compact = false }: CognifyProgressProps) 
       </div>
 
       <p className={`text-zinc-500 ${compact ? "text-[10px]" : "text-[11px]"}`}>
-        Cognee cognify runs on the LLM — often 1–5 minutes for large Slack threads.
-        Elapsed time updates while this step runs; not frozen if seconds tick up.
+        This step can take several minutes for large sources. Elapsed time updates
+        while it runs.
       </p>
 
       {job?.progress_message && (

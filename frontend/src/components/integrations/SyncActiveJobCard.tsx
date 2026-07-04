@@ -15,8 +15,8 @@ import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 
 const PHASE_LABELS: Record<string, string> = {
   fetching: "Fetching",
-  building_graph: "Building graph",
-  cognifying: "Cognee cognify",
+  building_graph: "Processing",
+  cognifying: "Enriching",
   finalizing: "Finishing",
 };
 

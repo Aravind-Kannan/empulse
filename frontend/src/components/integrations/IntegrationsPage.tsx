@@ -10,7 +10,7 @@ export function IntegrationsPage() {
     <div className="space-y-6">
       <WorkspacePageHeader
         title="Integrations"
-        subtitle="Connect engineering tools and sync metadata into your workspace knowledge graph."
+        subtitle="Connect engineering tools, configure each source, and track sync history."
       />
 
       <TenantSwitcher />

@@ -54,6 +54,8 @@ interface GitHubRepoSyncPanelProps {
   branchScopeLabel: string;
   syncJobs: IntegrationSyncJobStatusResponse[];
   onSyncRepo: (repositoryUrl: string) => void;
+  showHeader?: boolean;
+  embedded?: boolean;
 }
 
 export function GitHubRepoSyncPanel({
@@ -61,6 +63,8 @@ export function GitHubRepoSyncPanel({
   branchScopeLabel,
   syncJobs,
   onSyncRepo,
+  showHeader = true,
+  embedded = false,
 }: GitHubRepoSyncPanelProps) {
   const urls = repositoryUrls.filter((url) => url.trim());
   if (urls.length === 0) {
@@ -68,19 +72,27 @@ export function GitHubRepoSyncPanel({
   }
 
   return (
-    <div className="border-t border-zinc-800/80 bg-zinc-950/50 px-4 py-3 sm:px-5">
-      <div className="mb-2">
-        <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-          Repository code sync
-        </p>
-        <p className="mt-0.5 text-[11px] text-zinc-600">
-          Walk full tree on{" "}
-          <span className="text-zinc-500">{branchScopeLabel}</span> — blame metadata
-          into Cognee (file bodies optional). One job per repo.
-        </p>
-      </div>
+    <div
+      className={
+        embedded
+          ? "px-5 py-4"
+          : "border-t border-zinc-800/80 bg-zinc-950/50 px-4 py-3 sm:px-5"
+      }
+    >
+      {showHeader && (
+        <div className="mb-2">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+            Repository code sync
+          </p>
+          <p className="mt-0.5 text-[11px] text-zinc-600">
+            Walk full tree on{" "}
+            <span className="text-zinc-500">{branchScopeLabel}</span> — code
+            ownership and blame metadata (file bodies optional). One job per repo.
+          </p>
+        </div>
+      )}
 
-      <ul className="space-y-1.5">
+      <ul className={embedded ? "space-y-3" : "space-y-1.5"}>
         {urls.map((repositoryUrl) => {
           const active = isRepoJobActive(repositoryUrl, syncJobs);
           const job = latestRepoJob(repositoryUrl, syncJobs);
@@ -88,10 +100,18 @@ export function GitHubRepoSyncPanel({
           return (
             <li
               key={repositoryUrl}
-              className="flex flex-col gap-2 rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-2 sm:flex-row sm:items-start sm:justify-between"
+              className={`flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${
+                embedded
+                  ? "rounded-xl border border-zinc-800/80 bg-zinc-950/50 p-4"
+                  : "rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-3 py-2"
+              }`}
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium text-zinc-200">
+                <p
+                  className={`truncate font-medium text-zinc-200 ${
+                    embedded ? "text-sm" : "text-xs"
+                  }`}
+                >
                   {repoLabel(repositoryUrl)}
                 </p>
 
@@ -99,7 +119,7 @@ export function GitHubRepoSyncPanel({
 
                 {!active && job?.status === "completed" && (
                   <p className="mt-0.5 text-[10px] text-emerald-400/80">
-                    {job.result?.graph_nodes_created ?? 0} nodes ·{" "}
+                    {job.result?.graph_nodes_created ?? 0} records ·{" "}
                     {job.result?.files_discovered ?? 0} files ·{" "}
                     {job.result?.branches_total ?? job.result?.branches_synced?.length ?? 1}{" "}
                     branch

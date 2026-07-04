@@ -4,8 +4,8 @@ import { syncJobLabel } from "@/lib/sync-jobs";
 
 export const SYNC_PHASE_LABELS: Record<IntegrationSyncPhase, string> = {
   fetching: "Fetching data",
-  building_graph: "Building graph",
-  cognifying: "Cognee cognify",
+  building_graph: "Processing data",
+  cognifying: "Enriching data",
   finalizing: "Finishing",
 };
 

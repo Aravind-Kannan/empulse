@@ -151,7 +151,7 @@ export function SyncHistoryCard({
             <div className={`flex flex-wrap gap-1.5 ${dense ? "mt-1.5" : "mt-2.5"}`}>
               <StatChip
                 value={result.graph_nodes_created ?? 0}
-                label="ingested"
+                label="synced"
                 compact={dense}
               />
               {(result.items_new ?? 0) > 0 && (
