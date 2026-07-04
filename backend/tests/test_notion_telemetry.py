@@ -19,7 +19,7 @@ from app.services.integration_telemetry import (
     has_notion_sync,
     reset_telemetry_for_tests,
 )
-from app.services.notion_client import load_fixture_document_inventory
+from app.services.notion_client import browser_notion_page_url, load_fixture_document_inventory
 from app.services.notion_evidence import build_notion_evidence_items
 from app.services.notion_telemetry import (
     compute_notion_telemetry,
@@ -259,3 +259,40 @@ def test_compute_notion_telemetry_accepts_naive_db_datetimes(db, tenant):
     reset_telemetry_for_tests()
     assert hydrate_notion_telemetry_from_db(db, tenant.id) is True
     assert has_notion_sync()
+
+
+def test_browser_notion_page_url_preserves_slugged_app_links():
+    page_id = "39237189-07b0-811a-a8e1-e6cc767f01e4"
+    app_url = (
+        "https://app.notion.com/p/04-employee-exit-3923718907b0811aa8e1e6cc767f01e4"
+        "?assetsVersion=23.13.20260704.0109&clientBuildTarget=client"
+    )
+    assert browser_notion_page_url(page_id, app_url) == (
+        "https://app.notion.com/p/04-employee-exit-3923718907b0811aa8e1e6cc767f01e4"
+    )
+
+
+def test_browser_notion_page_url_strips_bare_app_link_query_params():
+    page_id = "1ecb77a7-78a8-e5d1-eda8-f5e9c2b7544d"
+    app_url = (
+        "https://app.notion.com/p/1ecb77a778a8e5d1eda8f5e9c2b7544d"
+        "?assetsVersion=23.13.20260704.0109&clientBuildTarget=client"
+    )
+    assert browser_notion_page_url(page_id, app_url) == (
+        "https://app.notion.com/p/1ecb77a778a8e5d1eda8f5e9c2b7544d"
+    )
+
+
+def test_browser_notion_page_url_preserves_github_doc_pack_links():
+    github_url = "https://github.com/org/empulse/blob/main/notion-docs/design/02-kra.md"
+    assert browser_notion_page_url("abc123", github_url) == github_url
+
+
+def test_browser_notion_page_url_strips_notion_query_params():
+    slug_url = (
+        "https://www.notion.so/Payments-Runbook-abc123def456"
+        "?pvs=4"
+    )
+    assert browser_notion_page_url("", slug_url) == (
+        "https://www.notion.so/Payments-Runbook-abc123def456"
+    )

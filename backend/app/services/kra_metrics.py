@@ -33,19 +33,37 @@ from app.services.integration_telemetry import (
     is_github_spof_component,
 )
 from app.services.integration_config_store import get_notion_config
+from app.services.notion_client import (
+    browser_notion_page_url,
+    notion_slug_from_url,
+)
 from app.services.notion_telemetry import utc_dt
 
 DOC_FRESHNESS_DAYS = 180
 GITHUB_ACTIVITY_DAYS = 90
 
 
-def _browser_doc_url(url: str | None) -> str | None:
-    if not url:
+def _browser_doc_url(url: str | None, page_id: str | None = None) -> str | None:
+    if not url and not page_id:
         return None
-    cleaned = url.strip()
-    if cleaned.startswith("http://") or cleaned.startswith("https://"):
-        return cleaned
+    normalized = browser_notion_page_url(page_id or "", url)
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        return normalized
     return None
+
+
+def _doc_link_priority(row: NotionDocSnapshot) -> tuple[int, datetime]:
+    """Prefer slugged Notion URLs and GitHub doc-pack links over bare page ids."""
+    url = (row.page_url or "").lower()
+    score = 0
+    if url.startswith(("https://github.com/", "http://github.com/")):
+        score = 30
+    elif notion_slug_from_url(row.page_url or ""):
+        score = 20
+    elif "notion.com" in url or "notion.so" in url:
+        score = 5
+    edited = utc_dt(row.last_edited_at) or datetime.min.replace(tzinfo=UTC)
+    return (score, edited)
 
 
 def _strip_notion_source_prefix(label: str) -> str:
@@ -62,14 +80,13 @@ def _component_doc_display(
     if linked_docs:
         ordered = sorted(
             linked_docs,
-            key=lambda row: utc_dt(row.last_edited_at)
-            or datetime.min.replace(tzinfo=UTC),
+            key=_doc_link_priority,
             reverse=True,
         )
         labels: list[str] = []
         urls: list[str] = []
         for row in ordered:
-            url = _browser_doc_url(row.page_url)
+            url = _browser_doc_url(row.page_url, row.page_id)
             if not url:
                 continue
             labels.append(row.title)

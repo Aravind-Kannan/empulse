@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -538,6 +539,67 @@ def _page_url(page_id: str) -> str:
     return f"https://www.notion.so/{clean}"
 
 
+def _notion_url_path_segment(url: str) -> str:
+    path = urlparse(url.split("?")[0]).path.rstrip("/")
+    return path.rsplit("/", 1)[-1] if path else ""
+
+
+def notion_slug_from_url(url: str) -> str | None:
+    """Extract ``04-employee-exit`` from a slugged Notion page URL."""
+    segment = _notion_url_path_segment(url)
+    if not segment:
+        return None
+    match = re.match(r"(.+)-([0-9a-f]{32})$", segment, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def notion_page_id_from_url(url: str) -> str | None:
+    """Extract the 32-char page id suffix from a Notion page URL."""
+    segment = _notion_url_path_segment(url)
+    if not segment:
+        return None
+    match = re.search(r"([0-9a-f]{32})$", segment, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    if re.fullmatch(r"[0-9a-f]{32}", segment, re.IGNORECASE):
+        return segment
+    return None
+
+
+def path_hint_from_notion_slug(slug: str) -> str:
+    """Map a Notion URL slug to the matching repo ``notion-docs`` path."""
+    cleaned = slug.strip().lower()
+    if not cleaned:
+        return ""
+    return f"notion-docs/design/{cleaned}.md"
+
+
+def _is_external_doc_url(url: str) -> bool:
+    lowered = url.lower()
+    return lowered.startswith(
+        ("https://github.com/", "http://github.com/", "file://")
+    )
+
+
+def browser_notion_page_url(page_id: str, raw_url: str | None = None) -> str:
+    """Return a browser-openable URL for a Notion page or external doc link.
+
+    Preserve Notion API slug URLs (``app.notion.com/p/title-{id}``) and only
+    strip tracking query params. GitHub / file URLs from the repo doc pack pass
+    through unchanged. Bare-id URLs are synthesized only when no URL is present.
+    """
+    cleaned = (raw_url or "").strip()
+    if cleaned and _is_external_doc_url(cleaned):
+        return cleaned
+    if cleaned and ("notion.com" in cleaned.lower() or "notion.so" in cleaned.lower()):
+        return cleaned.split("?")[0]
+    if page_id:
+        return _page_url(page_id)
+    return cleaned
+
+
 def _is_archived(page: dict[str, Any]) -> bool:
     return bool(page.get("archived"))
 
@@ -600,7 +662,12 @@ def parse_document_pages(
             component_id = relation_ids[0]
 
         title_lower = title.lower()
+        raw_url = str(page.get("page_url") or page.get("url") or "")
         path_hint = str(page.get("repo_path") or "")
+        if not path_hint:
+            slug = notion_slug_from_url(raw_url)
+            if slug:
+                path_hint = path_hint_from_notion_slug(slug)
         if not component_id:
             component_id = match_component_for_document(
                 title,
@@ -627,8 +694,9 @@ def parse_document_pages(
             {
                 "page_id": page_id,
                 "title": title,
-                "page_url": str(
-                    page.get("page_url") or page.get("url") or _page_url(page_id)
+                "page_url": browser_notion_page_url(
+                    page_id,
+                    raw_url,
                 ),
                 "last_edited_at": page.get("last_edited_time"),
                 "component_id": component_id,

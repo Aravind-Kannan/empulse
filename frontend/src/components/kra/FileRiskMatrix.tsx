@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { AlertTriangle, ChevronDown, ExternalLink, Users } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ExternalLink } from "lucide-react";
 
 import type { FileRiskItem, FileRiskQuadrant } from "@/lib/types";
 
@@ -139,54 +139,6 @@ function FileRiskRow({ file, emphasize = false }: { file: FileRiskItem; emphasiz
   );
 }
 
-function QuadrantSection({
-  quadrant,
-  files,
-  defaultOpen,
-}: {
-  quadrant: FileRiskQuadrant;
-  files: FileRiskItem[];
-  defaultOpen: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const meta = QUADRANT_META[quadrant];
-
-  if (files.length === 0) return null;
-
-  return (
-    <div className={`rounded-xl border ${meta.borderClass}`}>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left"
-      >
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h4 className={`text-sm font-medium ${meta.accentClass}`}>{meta.label}</h4>
-            <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-300">
-              {files.length} {files.length === 1 ? "file" : "files"}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-zinc-500">{meta.description}</p>
-        </div>
-        <ChevronDown
-          className={`mt-0.5 h-4 w-4 shrink-0 text-zinc-500 transition-transform ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      {open ? (
-        <ul className="space-y-2 border-t border-zinc-800/80 px-3 pb-3 pt-2">
-          {files.map((file) => (
-            <FileRiskRow
-              key={`${file.component_id}-${file.file_path}`}
-              file={file}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
 export function FileRiskMatrix({
   files,
   quadrantCounts = {},
@@ -194,6 +146,13 @@ export function FileRiskMatrix({
   compact = false,
   title = "File ownership risk",
 }: FileRiskMatrixProps) {
+  const [selectedQuadrant, setSelectedQuadrant] =
+    useState<FileRiskQuadrant>("critical");
+
+  useEffect(() => {
+    setSelectedQuadrant("critical");
+  }, [files]);
+
   const byQuadrant = useMemo(
     () =>
       QUADRANT_PRIORITY.reduce(
@@ -210,9 +169,6 @@ export function FileRiskMatrix({
     crossTrainingPriority.length > 0
       ? crossTrainingPriority
       : byQuadrant.critical;
-
-  const atRiskCount =
-    quadrantCounts.critical ?? byQuadrant.critical.length;
 
   if (files.length === 0) {
     return (
@@ -263,10 +219,15 @@ export function FileRiskMatrix({
         {QUADRANT_PRIORITY.map((quadrant) => {
           const meta = QUADRANT_META[quadrant];
           const count = quadrantCounts[quadrant] ?? byQuadrant[quadrant].length;
+          const isSelected = selectedQuadrant === quadrant;
           return (
-            <div
+            <button
               key={quadrant}
-              className={`rounded-lg border px-3 py-3 ${meta.borderClass}`}
+              type="button"
+              onClick={() => setSelectedQuadrant(quadrant)}
+              className={`rounded-lg border px-3 py-3 text-left transition-colors hover:brightness-110 ${
+                meta.borderClass
+              } ${isSelected ? "ring-2 ring-zinc-400/50" : ""}`}
             >
               <p className={`text-[11px] font-medium uppercase tracking-wide ${meta.accentClass}`}>
                 {meta.shortLabel}
@@ -277,66 +238,38 @@ export function FileRiskMatrix({
               <p className="mt-1 text-[11px] leading-snug text-zinc-500">
                 {meta.label}
               </p>
-            </div>
+            </button>
           );
         })}
       </div>
 
-      {priorityFiles.length > 0 ? (
-        <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/5 p-4">
-          <div className="mb-3 flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
-            <div>
-              <h4 className="text-sm font-medium text-red-100">
-                {atRiskCount === 1 ? "1 file needs attention" : `${atRiskCount} files need attention`}
-              </h4>
-              <p className="mt-1 text-xs text-red-200/80">
-                High change rate with too few editors. Prioritize cross-training on
-                these files first.
-              </p>
-            </div>
-          </div>
-          <ul className="space-y-2">
-            {priorityFiles.slice(0, 8).map((file) => (
+      <div
+        className={`rounded-xl border ${QUADRANT_META[selectedQuadrant].borderClass}`}
+      >
+        <div className="border-b border-zinc-800/80 px-4 py-3">
+          <h4
+            className={`text-sm font-medium ${QUADRANT_META[selectedQuadrant].accentClass}`}
+          >
+            {QUADRANT_META[selectedQuadrant].label}
+          </h4>
+          <p className="mt-1 text-xs text-zinc-500">
+            {QUADRANT_META[selectedQuadrant].description}
+          </p>
+        </div>
+        {byQuadrant[selectedQuadrant].length > 0 ? (
+          <ul className="space-y-2 px-3 py-3">
+            {byQuadrant[selectedQuadrant].map((file) => (
               <FileRiskRow
-                key={`priority-${file.component_id}-${file.file_path}`}
+                key={`${file.component_id}-${file.file_path}`}
                 file={file}
-                emphasize
               />
             ))}
           </ul>
-          {priorityFiles.length > 8 ? (
-            <p className="mt-2 text-xs text-red-200/70">
-              +{priorityFiles.length - 8} more in the sections below
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <div className="mb-5 flex items-start gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
-          <Users className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-          <div>
-            <p className="text-sm font-medium text-emerald-100">
-              No high-risk files in this component
-            </p>
-            <p className="mt-1 text-xs text-emerald-200/80">
-              Nothing is both fast-changing and owned by only one or two people.
-            </p>
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        <h4 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-          All files by category
-        </h4>
-        {QUADRANT_PRIORITY.map((quadrant) => (
-          <QuadrantSection
-            key={quadrant}
-            quadrant={quadrant}
-            files={byQuadrant[quadrant]}
-            defaultOpen={quadrant === "critical" && priorityFiles.length === 0}
-          />
-        ))}
+        ) : (
+          <p className="px-4 py-4 text-sm text-zinc-500">
+            No files in this category.
+          </p>
+        )}
       </div>
     </section>
   );

@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.models.operational import Assignment, Component, Employee, NotionDocSnapshot
+from app.services.notion_client import browser_notion_page_url
 from app.services.notion_types import (
     NotionDocRecord,
     NotionEmployeeDocSignals,
@@ -70,7 +71,10 @@ def _records_from_inventory(
             NotionDocRecord(
                 page_id=str(page["page_id"]),
                 title=str(page.get("title") or "Untitled"),
-                page_url=str(page.get("page_url") or ""),
+                page_url=browser_notion_page_url(
+                    str(page["page_id"]),
+                    str(page.get("page_url") or ""),
+                ),
                 last_edited_at=last_edited,
                 component_id=page.get("component_id"),
                 owner_employee_id=owner_employee_id,

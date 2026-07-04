@@ -595,14 +595,17 @@ def _notion_reference_from_hit(
         return None
     if _is_generic_notion_title(row.title):
         return None
-    if not row.page_url.startswith("http"):
+    from app.services.notion_client import browser_notion_page_url
+
+    page_url = browser_notion_page_url(row.page_id, row.page_url)
+    if not page_url.startswith("http"):
         return None
     kind = row.page_kind.replace("_", " ")
     return InvestigationReference(
         id=f"notion-{page_id}",
         type="notion" if row.page_kind != "postmortem" else "postmortem",
         title=row.title[:120],
-        url=row.page_url,
+        url=page_url,
         snippet=f"{kind.title()} · linked to component",
     )
 

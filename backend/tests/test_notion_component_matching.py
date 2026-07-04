@@ -103,3 +103,32 @@ def test_repo_pack_page_parsed_with_notion_component():
     )
     assert len(docs) == 1
     assert docs[0]["component_id"] == "comp-notion"
+
+
+def test_notion_slug_url_links_employee_exit_page_to_notion_component():
+    docs = parse_document_pages(
+        [
+            {
+                "id": "39237189-07b0-811a-a8e1-e6cc767f01e4",
+                "object": "page",
+                "url": (
+                    "https://app.notion.com/p/04-employee-exit-3923718907b0811aa8e1e6cc767f01e4"
+                ),
+                "last_edited_time": "2026-07-03T00:00:00+00:00",
+                "properties": {
+                    "title": {
+                        "type": "title",
+                        "title": [{"plain_text": "Employee Exit (EE)"}],
+                    }
+                },
+            }
+        ],
+        component_names=COMPONENT_NAMES,
+        path_component_map=PATH_MAP,
+        component_descriptions=COMPONENT_DESCRIPTIONS,
+    )
+    assert len(docs) == 1
+    assert docs[0]["component_id"] == "comp-notion"
+    assert docs[0]["page_url"] == (
+        "https://app.notion.com/p/04-employee-exit-3923718907b0811aa8e1e6cc767f01e4"
+    )

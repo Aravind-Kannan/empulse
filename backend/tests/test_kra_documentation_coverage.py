@@ -343,6 +343,67 @@ def test_github_doc_pack_url_used_for_coverage_link(db, tenant):
     assert covered.notion_sources == ["KRA — Knowledge Risk Assessment"]
 
 
+def test_app_notion_client_url_normalized_for_coverage_link(db, tenant):
+    page_id = "3923718907b0811aa8e1e6cc767f01e4"
+    app_url = (
+        "https://app.notion.com/p/04-employee-exit-3923718907b0811aa8e1e6cc767f01e4"
+        "?assetsVersion=23.13.20260704.0109&clientBuildTarget=client"
+    )
+    bare_url = (
+        "https://app.notion.com/p/1ecb77a778a8e5d1eda8f5e9c2b7544d"
+        "?assetsVersion=23.13.20260704.0109&clientBuildTarget=client"
+    )
+    _seed_component(db, tenant.id, component_id="comp-pay", name="Payments API")
+    db.add(
+        NotionDocSnapshot(
+            tenant_id=tenant.id,
+            page_id="1ecb77a778a8e5d1eda8f5e9c2b7544d",
+            title="Workspace home",
+            page_url=bare_url,
+            component_id="comp-pay",
+            page_kind="runbook",
+            last_edited_at=datetime.now(UTC) - timedelta(days=1),
+            is_stale=False,
+            is_archived=False,
+            computed_at=datetime.now(UTC),
+        )
+    )
+    db.add(
+        NotionDocSnapshot(
+            tenant_id=tenant.id,
+            page_id=page_id,
+            title="Employee Exit",
+            page_url=app_url,
+            component_id="comp-pay",
+            page_kind="runbook",
+            last_edited_at=datetime.now(UTC) - timedelta(days=10),
+            is_stale=False,
+            is_archived=False,
+            computed_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+
+    with notion_ready(), patch(
+        "app.services.kra_metrics.has_github_sync",
+        return_value=True,
+    ), patch(
+        "app.services.kra_metrics.get_github_ownership",
+        return_value={"comp-pay": {"emp-1": 100.0}},
+    ), patch(
+        "app.services.kra_metrics.get_notion_component_sources",
+        return_value=[],
+    ), patch(
+        "app.services.kra_metrics.get_github_activities",
+        return_value=[],
+    ):
+        result = compute_documentation_coverage(db, tenant.id)
+
+    assert result.covered_components[0].notion_page_urls[0] == (
+        "https://app.notion.com/p/04-employee-exit-3923718907b0811aa8e1e6cc767f01e4"
+    )
+
+
 def test_recent_pr_makes_component_active(db, tenant):
     _seed_component(db, tenant.id, component_id="comp-api", name="API Gateway")
     merged_at = (datetime.now(UTC) - timedelta(days=14)).isoformat()
