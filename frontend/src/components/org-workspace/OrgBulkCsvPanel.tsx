@@ -81,7 +81,7 @@ export function OrgBulkCsvPanel({
         }
         const nodes = result.sync_result?.graph_nodes_created ?? 0;
         setSuccess(
-          `Bulk changes synced to Cognee (${nodes} graph nodes re-indexed).`,
+          `Bulk changes synced (${nodes} graph nodes re-indexed).`,
         );
       }
       setPreview(null);

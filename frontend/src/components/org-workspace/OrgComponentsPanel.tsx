@@ -210,7 +210,7 @@ export function OrgComponentsPanel({
 
       <p className="text-xs text-zinc-600">
         Edit names and tags here. Assign owners when editing an employee in List
-        view. Full integration sync dedupes components and syncs to Cognee.
+        view. Full integration sync dedupes components and syncs to the knowledge graph.
       </p>
 
       {editingComponent && onUpdateComponent && (

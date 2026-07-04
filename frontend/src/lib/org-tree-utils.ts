@@ -18,8 +18,99 @@ export interface LayoutNode {
   children: LayoutNode[];
 }
 
-const NODE_WIDTH = 240;
+const LAYOUT_COLUMN_WIDTH = 240;
+const NODE_WIDTH = 188;
+const NODE_HEIGHT = 96;
 const LEVEL_HEIGHT = 148;
+
+export interface DropNodeBox {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function boxCenter(box: DropNodeBox) {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+function boxesOverlap(a: DropNodeBox, b: DropNodeBox): boolean {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+/** Rank drop targets by overlap, then proximity to the dragged node center. */
+export function findReparentCandidateIds(
+  dragged: DropNodeBox,
+  others: DropNodeBox[],
+  snapRadius = NODE_WIDTH * 0.75,
+): string[] {
+  const draggedCenter = boxCenter(dragged);
+  return others
+    .filter((other) => other.id !== dragged.id)
+    .map((other) => {
+      const center = boxCenter(other);
+      const dist = Math.hypot(
+        draggedCenter.x - center.x,
+        draggedCenter.y - center.y,
+      );
+      return {
+        id: other.id,
+        dist,
+        overlaps: boxesOverlap(dragged, other),
+      };
+    })
+    .filter((item) => item.overlaps || item.dist <= snapRadius)
+    .sort((left, right) => {
+      if (left.overlaps !== right.overlaps) return left.overlaps ? -1 : 1;
+      return left.dist - right.dist;
+    })
+    .map((item) => item.id);
+}
+
+/** Resolve a drop target from a flow-coordinate pointer while dragging. */
+export function findDropTargetAtPoint(
+  employees: Employee[],
+  draggedId: string,
+  point: { x: number; y: number },
+  others: DropNodeBox[],
+): string | null {
+  const containing = others
+    .filter((box) => box.id !== draggedId)
+    .filter(
+      (box) =>
+        point.x >= box.x &&
+        point.x <= box.x + box.width &&
+        point.y >= box.y &&
+        point.y <= box.y + box.height,
+    )
+    .map((box) => box.id);
+
+  if (containing.length > 0) {
+    return selectReparentTarget(employees, draggedId, containing);
+  }
+
+  const nearby = others
+    .filter((box) => box.id !== draggedId)
+    .map((box) => {
+      const center = boxCenter(box);
+      return {
+        id: box.id,
+        dist: Math.hypot(point.x - center.x, point.y - center.y),
+      };
+    })
+    .filter((item) => item.dist <= NODE_WIDTH * 0.75)
+    .sort((left, right) => left.dist - right.dist)
+    .map((item) => item.id);
+
+  if (nearby.length === 0) return null;
+  return selectReparentTarget(employees, draggedId, nearby);
+}
 
 export function buildEmployeeTree(employees: Employee[]): TreeNode[] {
   const knownIds = new Set(employees.map((employee) => employee.id));
@@ -93,9 +184,13 @@ export function selectReparentTarget(
     return !wouldCreateCycle(employees, draggedId, id);
   });
   if (valid.length === 0) return null;
-  return [...valid].sort(
-    (left, right) => employeeDepth(employees, left) - employeeDepth(employees, right),
-  )[0];
+  // Prefer deepest node; ties keep proximity/overlap order from candidateIds.
+  return [...valid].sort((left, right) => {
+    const depthDiff =
+      employeeDepth(employees, right) - employeeDepth(employees, left);
+    if (depthDiff !== 0) return depthDiff;
+    return candidateIds.indexOf(left) - candidateIds.indexOf(right);
+  })[0];
 }
 
 export function mergeOrgChartForSave(
@@ -161,7 +256,8 @@ function assignPositions(
   depth: number,
 ): LayoutNode {
   const widthUnits = measureWidth(node);
-  const x = (leftUnits + widthUnits / 2) * NODE_WIDTH - NODE_WIDTH / 2;
+  const x =
+    (leftUnits + widthUnits / 2) * LAYOUT_COLUMN_WIDTH - NODE_WIDTH / 2;
   const y = depth * LEVEL_HEIGHT;
 
   let childLeft = leftUnits;
@@ -188,7 +284,7 @@ export function layoutEmployeeTree(nodes: TreeNode[]): {
     offset += measureWidth(node);
   }
 
-  const width = Math.max(offset * NODE_WIDTH, NODE_WIDTH);
+  const width = Math.max(offset * LAYOUT_COLUMN_WIDTH, NODE_WIDTH);
   const maxDepth = getMaxDepth(layouts);
   const height = (maxDepth + 1) * LEVEL_HEIGHT + 80;
 
@@ -248,4 +344,4 @@ export function removeEmployeeFromOrgChart(
   };
 }
 
-export { NODE_WIDTH, LEVEL_HEIGHT };
+export { NODE_WIDTH, NODE_HEIGHT, LEVEL_HEIGHT };

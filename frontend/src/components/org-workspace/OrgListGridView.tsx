@@ -5,10 +5,13 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  closestCenter,
+  pointerWithin,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -25,9 +28,16 @@ import {
 import {
   buildEmployeeTree,
   flattenTree,
+  wouldCreateCycle,
   type FlatRow,
 } from "@/lib/org-tree-utils";
 import type { Assignment, Component, Employee } from "@/lib/types";
+
+const listDropCollision: CollisionDetection = (args) => {
+  const pointerHits = pointerWithin(args);
+  if (pointerHits.length > 0) return pointerHits;
+  return closestCenter(args);
+};
 
 interface OrgListGridViewProps {
   employees: Employee[];
@@ -291,12 +301,21 @@ export function OrgListGridView({
 
     if (!overId) return;
     if (overId === "drop-root") {
-      onReparent(draggedId, null);
+      if (employees.find((employee) => employee.id === draggedId)?.manager_id) {
+        onReparent(draggedId, null);
+      }
       return;
     }
     if (overId.startsWith("drop-")) {
       const managerId = overId.replace("drop-", "");
-      if (managerId !== draggedId) {
+      const draggedEmployee = employees.find(
+        (employee) => employee.id === draggedId,
+      );
+      if (
+        managerId !== draggedId &&
+        draggedEmployee?.manager_id !== managerId &&
+        !wouldCreateCycle(employees, draggedId, managerId)
+      ) {
         onReparent(draggedId, managerId);
       }
     }
@@ -314,6 +333,7 @@ export function OrgListGridView({
   return (
     <DndContext
       sensors={sensors}
+      collisionDetection={listDropCollision}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragOver={(event) => {

@@ -38,7 +38,7 @@ function EmployeeFlowNodeComponent({
           : isSelected
             ? "border-violet-500/50 bg-gradient-to-br from-violet-500/15 to-indigo-500/5 ring-2 ring-violet-500/30"
             : isDropTarget
-              ? "scale-105 border-sky-400/80 bg-gradient-to-br from-sky-500/15 to-cyan-500/5 ring-2 ring-sky-400/50"
+              ? "border-sky-400/80 bg-gradient-to-br from-sky-500/15 to-cyan-500/5 ring-2 ring-sky-400/50"
               : "border-zinc-700/80 bg-zinc-900/90 hover:border-zinc-500"
       }`}
     >

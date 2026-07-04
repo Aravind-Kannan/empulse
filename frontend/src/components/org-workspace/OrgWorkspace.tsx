@@ -13,6 +13,7 @@ import {
   Loader2,
   Network,
   Pencil,
+  RefreshCw,
   Sparkles,
   Users,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import { OrgComponentsPanel } from "@/components/org-workspace/OrgComponentsPane
 import { OrgHierarchyChartView } from "@/components/org-workspace/OrgHierarchyChartView";
 import { OrgListGridView } from "@/components/org-workspace/OrgListGridView";
 import { TeamTagBar } from "@/components/org-workspace/TeamTagBar";
+import { WorkspacePageHeader } from "@/components/ui/WorkspacePageHeader";
 import { collectOrgRoles } from "@/lib/org-master-data";
 import { generateUniqueEmployeeId } from "@/lib/employee-id";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
@@ -99,20 +101,24 @@ function MainTabButton({
   icon: Icon,
   label,
   count,
+  compact = false,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   count?: number;
+  compact?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`relative flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+      className={`relative flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
         active
-          ? "bg-gradient-to-br from-zinc-100 to-zinc-200 text-slate-950 shadow-lg shadow-black/20"
+          ? compact
+            ? "bg-zinc-100 text-slate-950"
+            : "bg-gradient-to-br from-zinc-100 to-zinc-200 text-slate-950 shadow-lg shadow-black/20"
           : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
       }`}
     >
@@ -328,8 +334,38 @@ export function OrgWorkspace({
   const title = mode === "onboarding" ? "Org Chart Setup" : "Organization Hub";
   const subtitle =
     mode === "onboarding"
-      ? "Drag to re-parent employees, assign team tags, then ingest to Cognee."
+      ? "Drag to re-parent employees, assign team tags, then save your org chart."
       : "People, components, and identity mappings — your workspace command center.";
+  const isSettings = mode === "settings";
+  const panelClassName =
+    "overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40";
+  const tabBarClassName = isSettings
+    ? "flex flex-1 gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-1"
+    : "flex flex-1 gap-1.5 rounded-2xl border border-zinc-800/80 bg-zinc-950/50 p-1.5 backdrop-blur-sm";
+
+  const saveButtonLabel =
+    mode === "onboarding" ? "Confirm & Save" : "Save & Sync";
+
+  const saveButton = (
+    <button
+      type="button"
+      onClick={() => void onSave()}
+      disabled={isSaving}
+      className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-medium text-white shadow-md shadow-emerald-900/20 transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {isSaving ? (
+        <>
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          {savingLabel ?? "Saving…"}
+        </>
+      ) : (
+        <>
+          <Sparkles className="h-3.5 w-3.5" />
+          {saveButtonLabel}
+        </>
+      )}
+    </button>
+  );
 
   const listView = (
     <OrgListGridView
@@ -362,13 +398,21 @@ export function OrgWorkspace({
   );
 
   return (
-    <div className="relative mx-auto max-w-7xl space-y-6 p-4 sm:p-6 lg:p-8">
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-emerald-500/[0.07] via-violet-500/[0.04] to-transparent"
-        aria-hidden
-      />
+    <div
+      className={
+        isSettings
+          ? "space-y-6"
+          : "relative mx-auto max-w-7xl space-y-6"
+      }
+    >
+      {!isSettings ? (
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-emerald-500/[0.07] via-violet-500/[0.04] to-transparent"
+          aria-hidden
+        />
+      ) : null}
 
-      <header className="relative space-y-5">
+      <header className={isSettings ? "space-y-4" : "relative space-y-5"}>
         {backHref ? (
           <Link
             href={backHref}
@@ -379,40 +423,83 @@ export function OrgWorkspace({
           </Link>
         ) : null}
 
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex items-start gap-4">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/15 to-violet-500/10 shadow-lg shadow-emerald-500/5">
-              <GitBranch className="h-6 w-6 text-emerald-300" />
+        {isSettings ? (
+          <>
+            <WorkspacePageHeader
+              title={title}
+              subtitle={subtitle}
+              actions={
+                onRefreshOrgChart ? (
+                  <button
+                    type="button"
+                    onClick={() => void onRefreshOrgChart()}
+                    disabled={isRefreshingOrgChart}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-60"
+                  >
+                    {isRefreshingOrgChart ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    Refresh
+                  </button>
+                ) : undefined
+              }
+            />
+            <div className="grid max-w-md grid-cols-3 gap-3">
+              <StatPill
+                label="People"
+                value={orgChart.employees.length}
+                accent="border-zinc-800 bg-zinc-900/40"
+              />
+              <StatPill
+                label="Components"
+                value={orgChart.components.length}
+                accent="border-zinc-800 bg-zinc-900/40"
+              />
+              <StatPill
+                label="Teams"
+                value={teamCount}
+                accent="border-zinc-800 bg-zinc-900/40"
+              />
             </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
-                Workspace
-              </p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
-                {title}
-              </h1>
-              <p className="mt-1.5 max-w-2xl text-sm text-zinc-400">{subtitle}</p>
+          </>
+        ) : (
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/15 to-violet-500/10 shadow-lg shadow-emerald-500/5">
+                <GitBranch className="h-6 w-6 text-emerald-300" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-600">
+                  Workspace
+                </p>
+                <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
+                  {title}
+                </h1>
+                <p className="mt-1.5 max-w-2xl text-sm text-zinc-400">{subtitle}</p>
+              </div>
             </div>
-          </div>
 
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <StatPill
-              label="People"
-              value={orgChart.employees.length}
-              accent="border-emerald-500/20 bg-emerald-500/5"
-            />
-            <StatPill
-              label="Components"
-              value={orgChart.components.length}
-              accent="border-violet-500/20 bg-violet-500/5"
-            />
-            <StatPill
-              label="Teams"
-              value={teamCount}
-              accent="border-sky-500/20 bg-sky-500/5"
-            />
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              <StatPill
+                label="People"
+                value={orgChart.employees.length}
+                accent="border-emerald-500/20 bg-emerald-500/5"
+              />
+              <StatPill
+                label="Components"
+                value={orgChart.components.length}
+                accent="border-violet-500/20 bg-violet-500/5"
+              />
+              <StatPill
+                label="Teams"
+                value={teamCount}
+                accent="border-sky-500/20 bg-sky-500/5"
+              />
+            </div>
           </div>
-        </div>
+        )}
       </header>
 
       {masterDataSources && masterDataSources.length > 0 ? (
@@ -426,14 +513,15 @@ export function OrgWorkspace({
         </div>
       ) : null}
 
-      <div className="relative flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-1 gap-1.5 rounded-2xl border border-zinc-800/80 bg-zinc-950/50 p-1.5 backdrop-blur-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className={tabBarClassName}>
           <MainTabButton
             active={mainTab === "people"}
             onClick={() => switchTab("people")}
             icon={Users}
             label="People"
             count={orgChart.employees.length}
+            compact={isSettings}
           />
           <MainTabButton
             active={mainTab === "components"}
@@ -441,13 +529,15 @@ export function OrgWorkspace({
             icon={Boxes}
             label="Components"
             count={orgChart.components.length}
+            compact={isSettings}
           />
           {mode === "settings" ? (
             <MainTabButton
               active={mainTab === "identity"}
               onClick={() => switchTab("identity")}
               icon={Fingerprint}
-              label="Identity"
+              label="Identity Mapping"
+              compact={isSettings}
             />
           ) : null}
         </div>
@@ -481,7 +571,7 @@ export function OrgWorkspace({
             onClearSelection={() => setSelectedIds(new Set())}
           />
 
-          <div className="overflow-hidden rounded-2xl border border-zinc-800/80 bg-gradient-to-br from-zinc-900/60 via-zinc-950/80 to-zinc-950 shadow-xl shadow-black/25">
+          <div className={panelClassName}>
             {peopleView === "chart" ? chartView : listView}
           </div>
 
@@ -535,7 +625,7 @@ export function OrgWorkspace({
       ) : null}
 
       {mainTab === "components" ? (
-        <div className="relative overflow-hidden rounded-2xl border border-zinc-800/80 bg-gradient-to-br from-zinc-900/60 via-zinc-950/80 to-zinc-950 p-4 shadow-xl shadow-black/25 sm:p-5">
+        <div className={`relative ${panelClassName} p-4 sm:p-5`}>
           <OrgComponentsPanel
             orgChart={orgChart}
             isRefreshing={isRefreshingOrgChart}
@@ -552,7 +642,7 @@ export function OrgWorkspace({
         <div
           className={
             mainTab === "identity"
-              ? "relative overflow-hidden rounded-2xl border border-zinc-800/80 bg-gradient-to-br from-zinc-900/60 via-zinc-950/80 to-zinc-950 p-4 shadow-xl shadow-black/25 sm:p-5"
+              ? `relative ${panelClassName} p-4 sm:p-5`
               : undefined
           }
         >
@@ -603,40 +693,23 @@ export function OrgWorkspace({
         />
       ) : null}
 
-      <div className="sticky bottom-4 z-10 flex flex-col gap-3 sm:flex-row">
+      <div
+        className={`flex items-center gap-3 border-t border-zinc-800/60 pt-4 ${
+          mode === "onboarding" ? "justify-between" : "justify-end"
+        }`}
+      >
         {mode === "onboarding" ? (
           <button
             type="button"
             onClick={() => router.push("/onboarding")}
             disabled={isSaving}
-            className="rounded-xl border border-zinc-800/80 bg-zinc-950/80 px-4 py-2.5 text-sm font-medium text-zinc-300 backdrop-blur-md transition hover:bg-zinc-900 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
           >
+            <ArrowLeft className="h-3.5 w-3.5" />
             Back to Integrations
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() => void onSave()}
-          disabled={isSaving}
-          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isSaving ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {savingLabel ??
-                (mode === "onboarding"
-                  ? "Ingesting to Cognee…"
-                  : "Saving…")}
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-4 w-4" />
-              {mode === "onboarding"
-                ? "Confirm & Ingest to Cognee"
-                : "Save & Sync to Cognee"}
-            </>
-          )}
-        </button>
+        {saveButton}
       </div>
     </div>
   );

@@ -4,11 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GitBranch } from "lucide-react";
 
-import {
-  OrgWorkspace,
-  type OrgMainTab,
-} from "@/components/org-workspace/OrgWorkspace";
+import { OrgWorkspace, type OrgMainTab } from "@/components/org-workspace/OrgWorkspace";
 import { PanelDataLoader } from "@/components/ui/PanelDataLoader";
+import { WorkspacePageHeader } from "@/components/ui/WorkspacePageHeader";
 import { consolidateOrgComponents, deleteOrgEmployee, deleteOrgComponent, fetchOrgChart, ingestOrgChart, updateOrgComponent, updateOrgEmployee } from "@/lib/api";
 import { mergeOrgChartForSave, removeEmployeeFromOrgChart, wouldCreateCycle } from "@/lib/org-tree-utils";
 import type { Assignment, Employee, OrgChartPayload } from "@/lib/types";
@@ -245,7 +243,7 @@ export function SettingsOrgChartPage() {
       await ingestOrgChart(payload, {
         onStatus: (status) => {
           if (status.status === "queued" || status.status === "running") {
-            setSavingLabel("Syncing to Cognee…");
+            setSavingLabel("Syncing changes…");
           }
         },
       });
@@ -262,17 +260,23 @@ export function SettingsOrgChartPage() {
 
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-6xl p-6 sm:p-8">
-        <PanelDataLoader
-          icon={GitBranch}
-          label="Loading organization chart…"
-          sublabel="Fetching employees, reporting lines, and component assignments."
-          steps={[
-            "Loading employee roster",
-            "Building hierarchy",
-            "Resolving component ownership",
-          ]}
+      <div className="space-y-6">
+        <WorkspacePageHeader
+          title="Organization Hub"
+          subtitle="People, components, and identity mappings — your workspace command center."
         />
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+          <PanelDataLoader
+            icon={GitBranch}
+            label="Loading organization chart…"
+            sublabel="Fetching employees, reporting lines, and component assignments."
+            steps={[
+              "Loading employee roster",
+              "Building hierarchy",
+              "Resolving component ownership",
+            ]}
+          />
+        </div>
       </div>
     );
   }
