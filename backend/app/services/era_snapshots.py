@@ -7,7 +7,6 @@ import uuid
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -19,6 +18,7 @@ from app.schemas.era import (
     EraManagerRollupResponse,
     EraRiskHistoryPoint,
 )
+from app.services.era.types import DIMENSION_KEYS
 from app.services.role_utils import is_leadership_role
 
 logger = logging.getLogger(__name__)
@@ -271,6 +271,25 @@ def _dimensions_from_json(dimensions_json: dict | None) -> EraDimensions | None:
     )
 
 
+def _avg_dimensions_from_snapshots(rows: list[EraRiskSnapshot]) -> EraDimensions | None:
+    if not rows:
+        return None
+    totals = {key: 0.0 for key in DIMENSION_KEYS}
+    for row in rows:
+        dimensions_json = row.dimensions_json or {}
+        for key in DIMENSION_KEYS:
+            totals[key] += float(dimensions_json.get(key, 0))
+    count = len(rows)
+    return EraDimensions(
+        knowledge=round(totals["knowledge"] / count, 1),
+        operational=round(totals["operational"] / count, 1),
+        documentation=round(totals["documentation"] / count, 1),
+        structural=round(totals["structural"] / count, 1),
+        burnout=round(totals["burnout"] / count, 1),
+        partial={},
+    )
+
+
 def get_employee_risk_history(
     db: Session,
     tenant_id: uuid.UUID,
@@ -306,19 +325,19 @@ def get_team_risk_history(
     days: int = 30,
 ) -> list[EraRiskHistoryPoint]:
     cutoff = _utc_today() - timedelta(days=days - 1)
-    risk_rows = (
-        db.query(
-            EraRiskSnapshot.snapshot_date,
-            func.avg(EraRiskSnapshot.risk_factor_score).label("avg_score"),
-        )
+    snapshot_rows = (
+        db.query(EraRiskSnapshot)
         .filter(
             EraRiskSnapshot.tenant_id == tenant_id,
             EraRiskSnapshot.snapshot_date >= cutoff,
         )
-        .group_by(EraRiskSnapshot.snapshot_date)
         .order_by(EraRiskSnapshot.snapshot_date.asc())
         .all()
     )
+    snapshots_by_date: dict[date, list[EraRiskSnapshot]] = defaultdict(list)
+    for row in snapshot_rows:
+        snapshots_by_date[row.snapshot_date].append(row)
+
     health_rows = (
         db.query(EraTeamHealthSnapshot)
         .filter(
@@ -330,14 +349,20 @@ def get_team_risk_history(
     )
     health_by_date = {row.snapshot_date: row for row in health_rows}
     points: list[EraRiskHistoryPoint] = []
-    for row in risk_rows:
-        health = health_by_date.get(row.snapshot_date)
+    for snapshot_date in sorted(snapshots_by_date):
+        day_rows = snapshots_by_date[snapshot_date]
+        avg_score = round(
+            sum(row.risk_factor_score for row in day_rows) / len(day_rows),
+            1,
+        )
+        health = health_by_date.get(snapshot_date)
         points.append(
             EraRiskHistoryPoint(
-                snapshot_date=row.snapshot_date.isoformat(),
-                risk_factor_score=round(float(row.avg_score), 1),
+                snapshot_date=snapshot_date.isoformat(),
+                risk_factor_score=avg_score,
                 org_health_score=health.org_health_score if health else None,
                 orphan_file_count=health.orphan_file_count if health else None,
+                dimensions=_avg_dimensions_from_snapshots(day_rows),
             )
         )
     return points

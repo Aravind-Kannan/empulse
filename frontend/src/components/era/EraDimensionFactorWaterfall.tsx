@@ -49,17 +49,18 @@ function factorInfoText(factor: EraDimensionFactorSummary): string {
 function InfoTooltip({ text }: { text: string }) {
   return (
     <span className="group/info relative inline-flex shrink-0">
-      <button
-        type="button"
-        className="rounded p-0.5 text-zinc-500 hover:text-zinc-300 focus:outline-none focus-visible:ring-1 focus-visible:ring-violet-500"
+      <span
+        role="img"
         aria-label="More detail"
+        className="rounded p-0.5 text-zinc-500 hover:text-zinc-300"
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
       >
-        <Info className="h-3 w-3" />
-      </button>
+        <Info className="h-3 w-3" aria-hidden />
+      </span>
       <span
         role="tooltip"
-        className="pointer-events-none absolute bottom-full right-0 z-10 mb-1 hidden w-52 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-[10px] leading-snug text-zinc-300 shadow-lg group-hover/info:block group-focus-within/info:block"
+        className="pointer-events-none absolute bottom-full right-0 z-10 mb-1 hidden w-52 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-[10px] leading-snug text-zinc-300 shadow-lg group-hover/info:block"
       >
         {text}
       </span>

@@ -102,6 +102,16 @@ export function trendDimensionsForChart(
   return [highestDimensionKey(employee)];
 }
 
+export function teamTrendDimensionsForChart(
+  topDriver: EraDimensionKey,
+  filterDimensions: EraDimensionKey[],
+): EraDimensionKey[] {
+  if (filterDimensions.length > 0) {
+    return filterDimensions;
+  }
+  return [topDriver];
+}
+
 export function historyForDimension(
   history: EraRiskHistoryPoint[],
   dimension: EraDimensionKey,

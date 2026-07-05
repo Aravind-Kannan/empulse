@@ -273,11 +273,12 @@ export function EraCommandCenter() {
         }}
       />
 
-      <div className="grid gap-6 xl:grid-cols-2">
+      <div className="grid gap-6 xl:grid-cols-2 xl:items-stretch">
         <EraTeamComposition
           employees={employees}
-          topRiskDriver={data.team_summary.top_risk_driver}
+          summary={data.team_summary}
           teamHistory={data.team_risk_history_30d ?? []}
+          onSelectEmployee={(employeeId) => openDrawer(employeeId)}
         />
         <EraEvidenceFeed
           items={teamEvidence}

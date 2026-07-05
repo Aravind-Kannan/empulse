@@ -146,6 +146,56 @@ def test_team_avg_trend_7d(db, tenant):
     assert team_avg_trend_7d(db, tenant.id, 40.0) == 10.0
 
 
+def test_team_risk_history_includes_dimension_averages(db, tenant):
+    today = date.today()
+    add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-dim-a",
+        name="Engineer A",
+        email="a@acme.com",
+    )
+    add_employee(
+        db,
+        tenant.id,
+        employee_id="emp-dim-b",
+        name="Engineer B",
+        email="b@acme.com",
+    )
+    db.add(
+        EraRiskSnapshot(
+            tenant_id=tenant.id,
+            employee_id="emp-dim-a",
+            snapshot_date=today,
+            risk_factor_score=40.0,
+            risk_level="medium",
+            dimensions_json={"knowledge": 60.0, "operational": 20.0},
+            computed_at=datetime.now(UTC),
+        )
+    )
+    db.add(
+        EraRiskSnapshot(
+            tenant_id=tenant.id,
+            employee_id="emp-dim-b",
+            snapshot_date=today,
+            risk_factor_score=60.0,
+            risk_level="medium",
+            dimensions_json={"knowledge": 40.0, "operational": 40.0},
+            computed_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+
+    from app.services.era_snapshots import get_team_risk_history
+
+    history = get_team_risk_history(db, tenant.id, days=30)
+    assert len(history) == 1
+    assert history[0].risk_factor_score == 50.0
+    assert history[0].dimensions is not None
+    assert history[0].dimensions.knowledge == 50.0
+    assert history[0].dimensions.operational == 30.0
+
+
 def test_manager_rollup_excludes_leadership(db, tenant):
     manager = add_employee(
         db,
