@@ -300,7 +300,7 @@ function NotionDocumentationLinks({
   if (items.length === 0) return null;
 
   return (
-    <>
+    <span className="break-words">
       {items.map((item, index) => (
         <span key={`${item.label}-${index}`}>
           {index > 0 && ", "}
@@ -309,17 +309,20 @@ function NotionDocumentationLinks({
               href={item.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300"
+              className="break-words text-sky-400 hover:text-sky-300"
             >
               {item.label}
-              <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
+              <ExternalLink
+                className="mb-0.5 ml-0.5 inline h-3 w-3 shrink-0 align-text-bottom"
+                aria-hidden
+              />
             </a>
           ) : (
-            item.label
+            <span className="break-words">{item.label}</span>
           )}
         </span>
       ))}
-    </>
+    </span>
   );
 }
 
@@ -352,22 +355,24 @@ function DocCoverageRow({
 
   return (
     <tr className="border-b border-zinc-800/60 hover:bg-zinc-900/40">
-      <td className="py-3 pr-3 align-top">
+      <td className="max-w-0 py-3 pr-3 align-top break-words">
         <button
           type="button"
           onClick={() => onSelectComponent(componentId)}
-          className="font-medium text-zinc-200 hover:text-sky-300"
+          className="block w-full text-left font-medium break-words text-zinc-200 hover:text-sky-300"
         >
           {componentName}
         </button>
       </td>
       {showStatus && (
-        <td className={`py-3 pr-3 align-top ${statusClass ?? ""}`}>
+        <td
+          className={`max-w-0 py-3 pr-3 align-top break-words ${statusClass ?? ""}`}
+        >
           {statusLabel}
         </td>
       )}
       {notionSources !== undefined && (
-        <td className="py-3 align-top text-zinc-400">
+        <td className="max-w-0 py-3 align-top break-words text-zinc-400">
           {documentation ?? <span className="text-zinc-600">—</span>}
         </td>
       )}
@@ -412,13 +417,17 @@ export function KraDocGapPanel({
             Close
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-8">
+        <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-8">
           {covered.length > 0 && (
             <section>
               <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-emerald-400/90">
                 Covered ({covered.length})
               </h3>
-              <table className="w-full text-left text-sm">
+              <table className="w-full table-fixed text-left text-sm">
+                <colgroup>
+                  <col className="w-[38%]" />
+                  <col className="w-[62%]" />
+                </colgroup>
                 <thead>
                   <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
                     <th className="pb-2 pr-3 font-medium">Component</th>
@@ -447,7 +456,12 @@ export function KraDocGapPanel({
               <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-amber-400/90">
                 Uncovered ({gaps.length})
               </h3>
-              <table className="w-full text-left text-sm">
+              <table className="w-full table-fixed text-left text-sm">
+                <colgroup>
+                  <col className="w-[32%]" />
+                  <col className="w-[28%]" />
+                  <col className="w-[40%]" />
+                </colgroup>
                 <thead>
                   <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
                     <th className="pb-2 pr-3 font-medium">Component</th>
