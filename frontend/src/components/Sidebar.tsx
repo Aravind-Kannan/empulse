@@ -265,7 +265,7 @@ function NavLink({
       </span>
       <span className="min-w-0 flex-1 text-xs leading-snug">{item.label}</span>
       {showLockHint ? (
-        <Lock className="h-3 w-3 shrink-0 text-amber-500/70" title={hint} />
+        <Lock className="h-3 w-3 shrink-0 text-amber-500/70" aria-label={hint} />
       ) : isActive ? (
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-violet-300/80" />
       ) : (

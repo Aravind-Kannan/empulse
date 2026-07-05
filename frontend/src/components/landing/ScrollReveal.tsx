@@ -9,7 +9,7 @@ export const REVEAL_EASE = [0.16, 1, 0.3, 1] as const;
 
 export type RevealVariant = "up" | "down" | "left" | "right" | "scale" | "blur";
 
-const VARIANT_HIDDEN: Record<RevealVariant, Record<string, number>> = {
+const VARIANT_HIDDEN: Record<RevealVariant, Record<string, number | string>> = {
   up: { opacity: 0, y: 48, scale: 0.98 },
   down: { opacity: 0, y: -32, scale: 0.98 },
   left: { opacity: 0, x: -56, scale: 0.98 },

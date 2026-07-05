@@ -54,6 +54,14 @@ interface OrgHierarchyChartViewProps {
   embedded?: boolean;
 }
 
+function clientPointFromDragEvent(event: MouseEvent | TouchEvent): XYPosition {
+  if ("clientX" in event) {
+    return { x: event.clientX, y: event.clientY };
+  }
+  const touch = event.touches[0] ?? event.changedTouches[0];
+  return { x: touch.clientX, y: touch.clientY };
+}
+
 function buildGraphElements(
   employees: Employee[],
   selectedIds: Set<string>,
@@ -349,10 +357,7 @@ function OrgHierarchyCanvas({
 
   const onNodeDrag: OnNodeDrag<Node<EmployeeFlowNodeData>> = useCallback(
     (event, node) => {
-      const point = screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
+      const point = screenToFlowPosition(clientPointFromDragEvent(event));
       const layoutNodes = getNodes() as Node<EmployeeFlowNodeData>[];
       const nextTarget = resolveDropTarget(node.id, point, layoutNodes);
       setDropTargetId(nextTarget);
@@ -366,10 +371,7 @@ function OrgHierarchyCanvas({
       isDraggingRef.current = false;
       draggingNodeIdRef.current = null;
       setDraggedNodeId(null);
-      const point = screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
+      const point = screenToFlowPosition(clientPointFromDragEvent(event));
       const layoutNodes = getNodes() as Node<EmployeeFlowNodeData>[];
       const targetId = resolveDropTarget(node.id, point, layoutNodes);
 

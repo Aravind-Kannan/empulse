@@ -89,7 +89,7 @@ export function EraDetailDrawer({
     setExpandedFactorId(null);
   }, [employeeId, initialDimensionFilter]);
 
-  const trendDimensions = useMemo(() => {
+  const trendDimensions = useMemo((): EraDimensionKey[] => {
     if (!detail?.employee) {
       return initialDimensionFilter ? [initialDimensionFilter] : ["knowledge"];
     }
