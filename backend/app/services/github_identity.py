@@ -135,6 +135,34 @@ def _collect_org_people(
     return logins
 
 
+def _resolve_org_for_repo(
+    session: requests.Session,
+    token: str,
+    owner: str,
+    repo: str,
+) -> str | None:
+    """Return org login when repository is tied to a GitHub Organization."""
+    try:
+        repo_data = _github_get(session, token, f"/repos/{owner}/{repo}").json()
+        org = repo_data.get("organization")
+        if isinstance(org, dict):
+            login = (org.get("login") or "").strip()
+            if login:
+                return login
+    except GitHubClientError as exc:
+        logger.debug("Repo metadata unavailable for %s/%s: %s", owner, repo, exc)
+
+    try:
+        profile = _fetch_user_profile(session, token, owner)
+    except GitHubClientError as exc:
+        logger.debug("Owner profile unavailable for %s: %s", owner, exc)
+        return None
+
+    if profile.get("type") == "Organization":
+        return owner
+    return None
+
+
 def fetch_github_provider_members(config: GitHubConfigRequest) -> list[ProviderMember]:
     """
     Load GitHub people for identity mapping from configured repositories.
@@ -157,10 +185,12 @@ def fetch_github_provider_members(config: GitHubConfigRequest) -> list[ProviderM
     for repository_url in repository_urls:
         owner, repo = parse_repository_url(repository_url)
         logins.update(_collect_repo_people(session, token, owner, repo))
-        org_key = owner.lower()
-        if org_key not in orgs_seen:
-            orgs_seen.add(org_key)
-            logins.update(_collect_org_people(session, token, owner))
+        org_login = _resolve_org_for_repo(session, token, owner, repo)
+        if org_login:
+            org_key = org_login.lower()
+            if org_key not in orgs_seen:
+                orgs_seen.add(org_key)
+                logins.update(_collect_org_people(session, token, org_login))
 
     members: list[ProviderMember] = []
     for login in sorted(logins, key=str.lower):
@@ -173,6 +203,7 @@ def fetch_github_provider_members(config: GitHubConfigRequest) -> list[ProviderM
                     id=github_provider_user_id(login),
                     label=login,
                     email=None,
+                    username=login,
                 )
             )
             continue
@@ -189,6 +220,7 @@ def fetch_github_provider_members(config: GitHubConfigRequest) -> list[ProviderM
                 id=github_provider_user_id(login),
                 label=(profile.get("name") or login).strip() or login,
                 email=email,
+                username=login,
             )
         )
 

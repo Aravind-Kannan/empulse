@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 
 import { KraDashboard } from "@/components/kra/KraDashboard";
+import { KnowledgeIngestionGate } from "@/components/sync/KnowledgeIngestionGate";
 
 function KraPageFallback() {
   return (
@@ -13,9 +14,11 @@ function KraPageFallback() {
 export default function KraPage() {
   return (
     <div className="p-8">
-      <Suspense fallback={<KraPageFallback />}>
-        <KraDashboard />
-      </Suspense>
+      <KnowledgeIngestionGate>
+        <Suspense fallback={<KraPageFallback />}>
+          <KraDashboard />
+        </Suspense>
+      </KnowledgeIngestionGate>
     </div>
   );
 }

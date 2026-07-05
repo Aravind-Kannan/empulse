@@ -34,6 +34,8 @@ from app.schemas.integrations import (
     StoredNotionConfig,
     StoredSlackConfig,
     TenantIntegrationsConfigResponse,
+    VerifyTokenRequest,
+    VerifyTokenResponse,
 )
 from app.services.integration_config_store import (
     get_all_configs,
@@ -321,6 +323,68 @@ async def remove_integration_config(
         configured=False,
         message=detail,
     )
+
+
+@router.post("/verify-token", response_model=VerifyTokenResponse)
+def verify_integration_token(payload: VerifyTokenRequest) -> VerifyTokenResponse:
+    """Lightweight credential verification for onboarding — no config persist, no sync."""
+    source = payload.source
+    try:
+        if source == "slack":
+            message = validate_slack_bot_token(payload.bot_token.strip())
+        elif source == "notion":
+            message = validate_notion_token(payload.integration_token.strip())
+        elif source == "github":
+            token = payload.personal_access_token.strip()
+            if not token:
+                raise ValueError("GitHub personal access token is required.")
+            repository_urls = [
+                url.strip() for url in payload.repository_urls if url.strip()
+            ]
+            if not repository_urls and payload.repository_url.strip():
+                repository_urls = [payload.repository_url.strip()]
+            branch_targets = [
+                branch.strip() for branch in payload.branch_targets if branch.strip()
+            ]
+            if not branch_targets and payload.branch_target.strip():
+                branch_targets = [payload.branch_target.strip()]
+            if repository_urls:
+                message = validate_github_credentials(
+                    token,
+                    repository_urls=repository_urls,
+                    branch_targets=branch_targets or ["main"],
+                    sync_all_branches=payload.sync_all_branches,
+                )
+            else:
+                repos = list_accessible_repositories(token)
+                if not repos:
+                    raise ValueError(
+                        "Token valid but no repositories returned. "
+                        "Confirm PAT has repository read access."
+                    )
+                message = (
+                    f"GitHub token verified — {len(repos)} accessible "
+                    f"repositor{'y' if len(repos) == 1 else 'ies'}."
+                )
+        elif source == "jira":
+            site_url = payload.site_url.strip()
+            auth_email = payload.auth_email.strip()
+            api_token = payload.api_token.strip()
+            if not site_url or not auth_email or not api_token:
+                raise ValueError(
+                    "Jira site URL, auth email, and API token are all required."
+                )
+            _, message = validate_jira_credentials(
+                site_url,
+                api_token,
+                auth_email,
+            )
+        else:
+            raise ValueError(f"Unknown integration source '{source}'.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return VerifyTokenResponse(source=source, valid=True, message=message)
 
 
 @router.post("/github/validate", response_model=IntegrationValidateResponse)

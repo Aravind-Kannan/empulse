@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 
@@ -106,20 +107,84 @@ def list_identity_mappings(db: Session, tenant) -> list[EmployeeIdentityRecord]:
     ]
 
 
+def _normalize_match_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def guess_provider_member_id(
+    employee: Employee,
+    members: list[ProviderMember],
+) -> str | None:
+    """Best-effort provider account id for an employee (email, then name/login)."""
+    email_key = (employee.email or "").strip().lower()
+    if email_key:
+        for member in members:
+            if member.email and member.email.strip().lower() == email_key:
+                return member.id
+
+        local_slug = _normalize_match_slug(email_key.split("@")[0])
+        if local_slug:
+            for member in members:
+                candidate_slugs = (
+                    _normalize_match_slug(member.id),
+                    _normalize_match_slug(member.id.removeprefix("gh-")),
+                    _normalize_match_slug(member.label),
+                )
+                for slug in candidate_slugs:
+                    if not slug:
+                        continue
+                    if local_slug == slug:
+                        return member.id
+                    if len(local_slug) >= 4 and len(slug) >= 4:
+                        if local_slug in slug or slug in local_slug:
+                            return member.id
+
+    name_slug = _normalize_match_slug(employee.name)
+    if not name_slug:
+        return None
+
+    for member in members:
+        label_slug = _normalize_match_slug(member.label)
+        id_slug = _normalize_match_slug(member.id.removeprefix("gh-"))
+        if label_slug and (name_slug in label_slug or label_slug in name_slug):
+            return member.id
+        if id_slug and (name_slug in id_slug or id_slug in name_slug):
+            return member.id
+    return None
+
+
+def mapping_match_confidence(employee: Employee, member: ProviderMember) -> str:
+    employee_email = (employee.email or "").strip().lower()
+    member_email = (member.email or "").strip().lower()
+    if employee_email and member_email and employee_email == member_email:
+        return "high"
+    return "medium"
+
+
+def provider_member_display_label(member: ProviderMember) -> str:
+    """Human-readable label: public name with integration username in brackets."""
+    display = (member.label or "").strip()
+    username = (member.username or "").strip()
+    if not username:
+        member_id = (member.id or "").strip()
+        if member_id.startswith("gh-"):
+            username = member_id.removeprefix("gh-")
+        elif display.startswith("@"):
+            username = display
+            display = display.lstrip("@")
+    if username and display and username.lower() not in display.lower():
+        return f"{display} ({username})"
+    if display:
+        return display
+    return username or member.id
+
+
 def _guess_mapping(
     employee: Employee,
     provider: str,
     members: list[ProviderMember],
 ) -> str | None:
-    email = employee.email.lower()
-    for member in members:
-        if member.email and member.email.lower() == email:
-            return member.id
-    name_slug = employee.name.lower().replace(" ", "")
-    for member in members:
-        if name_slug in member.label.lower().replace("-", "").replace(".", ""):
-            return member.id
-    return None
+    return guess_provider_member_id(employee, members)
 
 
 def _saved_mapping_provider_members(

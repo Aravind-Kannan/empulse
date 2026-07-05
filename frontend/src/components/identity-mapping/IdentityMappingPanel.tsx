@@ -26,6 +26,10 @@ import type {
   IdentityReconciliationResponse,
   ProviderMember,
 } from "@/lib/types";
+import {
+  formatProviderMemberOption,
+  memberLabelForProvider,
+} from "@/lib/identity-member-label";
 
 const PROVIDER_LABELS: Record<IdentityProvider, string> = {
   github: "GitHub",
@@ -41,16 +45,6 @@ const PROVIDER_BY_INTEGRATION: Record<IntegrationId, IdentityProvider> = {
   jira: "jira",
 };
 
-function memberLabel(
-  members: ProviderMember[],
-  memberId: string | null | undefined,
-): string {
-  if (!memberId) return "";
-  const match = members.find((member) => member.id === memberId);
-  if (!match) return memberId;
-  return match.email ? `${match.label} (${match.email})` : match.label;
-}
-
 function rowsFingerprint(rows: EmployeeIdentityRow[]): string {
   return JSON.stringify(
     rows.map((row) => ({
@@ -63,17 +57,28 @@ function rowsFingerprint(rows: EmployeeIdentityRow[]): string {
 interface IdentityMappingPanelProps {
   focusEmployeeId?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
+  integrationsHref?: string;
+  /** Onboarding uses OrgWorkspace "Re-import from sources" instead. */
+  hideRosterReimport?: boolean;
 }
 
 export function IdentityMappingPanel({
   focusEmployeeId = null,
   onDirtyChange,
+  integrationsHref = "/settings/integrations",
+  hideRosterReimport = false,
 }: IdentityMappingPanelProps) {
   const { config } = useIntegrations();
   const { activeTenant } = useAuth();
   const { pushToast } = useToast();
   const [data, setData] = useState<IdentityReconciliationResponse | null>(null);
   const [rows, setRows] = useState<EmployeeIdentityRow[]>([]);
+  const [providerMembers, setProviderMembers] = useState<
+    Partial<Record<IdentityProvider, ProviderMember[]>>
+  >({});
+  const [providerWarnings, setProviderWarnings] = useState<
+    Partial<Record<IdentityProvider, string>>
+  >({});
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
   const [loadedProviders, setLoadedProviders] = useState<Set<IdentityProvider>>(
     () => new Set(),
@@ -123,23 +128,11 @@ export function IdentityMappingPanel({
         }
 
         const members = bundle.provider_members[provider] ?? [];
-        setData((prev) =>
-          prev
-            ? {
-                ...prev,
-                provider_members: {
-                  ...prev.provider_members,
-                  [provider]: members,
-                },
-                provider_warnings: {
-                  ...prev.provider_warnings,
-                  ...(bundle.provider_warnings?.[provider]
-                    ? { [provider]: bundle.provider_warnings[provider]! }
-                    : {}),
-                },
-              }
-            : prev,
-        );
+        const warning = bundle.provider_warnings?.[provider];
+        setProviderMembers((prev) => ({ ...prev, [provider]: members }));
+        if (warning) {
+          setProviderWarnings((prev) => ({ ...prev, [provider]: warning }));
+        }
         setProviderMemberCounts((prev) => ({
           ...prev,
           [provider]: members.length,
@@ -171,6 +164,13 @@ export function IdentityMappingPanel({
   const loadReconciliation = useCallback(async () => {
     setIsLoadingEmployees(true);
     setError(null);
+    loadedProvidersRef.current = new Set();
+    loadingProvidersRef.current = new Set();
+    setLoadedProviders(new Set());
+    setLoadingProviders(new Set());
+    setProviderMemberCounts({});
+    setProviderMembers({});
+    setProviderWarnings({});
 
     if (connectedProviders.length === 0) {
       setData(null);
@@ -199,11 +199,11 @@ export function IdentityMappingPanel({
   }, [loadReconciliation]);
 
   useEffect(() => {
-    if (connectedProviders.length === 0) return;
+    if (isLoadingEmployees || connectedProviders.length === 0) return;
     void Promise.all(
       connectedProviders.map((provider) => loadProviderMembers(provider)),
     );
-  }, [connectedProviders, loadProviderMembers]);
+  }, [connectedProviders, isLoadingEmployees, loadProviderMembers]);
 
   const hasUnsavedChanges =
     rows.length > 0 && savedRowsSnapshot.current !== rowsFingerprint(rows);
@@ -252,6 +252,7 @@ export function IdentityMappingPanel({
       const result = await syncIdentityMappings({
         providers: connectedProviders,
         import_roster: true,
+        replace_roster: true,
         company: activeTenant?.companyName ?? null,
       });
       const rosterNote =
@@ -271,6 +272,8 @@ export function IdentityMappingPanel({
       setLoadedProviders(new Set());
       loadedProvidersRef.current = new Set();
       setProviderMemberCounts({});
+      setProviderMembers({});
+      setProviderWarnings({});
       await loadReconciliation();
       void Promise.all(
         connectedProviders.map((provider) => loadProviderMembers(provider)),
@@ -306,11 +309,15 @@ export function IdentityMappingPanel({
         .join("; ");
       pushToast(
         `Auto-mapped ${result.total_mappings_created} identity link(s). ${providerNote}.${rosterNote}`,
-        "success",
+        result.total_mappings_created > 0 ? "success" : "info",
       );
       setLoadedProviders(new Set());
       loadedProvidersRef.current = new Set();
+      loadingProvidersRef.current = new Set();
+      setLoadingProviders(new Set());
       setProviderMemberCounts({});
+      setProviderMembers({});
+      setProviderWarnings({});
       await loadReconciliation();
       void Promise.all(
         connectedProviders.map((provider) => loadProviderMembers(provider)),
@@ -320,6 +327,10 @@ export function IdentityMappingPanel({
     } finally {
       setIsSyncing(false);
     }
+  }
+
+  function membersForProvider(provider: IdentityProvider): ProviderMember[] {
+    return providerMembers[provider] ?? data?.provider_members[provider] ?? [];
   }
 
   async function handleSave() {
@@ -333,8 +344,8 @@ export function IdentityMappingPanel({
       for (const provider of data.connected_providers) {
         const value = row.mappings[provider];
         if (value) {
-          const members = data.provider_members[provider] ?? [];
-          const label = memberLabel(members, value);
+          const members = membersForProvider(provider);
+          const label = memberLabelForProvider(members, value, provider);
           mappings.push({
             employee_id: row.employee_id,
             provider,
@@ -379,16 +390,18 @@ export function IdentityMappingPanel({
             )}
             Auto-map identities
           </button>
-          <button
-            type="button"
-            onClick={() => setReimportConfirmOpen(true)}
-            disabled={
-              isSyncing || isLoadingEmployees || connectedProviders.length === 0
-            }
-            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Re-import roster
-          </button>
+          {hideRosterReimport ? null : (
+            <button
+              type="button"
+              onClick={() => setReimportConfirmOpen(true)}
+              disabled={
+                isSyncing || isLoadingEmployees || connectedProviders.length === 0
+              }
+              className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Re-import roster
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void handleSave()}
@@ -412,7 +425,7 @@ export function IdentityMappingPanel({
       {connectedProviders.length === 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           No integrations connected yet. Connect apps in{" "}
-          <Link href="/settings/integrations" className="underline">
+          <Link href={integrationsHref} className="underline">
             Integrations
           </Link>{" "}
           to map provider identities.
@@ -425,8 +438,8 @@ export function IdentityMappingPanel({
         </div>
       ) : null}
 
-      {data?.provider_warnings
-        ? Object.entries(data.provider_warnings).map(([provider, warning]) => (
+      {Object.keys(providerWarnings).length > 0
+        ? Object.entries(providerWarnings).map(([provider, warning]) => (
             <div
               key={provider}
               className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
@@ -434,7 +447,17 @@ export function IdentityMappingPanel({
               <span className="font-medium capitalize">{provider}:</span> {warning}
             </div>
           ))
-        : null}
+        : data?.provider_warnings
+          ? Object.entries(data.provider_warnings).map(([provider, warning]) => (
+              <div
+                key={provider}
+                className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+              >
+                <span className="font-medium capitalize">{provider}:</span>{" "}
+                {warning}
+              </div>
+            ))
+          : null}
 
       {isLoadingEmployees ? (
         <div className="flex items-center justify-center py-16 text-zinc-500">
@@ -489,9 +512,13 @@ export function IdentityMappingPanel({
                   </td>
                   <td className="px-4 py-3 text-zinc-400">{row.email}</td>
                   {data.connected_providers.map((provider) => {
-                    const members = data.provider_members[provider] ?? [];
+                    const members = membersForProvider(provider);
                     const selected = row.mappings[provider] ?? "";
-                    const selectedLabel = memberLabel(members, selected);
+                    const selectedLabel = memberLabelForProvider(
+                      members,
+                      selected,
+                      provider,
+                    );
                     const isLoading = loadingProviders.has(provider);
                     const isLoaded = loadedProviders.has(provider);
 
@@ -524,8 +551,7 @@ export function IdentityMappingPanel({
                           ) : null}
                           {members.map((member) => (
                             <option key={member.id} value={member.id}>
-                              {member.label}
-                              {member.email ? ` (${member.email})` : ""}
+                              {formatProviderMemberOption(member, provider)}
                             </option>
                           ))}
                         </select>
@@ -539,18 +565,20 @@ export function IdentityMappingPanel({
         </div>
       ) : null}
 
-      <ConfirmDialog
-        open={reimportConfirmOpen}
-        title="Re-import employee roster?"
-        description="This pulls people from connected integrations and may add or update roster entries. Existing identity mappings are kept unless people are removed."
-        confirmLabel="Re-import roster"
-        cancelLabel="Cancel"
-        onConfirm={() => {
-          setReimportConfirmOpen(false);
-          void runReimportRoster();
-        }}
-        onCancel={() => setReimportConfirmOpen(false)}
-      />
+      {hideRosterReimport ? null : (
+        <ConfirmDialog
+          open={reimportConfirmOpen}
+          title="Re-import employee roster?"
+          description="This pulls people from connected integrations and may add or update roster entries. Existing identity mappings are kept unless people are removed."
+          confirmLabel="Re-import roster"
+          cancelLabel="Cancel"
+          onConfirm={() => {
+            setReimportConfirmOpen(false);
+            void runReimportRoster();
+          }}
+          onCancel={() => setReimportConfirmOpen(false)}
+        />
+      )}
     </div>
   );
 }

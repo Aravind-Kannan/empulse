@@ -19,6 +19,7 @@ from app.services.integration_config_store import get_github_config
 from app.services.provider_members import (
     build_fetch_users_request,
     build_fetch_users_request_for_sources,
+    cache_provider_members,
     fetch_live_provider_members,
 )
 
@@ -41,6 +42,7 @@ def _fetch_provider_members_for_sync(
             return [], "GitHub integration is not configured."
         members = fetch_github_provider_members(config)
         cache_github_provider_members(tenant_id, members)
+        cache_provider_members(tenant_id, "github", members)
         return members, None
 
     live = fetch_live_provider_members(db, tenant_id, provider)
@@ -100,6 +102,7 @@ async def refresh_identity_mappings(
     *,
     providers: list[str] | None = None,
     import_roster: bool = False,
+    replace_roster: bool = False,
     credentials: FetchUsersRequest | None = None,
 ) -> dict[str, object]:
     """
@@ -118,6 +121,7 @@ async def refresh_identity_mappings(
         raise ValueError("Provide at least one provider: github, jira, slack, or notion.")
 
     roster_result: dict[str, object] | None = None
+    roster_source_errors: list[str] = []
     if import_roster:
         roster_credentials = credentials
         if roster_credentials is None:
@@ -137,12 +141,24 @@ async def refresh_identity_mappings(
             db,
             tenant,
             roster_credentials.model_copy(update={"sources": roster_sources}),
+            replace_existing=replace_roster,
         )
+        roster_source_errors = list(roster_result.get("source_errors") or [])
 
     provider_results: list[dict[str, int | str | None]] = []
     total_created = 0
     for provider in active_providers:
         result = sync_provider_identity_members(db, tenant.id, provider)
+        provider_notes = [
+            note.split(": ", 1)[-1]
+            for note in roster_source_errors
+            if note.lower().startswith(f"{provider}:")
+        ]
+        if provider_notes:
+            result = {
+                **result,
+                "roster_warning": provider_notes[0],
+            }
         provider_results.append(result)
         total_created += int(result.get("mappings_created") or 0)
 

@@ -17,19 +17,24 @@ export function SecretInput({
   value,
   onChange,
   placeholder,
-  autoComplete = "off",
+  autoComplete = "one-time-code",
 }: SecretInputProps) {
   const [visible, setVisible] = useState(false);
 
   return (
     <div className="relative">
       <input
-        type={visible ? "text" : "password"}
+        type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         autoComplete={autoComplete}
-        className={inputClass}
+        spellCheck={false}
+        data-1p-ignore
+        data-lpignore="true"
+        data-form-type="other"
+        name="integration-credential"
+        className={`${inputClass}${visible ? "" : " secret-input-masked"}`}
       />
       <button
         type="button"

@@ -25,6 +25,7 @@ import type { DashboardMetrics } from "@/lib/types";
 import { AnimatedMetricValue } from "./AnimatedMetricValue";
 import { DashboardCharts } from "./DashboardCharts";
 import { SetupChecklist } from "./SetupChecklist";
+import { SyncInitializationWidget } from "./SyncInitializationWidget";
 
 const REVEAL_EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -249,6 +250,8 @@ export function DashboardView() {
       </div>
 
       <DashboardCharts />
+
+      <SyncInitializationWidget />
 
       <SetupChecklist />
     </div>

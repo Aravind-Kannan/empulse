@@ -10,17 +10,23 @@ from sqlalchemy.orm import Session
 
 from app.models.operational import Employee, EmployeeIdentity
 from app.schemas.identity import ProviderMember
-from app.services.identity_mapping import PROVIDERS
+from app.services.identity_mapping import (
+    PROVIDERS,
+    guess_provider_member_id,
+    mapping_match_confidence,
+    provider_member_display_label,
+)
 
 logger = logging.getLogger(__name__)
 
-_NOREPLY_SUFFIX = "@users.noreply.github.com"
+_GITHUB_NOREPLY_SUFFIX = "@users.noreply.github.com"
 
 
-def _is_usable_email(email: str | None) -> bool:
+def is_usable_roster_email(email: str | None) -> bool:
+    """True when email can seed org-chart roster rows (excludes GitHub noreply placeholders)."""
     if not email or not str(email).strip():
         return False
-    return not str(email).strip().lower().endswith(_NOREPLY_SUFFIX)
+    return not str(email).strip().lower().endswith(_GITHUB_NOREPLY_SUFFIX)
 
 
 def auto_map_provider_member_identities(
@@ -30,21 +36,21 @@ def auto_map_provider_member_identities(
     members: list[ProviderMember],
 ) -> int:
     """
-    Create high-confidence EmployeeIdentity rows from provider member emails.
+    Create EmployeeIdentity rows by matching roster employees to provider members.
 
-    Skips ambiguous or conflicting mappings. Does not overwrite confirmed rows.
+    Uses email-first matching, then normalized name/login heuristics (same rules
+    as reconciliation guesses). Skips ambiguous or conflicting mappings and
+    does not overwrite confirmed rows.
     """
-    if provider not in PROVIDERS:
+    if provider not in PROVIDERS or not members:
         return 0
 
     employees = db.query(Employee).filter(Employee.tenant_id == tenant_id).all()
     if not employees:
         return 0
 
-    email_to_employee = {
-        employee.email.strip().lower(): employee.id
-        for employee in employees
-        if employee.email and employee.email.strip()
+    members_by_id = {
+        member.id.strip(): member for member in members if member.id and member.id.strip()
     }
 
     existing_rows = (
@@ -60,43 +66,43 @@ def auto_map_provider_member_identities(
 
     created = 0
     now = datetime.utcnow()
-    for member in members:
-        if not _is_usable_email(member.email):
-            continue
-
-        employee_id = email_to_employee.get(member.email.strip().lower())
-        if not employee_id:
-            continue
-
-        provider_id = member.id.strip()
-        if not provider_id:
-            continue
-
-        existing_for_employee = by_employee_id.get(employee_id)
+    for employee in employees:
+        existing_for_employee = by_employee_id.get(employee.id)
         if existing_for_employee:
             if existing_for_employee.confidence == "confirmed":
                 continue
-            if existing_for_employee.provider_username_or_id != provider_id:
-                continue
+            continue
+
+        guessed_id = guess_provider_member_id(employee, members)
+        if not guessed_id:
+            continue
+
+        member = members_by_id.get(guessed_id)
+        if not member:
+            continue
+
+        provider_id = guessed_id.strip()
+        if not provider_id:
+            continue
 
         existing_for_provider = by_provider_id.get(provider_id)
         if existing_for_provider:
-            if existing_for_provider.employee_id != employee_id:
+            if existing_for_provider.employee_id != employee.id:
                 continue
             continue
 
         row = EmployeeIdentity(
             tenant_id=tenant_id,
-            employee_id=employee_id,
+            employee_id=employee.id,
             provider=provider,
             provider_username_or_id=provider_id,
-            provider_display_label=member.label.strip() or None,
-            confidence="high",
+            provider_display_label=provider_member_display_label(member),
+            confidence=mapping_match_confidence(employee, member),
             verified_at=now,
         )
         db.add(row)
         by_provider_id[provider_id] = row
-        by_employee_id[employee_id] = row
+        by_employee_id[employee.id] = row
         created += 1
 
     if created:

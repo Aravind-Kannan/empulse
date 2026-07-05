@@ -5,7 +5,7 @@ import { useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useOnboarding } from "@/context/OnboardingContext";
 
-import { IntegrationsStep } from "./IntegrationsStep";
+import { Step1Integrations } from "@/app/onboarding/components/Step1Integrations";
 
 export function OnboardingWizard() {
   const { session, activeTenant } = useAuth();
@@ -18,5 +18,5 @@ export function OnboardingWizard() {
     }
   }, [activeTenant?.companyName, session?.company, updateOrgCompany]);
 
-  return <IntegrationsStep />;
+  return <Step1Integrations />;
 }

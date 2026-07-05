@@ -5,15 +5,17 @@ import { BrainCircuit } from "lucide-react";
 import { StepIndicator } from "./StepIndicator";
 
 interface OnboardingShellProps {
-  currentStep: 1 | 2 | 3;
+  currentStep: number;
   children: React.ReactNode;
   wide?: boolean;
+  onStepClick?: (step: number) => void;
 }
 
 export function OnboardingShell({
   currentStep,
   children,
   wide = false,
+  onStepClick,
 }: OnboardingShellProps) {
   return (
     <div className="min-h-screen bg-slate-950">
@@ -28,7 +30,7 @@ export function OnboardingShell({
               <p className="text-xs text-zinc-500">Workspace setup</p>
             </div>
           </div>
-          <StepIndicator currentStep={currentStep} />
+          <StepIndicator currentStep={currentStep} onStepClick={onStepClick} />
         </div>
       </header>
 

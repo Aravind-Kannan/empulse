@@ -166,6 +166,29 @@ class IntegrationValidateResponse(BaseModel):
     message: str
 
 
+class VerifyTokenRequest(BaseModel):
+    """Unified lightweight credential check for onboarding Step 1."""
+
+    source: Literal["slack", "notion", "github", "jira"]
+    bot_token: str = ""
+    integration_token: str = ""
+    personal_access_token: str = ""
+    repository_url: str = ""
+    repository_urls: list[str] = Field(default_factory=list)
+    branch_target: str = "main"
+    branch_targets: list[str] = Field(default_factory=list)
+    sync_all_branches: bool = False
+    site_url: str = ""
+    auth_email: str = ""
+    api_token: str = ""
+
+
+class VerifyTokenResponse(BaseModel):
+    source: Literal["slack", "notion", "github", "jira"]
+    valid: bool
+    message: str
+
+
 class IntegrationConfigResponse(BaseModel):
     source: Literal["github", "jira", "notion", "slack"]
     configured: bool

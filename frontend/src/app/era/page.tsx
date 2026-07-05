@@ -2,6 +2,7 @@ import { Suspense } from "react";
 
 import { EraCommandCenter } from "@/components/era/EraCommandCenter";
 import { EraDashboard } from "@/components/era/EraDashboard";
+import { KnowledgeIngestionGate } from "@/components/sync/KnowledgeIngestionGate";
 
 const useCommandCenter =
   process.env.NEXT_PUBLIC_ERA_COMMAND_CENTER !== "false";
@@ -18,13 +19,15 @@ function EraPageFallback() {
 export default function EraPage() {
   return (
     <div className="p-4 md:p-8">
-      {useCommandCenter ? (
-        <Suspense fallback={<EraPageFallback />}>
-          <EraCommandCenter />
-        </Suspense>
-      ) : (
-        <EraDashboard />
-      )}
+      <KnowledgeIngestionGate>
+        {useCommandCenter ? (
+          <Suspense fallback={<EraPageFallback />}>
+            <EraCommandCenter />
+          </Suspense>
+        ) : (
+          <EraDashboard />
+        )}
+      </KnowledgeIngestionGate>
     </div>
   );
 }

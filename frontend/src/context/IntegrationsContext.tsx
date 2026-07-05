@@ -38,6 +38,11 @@ import {
 } from "@/lib/integrations";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 import {
+  connectedBackendIntegrations,
+  integrationsNeverSynced,
+  latestJobPerSource,
+} from "@/lib/sync-jobs";
+import {
   deriveSyncProgress,
   isBatchComplete,
   type SyncProgress,
@@ -113,6 +118,10 @@ interface IntegrationsContextValue {
   statuses: Record<IntegrationId, IntegrationStatus>;
   syncJobs: IntegrationSyncJobStatusResponse[];
   syncProgress: SyncProgress;
+  /** True while any integration sync job is queued or running */
+  isSyncing: boolean;
+  /** True once every connected backend source has a completed sync job */
+  isSyncComplete: boolean;
   syncActionError: string | null;
   pendingSyncSources: ReadonlySet<IntegrationId>;
   globalSyncPending: boolean;
@@ -186,10 +195,13 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
   const hadActiveSyncJobs = useRef(false);
   const seenCompletedJobIds = useRef(new Set<string>());
   const syncJobsInitialized = useRef(false);
+  const autoSyncAttemptedForTenant = useRef<string | null>(null);
+  const [syncJobsHydrated, setSyncJobsHydrated] = useState(false);
 
   const refreshSyncJobs = useCallback(async () => {
     if (!tenantId) {
       setSyncJobs([]);
+      setSyncJobsHydrated(false);
       return;
     }
     try {
@@ -197,6 +209,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       setSyncJobs(response.jobs);
     } catch {
       // Keep last known jobs if polling fails briefly.
+    } finally {
+      setSyncJobsHydrated(true);
     }
   }, [tenantId]);
 
@@ -234,6 +248,74 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     () => deriveSyncProgress(syncJobs, trackedBatchJobIds),
     [syncJobs, trackedBatchJobIds],
   );
+
+  const isSyncing = syncProgress.active || globalSyncPending;
+
+  const isSyncComplete = useMemo(() => {
+    const connectedBackend = connectedBackendIntegrations(config);
+    if (connectedBackend.length === 0) return true;
+    const latestBySource = latestJobPerSource(syncJobs);
+    return connectedBackend.every(
+      (id) => latestBySource.get(id)?.status === "completed",
+    );
+  }, [config, syncJobs]);
+
+  const globalSyncInFlight = useRef(false);
+
+  const triggerGlobalSync = useCallback(async () => {
+    if (globalSyncInFlight.current) return;
+
+    const connected = INTEGRATION_CATALOG.filter((app) =>
+      isIntegrationConnected(app.id, config),
+    );
+    if (connected.length === 0) return;
+
+    globalSyncInFlight.current = true;
+
+    const backendSources = connected.filter((app) =>
+      BACKEND_SYNC_SOURCES.has(app.id),
+    );
+    if (backendSources.length === 0) {
+      globalSyncInFlight.current = false;
+      return;
+    }
+
+    setSyncActionError(null);
+    setGlobalSyncPending(true);
+    setPendingSyncSources(
+      () => new Set(backendSources.map((app) => app.id)),
+    );
+
+    try {
+      const accepted = await syncAllIntegrations();
+      setTrackedBatchJobIds(accepted.jobs.map((job) => job.job_id));
+      await refreshSyncJobs();
+    } catch (err) {
+      setSyncActionError(formatSyncJobError(formatFetchError(err, "Global sync failed")));
+    } finally {
+      globalSyncInFlight.current = false;
+      setGlobalSyncPending(false);
+      setPendingSyncSources(new Set());
+    }
+  }, [config, refreshSyncJobs]);
+
+  useEffect(() => {
+    autoSyncAttemptedForTenant.current = null;
+    setSyncJobsHydrated(false);
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (!tenantId || !syncJobsHydrated) return;
+    if (autoSyncAttemptedForTenant.current === tenantId) return;
+    if (connectedBackendIntegrations(config).length === 0) return;
+    if (!integrationsNeverSynced(config, syncJobs)) return;
+    if (syncJobs.some((job) => job.status === "queued" || job.status === "running")) {
+      return;
+    }
+
+    autoSyncAttemptedForTenant.current = tenantId;
+    void triggerGlobalSync();
+  }, [tenantId, syncJobsHydrated, config, syncJobs, triggerGlobalSync]);
 
   useEffect(() => {
     if (trackedBatchJobIds.length === 0) return;
@@ -396,8 +478,6 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     [statuses],
   );
 
-  const globalSyncInFlight = useRef(false);
-
   const triggerSourceSync = useCallback(
     async (id: IntegrationId) => {
       if (!BACKEND_SYNC_SOURCES.has(id)) return;
@@ -464,49 +544,14 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
     [refreshSyncJobs],
   );
 
-  const triggerGlobalSync = useCallback(async () => {
-    if (globalSyncInFlight.current) return;
-
-    const connected = INTEGRATION_CATALOG.filter((app) =>
-      isIntegrationConnected(app.id, config),
-    );
-    if (connected.length === 0) return;
-
-    globalSyncInFlight.current = true;
-
-    const backendSources = connected.filter((app) =>
-      BACKEND_SYNC_SOURCES.has(app.id),
-    );
-    if (backendSources.length === 0) {
-      globalSyncInFlight.current = false;
-      return;
-    }
-
-    setSyncActionError(null);
-    setGlobalSyncPending(true);
-    setPendingSyncSources(
-      () => new Set(backendSources.map((app) => app.id)),
-    );
-
-    try {
-      const accepted = await syncAllIntegrations();
-      setTrackedBatchJobIds(accepted.jobs.map((job) => job.job_id));
-      await refreshSyncJobs();
-    } catch (err) {
-      setSyncActionError(formatSyncJobError(formatFetchError(err, "Global sync failed")));
-    } finally {
-      globalSyncInFlight.current = false;
-      setGlobalSyncPending(false);
-      setPendingSyncSources(new Set());
-    }
-  }, [config, refreshSyncJobs]);
-
   const value = useMemo(
     () => ({
       config,
       statuses,
       syncJobs,
       syncProgress,
+      isSyncing,
+      isSyncComplete,
       syncActionError,
       pendingSyncSources,
       globalSyncPending,
@@ -526,6 +571,8 @@ export function IntegrationsProvider({ children }: { children: ReactNode }) {
       statuses,
       syncJobs,
       syncProgress,
+      isSyncing,
+      isSyncComplete,
       syncActionError,
       pendingSyncSources,
       globalSyncPending,

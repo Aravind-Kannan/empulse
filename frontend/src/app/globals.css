@@ -3,6 +3,16 @@
 @tailwind utilities;
 
 @layer utilities {
+  .secret-input-masked {
+    -webkit-text-security: disc;
+    text-security: disc;
+  }
+
+  .integration-saved-flash {
+    animation: integration-saved-flash 2.5s ease-out forwards;
+    z-index: 1;
+  }
+
   .landing-hero-spotlight {
     --spotlight-x: 50%;
     --spotlight-y: 40%;
@@ -183,5 +193,27 @@
   }
   50% {
     box-shadow: 0 0 56px rgba(139, 92, 246, 0.24);
+  }
+}
+
+@keyframes integration-saved-flash {
+  0% {
+    border-color: rgb(52 211 153 / 1);
+    box-shadow:
+      0 0 0 3px rgb(52 211 153 / 0.5),
+      0 0 40px rgb(52 211 153 / 0.45);
+    transform: scale(1.02);
+  }
+  35% {
+    border-color: rgb(52 211 153 / 0.7);
+    box-shadow:
+      0 0 0 2px rgb(52 211 153 / 0.35),
+      0 0 28px rgb(52 211 153 / 0.25);
+    transform: scale(1.01);
+  }
+  100% {
+    border-color: rgb(52 211 153 / 0.25);
+    box-shadow: 0 0 0 0 transparent;
+    transform: scale(1);
   }
 }

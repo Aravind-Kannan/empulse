@@ -868,6 +868,13 @@ export interface CogneeDatasetResetResponse {
   message: string;
 }
 
+export interface WorkspaceWipeResponse {
+  tenant_id: string;
+  counts: Record<string, number>;
+  total_rows_removed: number;
+  message: string;
+}
+
 export interface GlobalSyncResult {
   results: IntegrationSyncResult[];
   total_nodes_created: number;
@@ -880,6 +887,7 @@ export interface ProviderMember {
   id: string;
   label: string;
   email: string | null;
+  username?: string | null;
 }
 
 export interface EmployeeIdentityMapping {
@@ -914,11 +922,13 @@ export interface ProviderIdentitySyncResult {
   members_fetched: number;
   mappings_created: number;
   warning: string | null;
+  roster_warning?: string | null;
 }
 
 export interface IdentitySyncRequest {
   providers?: IdentityProvider[];
   import_roster?: boolean;
+  replace_roster?: boolean;
   company?: string | null;
 }
 

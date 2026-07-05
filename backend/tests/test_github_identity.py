@@ -43,13 +43,53 @@ def test_fetch_github_provider_members_merges_repo_contributors():
     }
 
     with patch("app.services.github_identity._paginate_github", side_effect=fake_paginate):
-        with patch("app.services.github_identity._fetch_user_profile") as mock_profile:
-            mock_profile.side_effect = lambda session, token, login: profiles[login]
-            members = fetch_github_provider_members(config)
+        with patch(
+            "app.services.github_identity._resolve_org_for_repo",
+            return_value="acme",
+        ):
+            with patch("app.services.github_identity._fetch_user_profile") as mock_profile:
+                mock_profile.side_effect = lambda session, token, login: profiles[login]
+                members = fetch_github_provider_members(config)
 
     ids = {member.id for member in members}
     assert ids == {"gh-alicechen", "gh-bobdev", "gh-carapatel"}
     assert next(member for member in members if member.id == "gh-alicechen").email == "alice@acme.com"
+
+
+def test_fetch_github_provider_members_uses_contributors_for_personal_repo():
+    config = GitHubConfigRequest(
+        repository_url="https://github.com/personal-dev/my-repo",
+        personal_access_token="token",
+    )
+
+    def fake_paginate(session, token, path, **kwargs):
+        if path.endswith("/contributors"):
+            return [{"login": "personal-dev", "type": "User"}]
+        if path.endswith("/collaborators"):
+            return []
+        return []
+
+    profiles = {
+        "personal-dev": {
+            "login": "personal-dev",
+            "name": "Personal Dev",
+            "email": None,
+            "type": "User",
+        },
+    }
+
+    with patch("app.services.github_identity._paginate_github", side_effect=fake_paginate):
+        with patch(
+            "app.services.github_identity._resolve_org_for_repo",
+            return_value=None,
+        ):
+            with patch("app.services.github_identity._fetch_user_profile") as mock_profile:
+                mock_profile.side_effect = lambda session, token, login: profiles[login]
+                members = fetch_github_provider_members(config)
+
+    assert len(members) == 1
+    assert members[0].id == "gh-personal-dev"
+    assert members[0].email is None
 
 
 def test_sync_github_contributor_identities_creates_high_confidence_rows(db, tenant):

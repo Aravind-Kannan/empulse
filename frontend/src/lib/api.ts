@@ -47,6 +47,7 @@ import type {
   BulkUploadResponse,
   CogneeDatasetResetRequest,
   CogneeDatasetResetResponse,
+  WorkspaceWipeResponse,
   EmployeeUpdateResponse,
   EmployeeDeleteResponse,
   ComponentUpdateResponse,
@@ -245,6 +246,8 @@ export async function ingestOrgChart(
   payload: OrgChartPayload,
   options?: {
     onStatus?: (status: IngestJobStatusResponse) => void;
+    /** When false, return after PostgreSQL persist (202) without waiting for Cognee. */
+    waitForCompletion?: boolean;
   },
 ): Promise<OrgChartIngestResponse> {
   const response = await apiFetch(`${API_BASE}/api/ingest/org-chart`, {
@@ -278,6 +281,17 @@ export async function ingestOrgChart(
       updated_at: new Date().toISOString(),
       completed_at: null,
     });
+    if (options?.waitForCompletion === false) {
+      return {
+        company: payload.company,
+        employees_persisted: payload.employees.length,
+        components_persisted: payload.components.length,
+        assignments_persisted: payload.assignments.length,
+        cognee_dataset: "",
+        graph_nodes_created: 0,
+        graph_edges_created: 0,
+      };
+    }
     return pollIngestJob(accepted.job_id, options?.onStatus);
   }
 
@@ -759,6 +773,43 @@ async function parseApiError(response: Response, fallback: string): Promise<stri
     : `${fallback} (${response.status})`;
 }
 
+export async function verifyIntegrationToken(
+  source: IntegrationId,
+  fields: Record<string, string | string[] | boolean>,
+): Promise<string> {
+  const response = await apiFetch(`${API_BASE}/api/integrations/verify-token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, ...fields }),
+    skipErrorToast: true,
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Token verification failed"));
+  }
+  const data = (await response.json()) as { message: string };
+  return data.message;
+}
+
+export async function saveIntegrationConfigOnly(
+  id: IntegrationId,
+  config: IntegrationConfigMap,
+): Promise<void> {
+  switch (id) {
+    case "github":
+      await saveGitHubIntegrationConfig(config.github);
+      return;
+    case "jira":
+      await saveJiraIntegrationConfig(config.jira);
+      return;
+    case "notion":
+      await saveNotionIntegrationConfig(config.notion);
+      return;
+    case "slack":
+      await saveSlackIntegrationConfig(config.slack);
+      return;
+  }
+}
+
 export async function validateNotionIntegration(
   integrationToken: string,
 ): Promise<string> {
@@ -1200,6 +1251,17 @@ export async function resetCogneeDataset(
   return response.json();
 }
 
+export async function wipeWorkspaceOperationalData(): Promise<WorkspaceWipeResponse> {
+  const response = await apiFetch(`${API_BASE}/api/tenants/wipe-operational-data`, {
+    method: "POST",
+    timeoutMs: 120_000,
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "Workspace data wipe failed"));
+  }
+  return response.json();
+}
+
 export async function saveAndSyncIntegration(
   id: IntegrationId,
   config: IntegrationConfigMap,
@@ -1366,6 +1428,7 @@ export async function syncIdentityMappings(
     body: JSON.stringify({
       providers: payload.providers ?? [],
       import_roster: payload.import_roster ?? false,
+      replace_roster: payload.replace_roster ?? false,
       company: payload.company ?? null,
     }),
   });

@@ -2,17 +2,21 @@
 
 import {
   CheckCircle2,
-  Database,
   History,
   Loader2,
+  RefreshCw,
   Settings2,
 } from "lucide-react";
 
-import { formatLocalDateTime } from "@/lib/datetime";
+import { formatLocalDateTime, formatRelativeTime } from "@/lib/datetime";
 import { integrationConfigSummary } from "@/lib/integration-summary";
 import type { IntegrationDefinition } from "@/lib/integrations";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
 import { useIntegrations } from "@/context/IntegrationsContext";
+import {
+  formatSyncChangeSummary,
+  latestCompletedJob,
+} from "@/lib/sync-jobs";
 
 import { CognifyProgress } from "./CognifyProgress";
 import { RepoSyncProgress } from "./RepoSyncProgress";
@@ -36,7 +40,7 @@ function StatTile({
   label: string;
   value: string | number;
   hint?: string;
-  icon: typeof Database;
+  icon: typeof History;
 }) {
   return (
     <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4 backdrop-blur-sm">
@@ -62,16 +66,60 @@ export function IntegrationOverviewTab({
   const summaryRows = integrationConfigSummary(app.id, config);
   const completedJobs = sourceJobs.filter((job) => job.status === "completed");
   const failedJobs = sourceJobs.filter((job) => job.status === "failed");
-  const totalIngested = completedJobs.reduce(
-    (sum, job) => sum + (job.result?.graph_nodes_created ?? 0),
-    0,
-  );
+  const latestCompleted = latestCompletedJob(sourceJobs);
+  const latestResult = latestCompleted?.result;
   const isActive =
     syncing || latestJob?.status === "running" || latestJob?.status === "queued";
+
+  const lastSyncValue = isActive
+    ? "In progress"
+    : latestJob?.completed_at
+      ? formatRelativeTime(latestJob.completed_at)
+      : "—";
+
+  const lastSyncHint = latestJob?.completed_at
+    ? formatLocalDateTime(latestJob.completed_at)
+    : connected
+      ? "Awaiting first import"
+      : "Connect to start syncing";
+
+  const latestChangesValue =
+    latestResult &&
+    ((latestResult.items_new ?? 0) > 0 ||
+      (latestResult.items_updated ?? 0) > 0 ||
+      (latestResult.items_skipped ?? 0) > 0)
+      ? formatSyncChangeSummary(
+          latestResult.items_new ?? 0,
+          latestResult.items_updated ?? 0,
+          latestResult.items_skipped ?? 0,
+        )
+      : latestCompleted
+        ? "No changes"
+        : "—";
 
   return (
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-3">
+        <StatTile
+          icon={CheckCircle2}
+          label="Last sync"
+          value={lastSyncValue}
+          hint={
+            latestJob?.status === "failed"
+              ? "Last run failed — check Runs tab"
+              : lastSyncHint
+          }
+        />
+        <StatTile
+          icon={RefreshCw}
+          label="Latest changes"
+          value={latestChangesValue}
+          hint={
+            latestCompleted
+              ? "From most recent completed run"
+              : "After first successful sync"
+          }
+        />
         <StatTile
           icon={History}
           label="Sync runs"
@@ -81,35 +129,7 @@ export function IntegrationOverviewTab({
               ? `${failedJobs.length} failed`
               : sourceJobs.length === 0
                 ? "No runs yet"
-                : undefined
-          }
-        />
-        <StatTile
-          icon={Database}
-          label="Records synced"
-          value={totalIngested || "—"}
-          hint={
-            completedJobs.length > 0
-              ? `From ${completedJobs.length} completed run(s)`
-              : "After first successful sync"
-          }
-        />
-        <StatTile
-          icon={CheckCircle2}
-          label="Last sync"
-          value={
-            latestJob?.completed_at
-              ? formatLocalDateTime(latestJob.completed_at)
-              : isActive
-                ? "In progress"
-                : "—"
-          }
-          hint={
-            latestJob?.status === "failed"
-              ? "Last run failed — check Runs tab"
-              : connected
-                ? "Up to date"
-                : "Connect to start syncing"
+                : `${completedJobs.length} completed`
           }
         />
       </div>

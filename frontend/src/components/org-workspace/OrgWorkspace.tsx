@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Boxes,
@@ -53,6 +52,11 @@ export interface OrgWorkspaceProps {
   onSave: () => Promise<void>;
   backHref?: string;
   backLabel?: string;
+  onBack?: () => void;
+  onSkip?: () => void;
+  isSkipping?: boolean;
+  onReimportFromSources?: (options: { replaceExisting: boolean }) => void;
+  isReimporting?: boolean;
   onRefreshOrgChart?: () => void | Promise<void>;
   isRefreshingOrgChart?: boolean;
   onUpdateComponent?: (
@@ -188,6 +192,11 @@ export function OrgWorkspace({
   onSave,
   backHref,
   backLabel = "Back",
+  onBack,
+  onSkip,
+  isSkipping = false,
+  onReimportFromSources,
+  isReimporting = false,
   onRefreshOrgChart,
   isRefreshingOrgChart = false,
   onUpdateComponent,
@@ -198,7 +207,6 @@ export function OrgWorkspace({
   hasUnsavedChanges = false,
   onDiscardUnsavedChanges,
 }: OrgWorkspaceProps) {
-  const router = useRouter();
   const [mainTab, setMainTab] = useState<OrgMainTab>(initialTab);
   const [peopleView, setPeopleView] = useState<PeopleView>("chart");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -221,6 +229,7 @@ export function OrgWorkspace({
   const [pendingDeleteEmployeeId, setPendingDeleteEmployeeId] = useState<string | null>(
     null,
   );
+  const [reimportDialogOpen, setReimportDialogOpen] = useState(false);
 
   useEffect(() => {
     setMainTab(initialTab);
@@ -357,7 +366,7 @@ export function OrgWorkspace({
   const title = mode === "onboarding" ? "Org Chart Setup" : "Organization Hub";
   const subtitle =
     mode === "onboarding"
-      ? "Drag to re-parent employees, assign team tags, then save your org chart."
+      ? "Review imported people, map identities to connected apps, then save."
       : "People, components, and identity mappings — your workspace command center.";
   const isSettings = mode === "settings";
   const panelClassName =
@@ -366,20 +375,34 @@ export function OrgWorkspace({
     "flex h-12 shrink-0 gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-1";
 
   const saveButtonLabel =
-    mode === "onboarding" ? "Confirm & save people" : "Save people";
+    mode === "onboarding" ? "Save & continue" : "Save people";
+
+  const showImportBanner =
+    Boolean(onReimportFromSources) ||
+    Boolean(masterDataSources && masterDataSources.length > 0);
 
   const saveButton = (
     <button
       type="button"
       onClick={() => void onSave()}
-      disabled={isSaving || (isSettings && !hasUnsavedChanges)}
-      className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-medium text-white shadow-md shadow-emerald-900/20 transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={
+        isSaving ||
+        isSkipping ||
+        (isSettings && !hasUnsavedChanges)
+      }
+      className={
+        mode === "onboarding"
+          ? "inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-5 py-2 text-sm font-medium text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          : "inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-medium text-white shadow-md shadow-emerald-900/20 transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
+      }
     >
       {isSaving ? (
         <>
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           {savingLabel ?? "Saving people…"}
         </>
+      ) : mode === "onboarding" ? (
+        saveButtonLabel
       ) : (
         <>
           <Sparkles className="h-3.5 w-3.5" />
@@ -488,14 +511,40 @@ export function OrgWorkspace({
         ) : null}
       </header>
 
-      {masterDataSources && masterDataSources.length > 0 ? (
-        <div className="relative rounded-2xl border border-emerald-500/25 bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent px-4 py-3.5 text-sm text-emerald-100">
-          Imported {orgChart.employees.length} member
-          {orgChart.employees.length === 1 ? "" : "s"} from{" "}
-          <span className="font-medium">{masterDataSources.join(", ")}</span>
-          {hierarchyMode === "flat"
-            ? " as a flat roster — use Chart view to assign managers."
-            : " with reporting lines from your connected sources."}
+      {showImportBanner ? (
+        <div className="relative flex flex-col gap-3 rounded-2xl border border-emerald-500/25 bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent px-4 py-3.5 text-sm text-emerald-100 sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            {orgChart.employees.length > 0 ? (
+              <>
+                {orgChart.employees.length} team member
+                {orgChart.employees.length === 1 ? "" : "s"} imported from your
+                connected apps. Review the roster below
+                {hierarchyMode === "flat"
+                  ? " and use Chart view to assign managers and teams."
+                  : " and adjust reporting lines as needed."}
+              </>
+            ) : (
+              <>
+                Pulling team members from your connected apps. Review the roster
+                below and use Chart view to assign managers and teams.
+              </>
+            )}
+          </p>
+          {onReimportFromSources ? (
+            <button
+              type="button"
+              onClick={() => setReimportDialogOpen(true)}
+              disabled={isReimporting || isSaving}
+              className="inline-flex shrink-0 items-center gap-2 self-start rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 sm:self-center"
+            >
+              {isReimporting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              Re-import from sources
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -508,14 +557,16 @@ export function OrgWorkspace({
             label="People"
             count={orgChart.employees.length}
           />
-          <MainTabButton
-            active={mainTab === "components"}
-            onClick={() => switchTab("components")}
-            icon={Boxes}
-            label="Components"
-            count={orgChart.components.length}
-          />
-          {mode === "settings" ? (
+          {mode !== "onboarding" ? (
+            <MainTabButton
+              active={mainTab === "components"}
+              onClick={() => switchTab("components")}
+              icon={Boxes}
+              label="Components"
+              count={orgChart.components.length}
+            />
+          ) : null}
+          {mode === "settings" || mode === "onboarding" ? (
             <MainTabButton
               active={mainTab === "identity"}
               onClick={() => switchTab("identity")}
@@ -548,7 +599,7 @@ export function OrgWorkspace({
         </div>
       ) : null}
 
-      {mainTab === "components" ? (
+      {mainTab === "components" && mode !== "onboarding" ? (
         <div className={`relative ${panelClassName} p-4 sm:p-5`}>
           <OrgComponentsPanel
             orgChart={orgChart}
@@ -562,11 +613,15 @@ export function OrgWorkspace({
         </div>
       ) : null}
 
-      {mode === "settings" && mainTab === "identity" ? (
+      {(mode === "settings" || mode === "onboarding") && mainTab === "identity" ? (
         <div className={`relative ${panelClassName} p-4 sm:p-5`}>
           <IdentityMappingPanel
             focusEmployeeId={identityFocusEmployeeId}
             onDirtyChange={setHasUnsavedIdentityChanges}
+            integrationsHref={
+              mode === "onboarding" ? "/onboarding" : "/settings/integrations"
+            }
+            hideRosterReimport={mode === "onboarding"}
           />
         </div>
       ) : null}
@@ -591,6 +646,7 @@ export function OrgWorkspace({
           employee={editingEmployee}
           orgChart={orgChart}
           availableRoles={availableRoles}
+          hideComponentOwnership={mode === "onboarding"}
           isSaving={isEditing}
           isDeleting={isDeletingEmployee}
           allowDelete={Boolean(onDeleteEmployee)}
@@ -649,19 +705,57 @@ export function OrgWorkspace({
         }}
         onCancel={() => setPendingDeleteEmployeeId(null)}
       />
+
+      {onReimportFromSources ? (
+        <ConfirmDialog
+          open={reimportDialogOpen}
+          wide
+          title="Re-import team members?"
+          description="Pull fresh people from your connected integrations. Choose whether to keep the edits you have already made on this page or start over with a clean roster."
+          confirmLabel="Clear roster & re-import"
+          secondaryConfirmLabel="Merge with my edits"
+          cancelLabel="Cancel"
+          onConfirm={() => {
+            setReimportDialogOpen(false);
+            onReimportFromSources({ replaceExisting: true });
+          }}
+          onSecondaryConfirm={() => {
+            setReimportDialogOpen(false);
+            onReimportFromSources({ replaceExisting: false });
+          }}
+          onCancel={() => setReimportDialogOpen(false)}
+        />
+      ) : null}
       </div>
 
       {mode === "onboarding" ? (
-        <div className="mt-auto flex items-center justify-between gap-3 border-t border-zinc-800/60 pt-4">
-          <button
-            type="button"
-            onClick={() => router.push("/onboarding")}
-            disabled={isSaving}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to Integrations
-          </button>
+        <div className="mt-auto flex items-center justify-between gap-4 border-t border-zinc-800/40 pt-5">
+          <div className="flex items-center gap-5">
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                disabled={isSaving || isSkipping}
+                className="inline-flex items-center gap-1 text-xs text-zinc-500 transition hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ArrowLeft className="h-3 w-3" />
+                Back
+              </button>
+            ) : null}
+            {onSkip ? (
+              <button
+                type="button"
+                onClick={onSkip}
+                disabled={isSaving || isSkipping}
+                className="inline-flex items-center gap-1.5 text-xs text-zinc-500 transition hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isSkipping ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : null}
+                {isSkipping ? "Opening dashboard…" : "Skip for now"}
+              </button>
+            ) : null}
+          </div>
           {saveButton}
         </div>
       ) : null}

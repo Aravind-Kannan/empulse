@@ -18,6 +18,7 @@ from app.schemas.employee_master import (
 )
 from app.services.employee_ids import employee_id_from_email
 from app.services.integration_config_store import get_github_config, get_jira_config
+from app.services.identity_auto_map import is_usable_roster_email
 from app.services.jira_user_email import (
     enrich_jira_users_with_emails,
     is_synthetic_jira_email,
@@ -228,69 +229,51 @@ def _fetch_slack_users_live(token: str) -> list[MasterDataRecord]:
 def _fetch_github_org_members_live(
     repository_url: str,
     token: str,
-) -> list[MasterDataRecord]:
-    org = _parse_github_org(repository_url)
-    if not org:
-        raise ValueError("GitHub repository URL must include an org or owner segment.")
+) -> tuple[list[MasterDataRecord], str | None]:
+    """Import roster-eligible people from repo contributors/collaborators (and org when available)."""
+    from app.schemas.integrations import GitHubConfigRequest
+    from app.services.github_identity import fetch_github_provider_members
 
-    headers = {
-        "Authorization": f"Bearer {token.strip()}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    config = GitHubConfigRequest(
+        repository_url=repository_url.strip(),
+        personal_access_token=token.strip(),
+    )
+    members = fetch_github_provider_members(config)
+
     records: list[MasterDataRecord] = []
-    page = 1
-    while True:
-        response = requests.get(
-            f"https://api.github.com/orgs/{org}/members",
-            headers=headers,
-            params={"per_page": 100, "page": page},
-            timeout=20,
+    without_email = 0
+    for member in members:
+        if not is_usable_roster_email(member.email):
+            without_email += 1
+            continue
+        records.append(
+            MasterDataRecord(
+                source="github",
+                external_id=member.id,
+                name=member.label,
+                email=member.email.strip(),
+                title="GitHub Contributor",
+                manager_email=None,
+            )
         )
-        if response.status_code == 404:
-            return _fetch_github_users_fallback(org)
-        response.raise_for_status()
-        batch = response.json()
-        if not batch:
-            break
 
-        for member in batch:
-            login = member.get("login", "github-user")
-            user_resp = requests.get(
-                member.get("url", f"https://api.github.com/users/{login}"),
-                headers=headers,
-                timeout=15,
-            )
-            profile = user_resp.json() if user_resp.ok else {}
-            email = profile.get("email") or f"{login}@users.noreply.github.com"
-            records.append(
-                MasterDataRecord(
-                    source="github",
-                    external_id=str(member.get("id", login)),
-                    name=profile.get("name") or login,
-                    email=email,
-                    title="GitHub Org Member",
-                    manager_email=None,
-                )
-            )
-        if len(batch) < 100:
-            break
-        page += 1
+    if not members:
+        return [], (
+            "No GitHub contributors found for this repository. "
+            "Confirm the token can read the repo and try again."
+        )
+    if without_email > 0 and not records:
+        count_label = (
+            f"{without_email} contributor"
+            f"{'' if without_email == 1 else 's'}"
+        )
+        return records, (
+            f"{count_label} found for identity mapping but none have a public "
+            "profile email — skipped for org chart. Map GitHub logins under "
+            "Identity Mapping."
+        )
 
-    return records or _fetch_github_users_fallback(org)
-
-
-def _fetch_github_users_fallback(org: str) -> list[MasterDataRecord]:
-    return [
-        MasterDataRecord(
-            source="github",
-            external_id=f"gh-{org}-owner",
-            name=f"{org} Owner",
-            email=f"{org}@users.noreply.github.com",
-            title="Repository Owner",
-            manager_email=None,
-        ),
-    ]
+    return records, None
 
 
 def _fetch_slack_users_fallback() -> list[MasterDataRecord]:
@@ -781,7 +764,7 @@ def _fetch_source_records(
     db: Session | None = None,
     tenant_id: uuid.UUID | None = None,
     known_emails_by_name: dict[str, str] | None = None,
-) -> list[MasterDataRecord]:
+) -> tuple[list[MasterDataRecord], list[str]]:
     creds = credentials or FetchUsersRequest(sources=[source])
     live_requested = _source_credentials_provided(source, creds)
 
@@ -789,14 +772,14 @@ def _fetch_source_records(
         token = (creds.slack_bot_token or "").strip()
         if token:
             try:
-                return _fetch_slack_users_live(token)
+                return _fetch_slack_users_live(token), []
             except (ValueError, requests.RequestException) as exc:
                 raise ValueError(
                     f"Slack member import failed: {exc}"
                 ) from exc
         if live_requested:
             raise ValueError("Slack bot token is missing.")
-        return _fetch_slack_users_fallback()
+        return _fetch_slack_users_fallback(), []
 
     if source == "github":
         gh_config = (
@@ -812,7 +795,9 @@ def _fetch_source_records(
         )
         if repo_url.strip() and token.strip():
             try:
-                return _fetch_github_org_members_live(repo_url, token)
+                records, note = _fetch_github_org_members_live(repo_url, token)
+                warnings = [f"github: {note}"] if note else []
+                return records, warnings
             except (ValueError, requests.RequestException) as exc:
                 raise ValueError(
                     f"GitHub member import failed: {exc}"
@@ -821,7 +806,7 @@ def _fetch_source_records(
             raise ValueError(
                 "GitHub repository URL and personal access token are required."
             )
-        return _fetch_github_users_fallback_demo()
+        return _fetch_github_users_fallback_demo(), []
 
     if source == "jira":
         stored_config = (
@@ -845,12 +830,15 @@ def _fetch_source_records(
         )
         if site_url and api_token:
             try:
-                return _fetch_jira_users_live(
-                    site_url,
-                    account_email,
-                    api_token,
-                    project_keys or None,
-                    known_emails_by_name=known_emails_by_name,
+                return (
+                    _fetch_jira_users_live(
+                        site_url,
+                        account_email,
+                        api_token,
+                        project_keys or None,
+                        known_emails_by_name=known_emails_by_name,
+                    ),
+                    [],
                 )
             except (ValueError, requests.RequestException) as exc:
                 raise ValueError(f"Jira member import failed: {exc}") from exc
@@ -858,7 +846,7 @@ def _fetch_source_records(
             raise ValueError(
                 "Jira site URL and API token are required."
             )
-        return _fetch_jira_users_fallback()
+        return _fetch_jira_users_fallback(), []
 
     if source == "notion":
         token = (creds.notion_integration_token or "").strip()
@@ -876,12 +864,12 @@ def _fetch_source_records(
                     "with your integration (••• → Connect to) and ensure the "
                     "integration can read user information."
                 )
-            return live
+            return live, []
         if live_requested:
             raise ValueError("Notion integration token is missing.")
-        return _fetch_notion_users_fallback()
+        return _fetch_notion_users_fallback(), []
 
-    return []
+    return [], []
 
 
 def _pick_title(records: list[MasterDataRecord]) -> str:
@@ -997,9 +985,14 @@ def fetch_employee_master_data(
     for source in non_jira_sources:
         sources_queried.append(source)
         try:
-            raw_records.extend(
-                _fetch_source_records(source, credentials, db=db, tenant_id=tenant_id)
+            records, warnings = _fetch_source_records(
+                source,
+                credentials,
+                db=db,
+                tenant_id=tenant_id,
             )
+            source_errors.extend(warnings)
+            raw_records.extend(records)
         except ValueError as exc:
             source_errors.append(f"{source}: {exc}")
 
@@ -1014,15 +1007,15 @@ def fetch_employee_master_data(
     for source in jira_sources:
         sources_queried.append(source)
         try:
-            raw_records.extend(
-                _fetch_source_records(
-                    source,
-                    credentials,
-                    db=db,
-                    tenant_id=tenant_id,
-                    known_emails_by_name=known_emails_by_name or None,
-                )
+            records, warnings = _fetch_source_records(
+                source,
+                credentials,
+                db=db,
+                tenant_id=tenant_id,
+                known_emails_by_name=known_emails_by_name or None,
             )
+            source_errors.extend(warnings)
+            raw_records.extend(records)
         except ValueError as exc:
             source_errors.append(f"{source}: {exc}")
 
@@ -1030,6 +1023,22 @@ def fetch_employee_master_data(
         raise ValueError("; ".join(source_errors))
 
     if not raw_records:
+        if skip_failed_sources:
+            if not source_errors:
+                source_errors.append(
+                    "No roster-eligible members found from connected sources. "
+                    "Verify integration permissions, or map GitHub users under "
+                    "Identity Mapping."
+                )
+            return EmployeeMasterDataResponse(
+                company=company,
+                employees=[],
+                sources_queried=sources_queried,
+                roles_discovered=[],
+                records_merged=0,
+                hierarchy_mode="flat",
+                source_errors=source_errors,
+            )
         if source_errors:
             raise ValueError("; ".join(source_errors))
         raise ValueError(

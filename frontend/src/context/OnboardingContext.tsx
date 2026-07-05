@@ -12,6 +12,7 @@ import {
 import { EMPTY_ORG_CHART } from "@/lib/acme-org";
 import { collectOrgRoles, masterDataToOrgChart } from "@/lib/org-master-data";
 import { wouldCreateCycle, removeEmployeeFromOrgChart } from "@/lib/org-tree-utils";
+import { useIntegrations } from "@/context/IntegrationsContext";
 import type {
   Assignment,
   Employee,
@@ -27,6 +28,8 @@ interface OnboardingContextValue {
   availableRoles: string[];
   masterDataSources: string[] | null;
   hierarchyMode: "flat" | "structured" | null;
+  isSyncing: boolean;
+  isSyncComplete: boolean;
   setStep: (step: OnboardingStep) => void;
   updateOrgCompany: (company: string) => void;
   applyMasterData: (master: EmployeeMasterDataResponse, company: string) => void;
@@ -38,6 +41,10 @@ interface OnboardingContextValue {
   reparentEmployee: (employeeId: string, managerId: string | null) => void;
   assignTeamTag: (employeeIds: string[], teamName: string) => void;
   setOrgChart: (orgChart: OrgChartPayload) => void;
+  setImportMetadata: (
+    sources: string[],
+    hierarchyMode: "flat" | "structured" | null,
+  ) => void;
 }
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
@@ -45,6 +52,7 @@ const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 export { OnboardingContext };
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
+  const { isSyncing, isSyncComplete } = useIntegrations();
   const [step] = useState<OnboardingStep>(1);
   const [orgChart, setOrgChartState] = useState<OrgChartPayload>(() =>
     structuredClone(EMPTY_ORG_CHART),
@@ -70,6 +78,14 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const setOrgChart = useCallback((next: OrgChartPayload) => {
     setOrgChartState(next);
   }, []);
+
+  const setImportMetadata = useCallback(
+    (sources: string[], mode: "flat" | "structured" | null) => {
+      setMasterDataSources(sources);
+      setHierarchyMode(mode);
+    },
+    [],
+  );
 
   const applyMasterData = useCallback(
     (master: EmployeeMasterDataResponse, company: string) => {
@@ -162,6 +178,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       availableRoles,
       masterDataSources,
       hierarchyMode,
+      isSyncing,
+      isSyncComplete,
       setStep,
       updateOrgCompany,
       applyMasterData,
@@ -173,6 +191,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       reparentEmployee,
       assignTeamTag,
       setOrgChart,
+      setImportMetadata,
     }),
     [
       step,
@@ -180,6 +199,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       availableRoles,
       masterDataSources,
       hierarchyMode,
+      isSyncing,
+      isSyncComplete,
       setStep,
       updateOrgCompany,
       applyMasterData,
@@ -191,6 +212,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       reparentEmployee,
       assignTeamTag,
       setOrgChart,
+      setImportMetadata,
     ],
   );
 

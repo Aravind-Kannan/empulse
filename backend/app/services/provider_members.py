@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 
+import requests
 from sqlalchemy.orm import Session
 
 from app.schemas.employee_master import FetchUsersRequest, MasterDataRecord
@@ -72,11 +73,62 @@ def _records_to_members(records: list[MasterDataRecord]) -> list[ProviderMember]
     members: list[ProviderMember] = []
     for record in records:
         email = str(record.email).strip() or None
+        username = None
+        if email and "@" in email:
+            username = email.split("@", 1)[0]
         members.append(
             ProviderMember(
                 id=record.external_id,
                 label=record.name,
                 email=email,
+                username=username,
+            )
+        )
+    return members
+
+
+def _fetch_slack_provider_members(token: str) -> list[ProviderMember]:
+    """Slack users for identity mapping — includes @handles for dropdown labels."""
+    records = _fetch_slack_users_live(token)
+
+    headers = {"Authorization": f"Bearer {token.strip()}"}
+    handles_by_id: dict[str, str] = {}
+    cursor: str | None = None
+    while True:
+        params: dict[str, str] = {"limit": "200"}
+        if cursor:
+            params["cursor"] = cursor
+        response = requests.get(
+            "https://slack.com/api/users.list",
+            headers=headers,
+            params=params,
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            break
+        for member in payload.get("members", []):
+            if member.get("deleted") or member.get("is_bot"):
+                continue
+            member_id = str(member.get("id", "")).strip()
+            login = str(member.get("name") or "").strip()
+            if member_id and login:
+                handles_by_id[member_id] = login if login.startswith("@") else f"@{login}"
+        cursor = (payload.get("response_metadata") or {}).get("next_cursor")
+        if not cursor:
+            break
+
+    members: list[ProviderMember] = []
+    for record in records:
+        email = str(record.email).strip() or None
+        handle = handles_by_id.get(record.external_id)
+        members.append(
+            ProviderMember(
+                id=record.external_id,
+                label=record.name,
+                email=email,
+                username=handle,
             )
         )
     return members
@@ -153,11 +205,10 @@ def fetch_live_provider_members(
             token = (stored.get("bot_token") or "").strip()
             if not token:
                 return _store_live_provider_members(tenant_id, provider, [])
-            records = _fetch_slack_users_live(token)
             return _store_live_provider_members(
                 tenant_id,
                 provider,
-                _records_to_members(records),
+                _fetch_slack_provider_members(token),
             )
 
         if provider == "notion":

@@ -1,23 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
-import type { IntegrationDefinition } from "@/lib/integrations";
+import type { IntegrationDefinition, IntegrationId } from "@/lib/integrations";
 
-import { IntegrationConfigPanel } from "./IntegrationConfigPanel";
+import {
+  IntegrationConfigPanel,
+  type ConnectMode,
+} from "./IntegrationConfigPanel";
 import { IntegrationLogo } from "./IntegrationLogos";
 
 interface IntegrationConfigDrawerProps {
   app: IntegrationDefinition;
   onClose: () => void;
+  connectMode?: ConnectMode;
+  onSaveComplete?: (appId: IntegrationId) => void;
+  banner?: ReactNode;
 }
 
-/** Legacy drawer shell — prefer `/settings/integrations/[id]` detail page. */
 export function IntegrationConfigDrawer({
   app,
   onClose,
+  connectMode = "full",
+  onSaveComplete,
+  banner,
 }: IntegrationConfigDrawerProps) {
   const [mounted, setMounted] = useState(false);
 
@@ -25,10 +33,19 @@ export function IntegrationConfigDrawer({
     setMounted(true);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+
     return () => {
       document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [onClose]);
 
   const drawer = (
     <>
@@ -42,7 +59,7 @@ export function IntegrationConfigDrawer({
         role="dialog"
         aria-modal="true"
         aria-labelledby="integration-drawer-title"
-        className="fixed inset-y-0 right-0 z-[101] flex w-full max-w-md flex-col border-l border-zinc-800 bg-slate-950 shadow-2xl"
+        className="fixed inset-y-0 right-0 z-[101] flex w-full max-w-2xl flex-col border-l border-zinc-800 bg-slate-950 shadow-2xl"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-5">
           <div className="flex min-w-0 items-center gap-3">
@@ -73,11 +90,20 @@ export function IntegrationConfigDrawer({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+        {banner ? (
+          <div className="shrink-0 border-b border-zinc-800/80 px-5 py-3">{banner}</div>
+        ) : null}
+
+        <div className="flex min-h-0 flex-1 flex-col px-5 py-5">
           <IntegrationConfigPanel
             app={app}
             variant="drawer"
+            connectMode={connectMode}
             onDisconnectComplete={onClose}
+            onSaveComplete={() => {
+              onSaveComplete?.(app.id);
+              window.setTimeout(onClose, 250);
+            }}
           />
         </div>
       </aside>

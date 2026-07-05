@@ -1,6 +1,33 @@
 import { apiDateToEpochMs } from "@/lib/datetime";
-import { INTEGRATION_CATALOG, type IntegrationId } from "@/lib/integrations";
+import {
+  INTEGRATION_CATALOG,
+  isIntegrationConnected,
+  type IntegrationConfigMap,
+  type IntegrationId,
+} from "@/lib/integrations";
 import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
+
+const BACKEND_SYNC_SOURCES = new Set<IntegrationId>(["github", "jira", "notion", "slack"]);
+
+export function connectedBackendIntegrations(
+  config: IntegrationConfigMap,
+): IntegrationId[] {
+  return INTEGRATION_CATALOG.filter(
+    (app) =>
+      BACKEND_SYNC_SOURCES.has(app.id) && isIntegrationConnected(app.id, config),
+  ).map((app) => app.id);
+}
+
+/** True when every connected backend source has zero sync jobs on record. */
+export function integrationsNeverSynced(
+  config: IntegrationConfigMap,
+  syncJobs: IntegrationSyncJobStatusResponse[],
+): boolean {
+  const connected = connectedBackendIntegrations(config);
+  if (connected.length === 0) return false;
+  const latestBySource = latestJobPerSource(syncJobs);
+  return connected.every((id) => !latestBySource.has(id));
+}
 
 export function jobsBySource(
   jobs: IntegrationSyncJobStatusResponse[],
@@ -101,6 +128,100 @@ export function syncJobLabel(job: IntegrationSyncJobStatusResponse): string {
   return job.source.charAt(0).toUpperCase() + job.source.slice(1);
 }
 
+export interface WorkspaceSyncStats {
+  newItems: number;
+  updatedItems: number;
+  skippedItems: number;
+  changedItems: number;
+  completedCount: number;
+  lastCompletedAt: string | null;
+}
+
+export function aggregateWorkspaceSyncStats(
+  jobs: IntegrationSyncJobStatusResponse[],
+): WorkspaceSyncStats {
+  const completed = jobs.filter((job) => job.status === "completed" && job.result);
+  let newItems = 0;
+  let updatedItems = 0;
+  let skippedItems = 0;
+  let lastCompletedAt: string | null = null;
+  let lastCompletedMs = 0;
+
+  for (const job of completed) {
+    const result = job.result!;
+    newItems += result.items_new ?? 0;
+    updatedItems += result.items_updated ?? 0;
+    skippedItems += result.items_skipped ?? 0;
+    if (job.completed_at) {
+      const completedMs = apiDateToEpochMs(job.completed_at);
+      if (completedMs > lastCompletedMs) {
+        lastCompletedMs = completedMs;
+        lastCompletedAt = job.completed_at;
+      }
+    }
+  }
+
+  return {
+    newItems,
+    updatedItems,
+    skippedItems,
+    changedItems: newItems + updatedItems,
+    completedCount: completed.length,
+    lastCompletedAt,
+  };
+}
+
+export function formatSyncChangeSummary(
+  newItems: number,
+  updatedItems: number,
+  skippedItems?: number,
+): string {
+  const parts: string[] = [];
+  if (newItems > 0) parts.push(`${newItems.toLocaleString()} new`);
+  if (updatedItems > 0) parts.push(`${updatedItems.toLocaleString()} updated`);
+  if (skippedItems !== undefined && skippedItems > 0) {
+    parts.push(`${skippedItems.toLocaleString()} unchanged`);
+  }
+  return parts.join(" · ") || "No changes";
+}
+
+export function latestCompletedJob(
+  jobs: IntegrationSyncJobStatusResponse[],
+): IntegrationSyncJobStatusResponse | null {
+  let latest: IntegrationSyncJobStatusResponse | null = null;
+  let latestMs = 0;
+
+  for (const job of jobs) {
+    if (job.status !== "completed" || !job.result) continue;
+    const completedMs = apiDateToEpochMs(job.completed_at ?? job.created_at);
+    if (completedMs >= latestMs) {
+      latestMs = completedMs;
+      latest = job;
+    }
+  }
+
+  return latest;
+}
+
+export function sourcesNeedingAttention(
+  config: IntegrationConfigMap,
+  syncJobs: IntegrationSyncJobStatusResponse[],
+): { count: number; labels: string[] } {
+  const connected = connectedBackendIntegrations(config);
+  const latestBySource = latestJobPerSource(syncJobs);
+  const labels: string[] = [];
+
+  for (const id of connected) {
+    const latest = latestBySource.get(id);
+    const appName = INTEGRATION_CATALOG.find((app) => app.id === id)?.name ?? id;
+    if (!latest || latest.status === "failed" || latest.status === "cancelled") {
+      labels.push(appName);
+    }
+  }
+
+  return { count: labels.length, labels };
+}
+
 export function syncStatusLabel(
   job: IntegrationSyncJobStatusResponse | null,
   syncing: boolean,
@@ -121,5 +242,5 @@ export function syncStatusLabel(
   if (!connected) {
     return { text: "Not connected", className: "text-zinc-500" };
   }
-  return { text: "Ready to sync", className: "text-zinc-400" };
+  return { text: "Awaiting first import", className: "text-zinc-400" };
 }

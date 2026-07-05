@@ -120,6 +120,68 @@ export function integrationConfigSummary(
   }
 }
 
+const LIST_CARD_CAPABILITY_CHIPS: Record<IntegrationId, string[]> = {
+  slack: ["Org roster", "ERA & Exit", "90-day lookback"],
+  notion: ["Org roster", "ERA & Exit", "Documentation"],
+  github: ["Org roster", "ERA, Exit & KRA", "Repos & PRs"],
+  jira: ["Org roster", "ERA & Exit", "Investigation"],
+};
+
+/** Short scope + capability chips for integrations directory cards. */
+export function integrationListCardChips(
+  id: IntegrationId,
+  config: IntegrationConfigMap,
+  connected: boolean,
+): string[] {
+  const chips: string[] = [];
+
+  if (connected) {
+    switch (id) {
+      case "slack":
+        chips.push(
+          config.slack.channelIds.trim() ? "Selected channels" : "All joined channels",
+        );
+        break;
+      case "notion":
+        chips.push(
+          config.notion.databaseIds.trim() ? "Selected databases" : "All shared databases",
+        );
+        break;
+      case "github": {
+        const repos =
+          config.github.repositoryUrls.length > 0
+            ? config.github.repositoryUrls
+            : config.github.repositoryUrl.trim()
+              ? [config.github.repositoryUrl.trim()]
+              : [];
+        if (repos.length > 0) {
+          chips.push(`${repos.length} repo${repos.length === 1 ? "" : "s"}`);
+        }
+        chips.push(
+          config.github.ingestFileContent ? "Full file content" : "Metadata only",
+        );
+        break;
+      }
+      case "jira": {
+        const keys = parseJiraProjectKeys(config.jira.projectKeys);
+        chips.push(
+          keys.length > 0
+            ? `${keys.length} project${keys.length === 1 ? "" : "s"}`
+            : "All projects",
+        );
+        break;
+      }
+    }
+  }
+
+  for (const chip of LIST_CARD_CAPABILITY_CHIPS[id] ?? []) {
+    if (chips.length >= 3) break;
+    if (!chips.includes(chip)) chips.push(chip);
+  }
+
+  return chips.slice(0, 3);
+}
+
 function shortRepoLabel(url: string): string {
   try {
     const parts = new URL(url).pathname.split("/").filter(Boolean);

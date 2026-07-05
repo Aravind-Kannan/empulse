@@ -9,6 +9,10 @@ class ProviderMember(BaseModel):
     id: str
     label: str
     email: str | None = None
+    username: str | None = Field(
+        default=None,
+        description="Integration handle/login shown beside display name in UI.",
+    )
 
 
 class EmployeeIdentityMapping(BaseModel):
@@ -76,6 +80,7 @@ class ProviderIdentitySyncResult(BaseModel):
     members_fetched: int = 0
     mappings_created: int = 0
     warning: str | None = None
+    roster_warning: str | None = None
 
 
 class IdentitySyncRequest(BaseModel):
@@ -88,6 +93,13 @@ class IdentitySyncRequest(BaseModel):
     import_roster: bool = Field(
         default=False,
         description="Also merge employees from integrations into the org roster.",
+    )
+    replace_roster: bool = Field(
+        default=False,
+        description=(
+            "When import_roster is true, replace the persisted roster with the "
+            "fresh import instead of merging into existing employees."
+        ),
     )
     company: str | None = Field(
         default=None,

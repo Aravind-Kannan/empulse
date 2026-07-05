@@ -35,10 +35,14 @@ import {
 import { IntegrationSearchMultiSelect } from "./IntegrationSearchMultiSelect";
 import { SecretInput } from "./SecretInput";
 
+export type ConnectMode = "full" | "credentials-only";
+
 interface IntegrationConfigPanelProps {
   app: IntegrationDefinition;
   variant?: "page" | "drawer";
+  connectMode?: ConnectMode;
   onDisconnectComplete?: () => void;
+  onSaveComplete?: () => void;
 }
 
 function Field({
@@ -99,6 +103,7 @@ interface ConnectStep {
 function buildConnectSteps(
   integrationId: IntegrationId,
   integrationName: string,
+  connectMode: ConnectMode,
 ): ConnectStep[] {
   const steps: ConnectStep[] = [];
 
@@ -121,22 +126,25 @@ function buildConnectSteps(
         ? "Saving Jira configuration"
         : "Saving integration configuration";
 
-  steps.push(
-    { id: "save", label: saveLabel, status: "pending" },
-    {
-      id: "sync",
-      label:
-        integrationId === "jira"
-          ? "Queuing background sync"
-          : `Queuing ${integrationName} sync`,
-      status: "pending",
-    },
-    {
-      id: "refresh",
-      label: "Refreshing workspace telemetry and dashboards",
-      status: "pending",
-    },
-  );
+  steps.push({ id: "save", label: saveLabel, status: "pending" });
+
+  if (connectMode === "full") {
+    steps.push(
+      {
+        id: "sync",
+        label:
+          integrationId === "jira"
+            ? "Queuing background sync"
+            : `Queuing ${integrationName} sync`,
+        status: "pending",
+      },
+      {
+        id: "refresh",
+        label: "Refreshing workspace telemetry and dashboards",
+        status: "pending",
+      },
+    );
+  }
 
   return steps;
 }
@@ -172,7 +180,13 @@ function completeStep(steps: ConnectStep[], doneId: ConnectStepId): ConnectStep[
   });
 }
 
-function ConnectProgressPanel({ steps }: { steps: ConnectStep[] }) {
+function ConnectProgressPanel({
+  steps,
+  credentialsOnly = false,
+}: {
+  steps: ConnectStep[];
+  credentialsOnly?: boolean;
+}) {
   return (
     <div
       className="rounded-xl border border-sky-500/25 bg-sky-500/5 px-4 py-3"
@@ -181,7 +195,8 @@ function ConnectProgressPanel({ steps }: { steps: ConnectStep[] }) {
     >
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-sky-300">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Connecting {steps.some((s) => s.status === "active") ? "in progress" : "…"}
+        {credentialsOnly ? "Verifying" : "Connecting"}{" "}
+        {steps.some((s) => s.status === "active") ? "in progress" : "…"}
       </div>
       <ol className="space-y-2">
         {steps.map((step) => (
@@ -214,18 +229,25 @@ function ConnectProgressPanel({ steps }: { steps: ConnectStep[] }) {
           </li>
         ))}
       </ol>
-      <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-        Sync runs in the background. Large GitHub repos can take several minutes —
-        track progress on the Runs tab.
-      </p>
+      {!credentialsOnly && (
+        <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+          Sync runs in the background. Large GitHub repos can take several minutes —
+          track progress on the Runs tab.
+        </p>
+      )}
     </div>
   );
 }
 
+const CREDENTIALS_ONLY_SUCCESS =
+  "Credentials verified and saved. Start sync from your dashboard.";
+
 export function IntegrationConfigPanel({
   app,
   variant = "page",
+  connectMode = "full",
   onDisconnectComplete,
+  onSaveComplete,
 }: IntegrationConfigPanelProps) {
   const { config, updateConfig, disconnect, refreshSyncJobs } = useIntegrations();
   const { refreshOperationalState } = useWorkspace();
@@ -246,6 +268,7 @@ export function IntegrationConfigPanel({
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [branchInput, setBranchInput] = useState("");
   const isBusy = saving;
+  const credentialsOnly = connectMode === "credentials-only";
 
   function beginStep(stepId: ConnectStepId) {
     setConnectSteps((prev) => advanceStep(prev, stepId));
@@ -256,7 +279,7 @@ export function IntegrationConfigPanel({
   }
 
   async function handleSave() {
-    const steps = buildConnectSteps(app.id, app.name);
+    const steps = buildConnectSteps(app.id, app.name, connectMode);
     setConnectSteps(steps);
     setSaving(true);
     setError(null);
@@ -285,11 +308,15 @@ export function IntegrationConfigPanel({
           });
           updateConfig("notion", { validated: true, previouslyConnected: true });
         });
-        await runStep("sync", async () => {
-          await syncIntegrationSource("notion");
-          await refreshSyncJobs();
-        });
-        setSuccess(`${message} Sync queued — check the Runs tab for progress.`);
+        if (!credentialsOnly) {
+          await runStep("sync", async () => {
+            await syncIntegrationSource("notion");
+            await refreshSyncJobs();
+          });
+          setSuccess(`${message} Sync queued — check the Runs tab for progress.`);
+        } else {
+          setSuccess(CREDENTIALS_ONLY_SUCCESS);
+        }
       } else if (app.id === "slack") {
         if (!config.slack.botToken.trim()) {
           throw new Error("Slack bot token is required.");
@@ -306,11 +333,15 @@ export function IntegrationConfigPanel({
           });
           updateConfig("slack", { validated: true, previouslyConnected: true });
         });
-        await runStep("sync", async () => {
-          await syncIntegrationSource("slack");
-          await refreshSyncJobs();
-        });
-        setSuccess(`${message} Sync queued — check the Runs tab for progress.`);
+        if (!credentialsOnly) {
+          await runStep("sync", async () => {
+            await syncIntegrationSource("slack");
+            await refreshSyncJobs();
+          });
+          setSuccess(`${message} Sync queued — check the Runs tab for progress.`);
+        } else {
+          setSuccess(CREDENTIALS_ONLY_SUCCESS);
+        }
       } else if (app.id === "github") {
         const selectedRepos =
           config.github.repositoryUrls.length > 0
@@ -365,11 +396,15 @@ export function IntegrationConfigPanel({
             previouslyConnected: true,
           });
         });
-        await runStep("sync", async () => {
-          await syncIntegrationSource("github");
-          await refreshSyncJobs();
-        });
-        setSuccess(`${message} Sync queued — check the Runs tab for progress.`);
+        if (!credentialsOnly) {
+          await runStep("sync", async () => {
+            await syncIntegrationSource("github");
+            await refreshSyncJobs();
+          });
+          setSuccess(`${message} Sync queued — check the Runs tab for progress.`);
+        } else {
+          setSuccess(CREDENTIALS_ONLY_SUCCESS);
+        }
       } else if (app.id === "jira") {
         const validationError = validateJiraConfigDraft(config.jira);
         if (validationError) {
@@ -397,18 +432,27 @@ export function IntegrationConfigPanel({
             previouslyConnected: true,
           });
         });
-        await runStep("sync", async () => {
-          await syncIntegrationSource("jira");
-        });
-        setSuccess(`${message} Connected and synced.`);
+        if (!credentialsOnly) {
+          await runStep("sync", async () => {
+            await syncIntegrationSource("jira");
+          });
+          setSuccess(`${message} Connected and synced.`);
+        } else {
+          setSuccess(CREDENTIALS_ONLY_SUCCESS);
+        }
       }
 
-      await runStep("refresh", async () => {
-        await refreshOperationalState();
-      });
+      if (!credentialsOnly) {
+        await runStep("refresh", async () => {
+          await refreshOperationalState();
+        });
+      }
 
       setConnectSteps([]);
       setSaving(false);
+      if (credentialsOnly) {
+        onSaveComplete?.();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save integration");
       setConnectSteps([]);
@@ -796,7 +840,9 @@ export function IntegrationConfigPanel({
                 }
                 placeholder="you@company.com"
                 className={integrationInputClass}
-                autoComplete="email"
+                autoComplete="off"
+                data-1p-ignore
+                data-lpignore="true"
               />
             </Field>
             <Field
@@ -846,15 +892,20 @@ export function IntegrationConfigPanel({
   }
 
   const isPage = variant === "page";
+  const saveButtonLabel = saving
+    ? credentialsOnly
+      ? "Saving…"
+      : "Connecting…"
+    : connected
+      ? credentialsOnly
+        ? "Save & re-verify"
+        : "Save & re-verify"
+      : credentialsOnly
+        ? "Save & verify"
+        : "Save & verify connection";
 
-  return (
-    <div
-      className={
-        isPage
-          ? "space-y-6 rounded-2xl border border-zinc-800/80 bg-zinc-950/30 p-6 backdrop-blur-sm lg:p-8"
-          : "space-y-4"
-      }
-    >
+  const statusBanner = (
+    <>
       {(draft && !connected && !isBusy) || saving ? (
         <div className="space-y-1">
           {draft && !connected && !isBusy && (
@@ -864,63 +915,89 @@ export function IntegrationConfigPanel({
           )}
           {saving && (
             <p className="text-sm text-sky-400/90">
-              Connection in progress — stay on this page until complete.
+              {credentialsOnly
+                ? "Verifying credentials — stay on this page until complete."
+                : "Connection in progress — stay on this page until complete."}
             </p>
           )}
         </div>
       ) : null}
+    </>
+  );
 
-      <div className={isPage ? "space-y-5" : "space-y-4"}>{renderFields()}</div>
-
-      <div
-        className={
-          isPage
-            ? "space-y-3 border-t border-zinc-800/60 pt-6"
-            : "space-y-2"
-        }
-      >
-        {saving && connectSteps.length > 0 && (
-          <ConnectProgressPanel steps={connectSteps} />
-        )}
-        {success && (
-          <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-            {success}
-          </p>
-        )}
-        {error && (
-          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-            {error}
-          </p>
-        )}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          {connected && !isBusy && (
-            <button
-              type="button"
-              onClick={() => {
-                disconnect(app.id);
-                onDisconnectComplete?.();
-              }}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-500/30 px-4 py-2.5 text-sm text-red-400 transition hover:bg-red-500/10 sm:order-first"
-            >
-              <Unplug className="h-4 w-4" />
-              Disconnect
-            </button>
-          )}
+  const actionFooter = (
+    <div
+      className={
+        isPage
+          ? "space-y-3 border-t border-zinc-800/60 pt-6"
+          : "space-y-2 border-t border-zinc-800/80 bg-slate-950 pt-4"
+      }
+    >
+      {saving && connectSteps.length > 0 && (
+        <ConnectProgressPanel steps={connectSteps} credentialsOnly={credentialsOnly} />
+      )}
+      {success && (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+          {success}
+        </p>
+      )}
+      {error && (
+        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        {connected && !isBusy && (
           <button
             type="button"
-            disabled={isBusy}
-            onClick={() => void handleSave()}
-            className={`inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-white disabled:opacity-50 ${isPage ? "sm:ml-auto" : "w-full"}`}
+            onClick={() => {
+              disconnect(app.id);
+              onDisconnectComplete?.();
+            }}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-500/30 px-4 py-2.5 text-sm text-red-400 transition hover:bg-red-500/10 sm:order-first"
           >
-            {isBusy && <Loader2 className="h-4 w-4 animate-spin" />}
-            {saving
-              ? "Connecting…"
-              : connected
-                ? "Save & re-verify"
-                : "Save & verify connection"}
+            <Unplug className="h-4 w-4" />
+            Disconnect
           </button>
-        </div>
+        )}
+        <button
+          type="button"
+          disabled={isBusy}
+          onClick={() => void handleSave()}
+          className={`inline-flex items-center justify-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-white disabled:opacity-50 ${isPage ? "sm:ml-auto" : "w-full"}`}
+        >
+          {isBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+          {saveButtonLabel}
+        </button>
       </div>
     </div>
+  );
+
+  if (!isPage) {
+    return (
+      <form
+        autoComplete="off"
+        onSubmit={(event) => event.preventDefault()}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+          {statusBanner}
+          {renderFields()}
+        </div>
+        <div className="shrink-0">{actionFooter}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form
+      autoComplete="off"
+      onSubmit={(event) => event.preventDefault()}
+      className="space-y-6 rounded-2xl border border-zinc-800/80 bg-zinc-950/30 p-6 backdrop-blur-sm lg:p-8"
+    >
+      {statusBanner}
+      <div className="space-y-5">{renderFields()}</div>
+      {actionFooter}
+    </form>
   );
 }

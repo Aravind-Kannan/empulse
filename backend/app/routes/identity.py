@@ -127,6 +127,7 @@ async def sync_identity_mappings(
             tenant,
             providers=providers,
             import_roster=payload.import_roster,
+            replace_roster=payload.replace_roster,
             credentials=credentials,
         )
     except ValueError as exc:

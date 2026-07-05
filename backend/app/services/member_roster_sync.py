@@ -112,6 +112,8 @@ async def sync_member_roster(
     db: Session,
     tenant: Tenant,
     credentials: FetchUsersRequest,
+    *,
+    replace_existing: bool = False,
 ) -> dict[str, int | str | list[str]]:
     credentials = enrich_jira_credentials_from_db(credentials, db, tenant.id)
     master = fetch_employee_master_data(
@@ -124,7 +126,7 @@ async def sync_member_roster(
     )
 
     current = _load_org_for_merge(db, tenant)
-    if not current.employees:
+    if replace_existing or not current.employees:
         merged = _master_from_empty_org(master)
         added = len(merged.employees)
         updated = 0

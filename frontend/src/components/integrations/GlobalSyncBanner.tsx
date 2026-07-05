@@ -2,62 +2,32 @@
 
 import { useMemo } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
-  Database,
+  History,
   Loader2,
+  Plug,
   RefreshCw,
-  SkipForward,
   Sparkles,
 } from "lucide-react";
 
 import { useIntegrations } from "@/context/IntegrationsContext";
+import { formatRelativeTime } from "@/lib/datetime";
 import {
   INTEGRATION_CATALOG,
   getConnectedIntegrationIds,
   isIntegrationConnected,
 } from "@/lib/integrations";
-import type { IntegrationSyncJobStatusResponse } from "@/lib/types";
-import { latestJobPerSource } from "@/lib/sync-jobs";
+import {
+  aggregateWorkspaceSyncStats,
+  formatSyncChangeSummary,
+  latestJobPerSource,
+  sourcesNeedingAttention,
+} from "@/lib/sync-jobs";
 
+import { IntegrationStatCard } from "./IntegrationStatCard";
 import { SyncJobsPanel } from "./SyncJobsPanel";
 import { GlobalSyncProgressBar } from "./GlobalSyncProgressBar";
-
-function aggregateSyncStats(jobs: IntegrationSyncJobStatusResponse[]) {
-  const completed = jobs.filter((job) => job.status === "completed" && job.result);
-  let ingested = 0;
-  let skipped = 0;
-
-  for (const job of completed) {
-    const result = job.result!;
-    ingested += result.graph_nodes_created ?? 0;
-    skipped += result.items_skipped ?? 0;
-  }
-
-  return { ingested, skipped, completedCount: completed.length };
-}
-
-function StatCard({
-  label,
-  value,
-  hint,
-  icon: Icon,
-}: {
-  label: string;
-  value: string | number;
-  hint?: string;
-  icon: typeof Database;
-}) {
-  return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-        <Icon className="h-3.5 w-3.5" />
-        {label}
-      </div>
-      <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-100">{value}</p>
-      {hint && <p className="mt-0.5 text-[11px] text-zinc-500">{hint}</p>}
-    </div>
-  );
-}
 
 /** Onboarding sync step — batch sync controls and job history. */
 export function GlobalSyncBanner() {
@@ -74,7 +44,11 @@ export function GlobalSyncBanner() {
 
   const connectedCount = getConnectedIntegrationIds(config).length;
   const latestBySource = useMemo(() => latestJobPerSource(syncJobs), [syncJobs]);
-  const stats = useMemo(() => aggregateSyncStats(syncJobs), [syncJobs]);
+  const stats = useMemo(() => aggregateWorkspaceSyncStats(syncJobs), [syncJobs]);
+  const attention = useMemo(
+    () => sourcesNeedingAttention(config, syncJobs),
+    [config, syncJobs],
+  );
   const hasStartedSync = syncJobs.length > 0 || globalSyncPending;
 
   const isGlobalBusy = syncProgress.active || globalSyncPending;
@@ -85,31 +59,54 @@ export function GlobalSyncBanner() {
     connectedCount > 0 &&
     connectedApps.every((app) => latestBySource.get(app.id)?.status === "completed");
 
+  const lastSyncValue =
+    stats.completedCount > 0
+      ? formatSyncChangeSummary(
+          stats.newItems,
+          stats.updatedItems,
+          stats.skippedItems,
+        )
+      : "—";
+
+  const lastSyncHint =
+    stats.lastCompletedAt != null
+      ? `Last completed ${formatRelativeTime(stats.lastCompletedAt)}`
+      : connectedCount > 0
+        ? "Run sync to import data"
+        : "Link a source first";
+
   return (
     <section className="rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/80 to-zinc-950/90 p-6">
       <div className="space-y-5">
         <div className="grid gap-3 sm:grid-cols-3">
-          <StatCard
-            icon={Sparkles}
-            label="Connected"
+          <IntegrationStatCard
+            icon={Plug}
+            label="Sources linked"
             value={connectedCount}
-            hint={`of ${INTEGRATION_CATALOG.length} sources`}
+            hint="Add only the tools you use"
+            className="border-zinc-800 bg-zinc-950/60"
           />
-          <StatCard
-            icon={Database}
-            label="Synced"
-            value={stats.ingested || "—"}
+          <IntegrationStatCard
+            icon={History}
+            label="Last sync"
+            value={lastSyncValue}
+            hint={lastSyncHint}
+            compactValue
+            info="New and updated items imported into the knowledge graph. Unchanged items were already stored and not re-imported."
+            className="border-zinc-800 bg-zinc-950/60"
+          />
+          <IntegrationStatCard
+            icon={attention.count > 0 ? AlertTriangle : CheckCircle2}
+            label="Needs attention"
+            value={connectedCount === 0 ? "—" : attention.count}
             hint={
-              stats.completedCount
-                ? `${stats.completedCount} source(s) finished`
-                : "Run sync to import data"
+              connectedCount === 0
+                ? "Link a source to begin"
+                : attention.count === 0
+                  ? "All sources healthy"
+                  : attention.labels.join(", ")
             }
-          />
-          <StatCard
-            icon={SkipForward}
-            label="Skipped"
-            value={stats.skipped || "—"}
-            hint="Unchanged since last sync"
+            className="border-zinc-800 bg-zinc-950/60"
           />
         </div>
 
@@ -127,7 +124,7 @@ export function GlobalSyncBanner() {
             <p className="mt-1 max-w-xl text-xs text-zinc-500">
               {connectedCount === 0
                 ? "Connect at least one integration on the previous step."
-                : "Pull metadata, code, docs, and tickets into your workspace. Unchanged items are skipped automatically."}
+                : "Pull metadata, code, docs, and tickets into your workspace. Items already in the graph are left unchanged."}
             </p>
           </div>
 

@@ -658,6 +658,7 @@ def fetch_jira_provider_members(config: JiraConfigRequest) -> list[ProviderMembe
             id=account_id,
             label=label,
             email=email,
+            username=email or display,
         )
 
     return sorted(members_by_id.values(), key=lambda member: member.label.lower())

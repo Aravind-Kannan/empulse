@@ -17,7 +17,7 @@ import {
   Plug,
   GitBranch,
   Building2,
-  Waypoints,
+  ShieldAlert,
   type LucideIcon,
 } from "lucide-react";
 
@@ -28,6 +28,9 @@ import {
   isWorkspaceUnlocked,
   workspaceRequiresIntegrations,
 } from "@/lib/integrations";
+
+/** Analytics views use in-page blur overlay — never sidebar-redirect to integrations. */
+const BLUR_GATED_PATHS = new Set(["/era", "/kra", "/investigation", "/exit"]);
 
 type NavItem = {
   href: string;
@@ -74,7 +77,6 @@ const navGroups: NavGroup[] = [
     title: "Workspace",
     items: [
       { href: "/settings/integrations", label: "Integrations", icon: Plug },
-      { href: "/settings/knowledge-graph-reset", label: "Knowledge graph reset", icon: Waypoints },
       {
         href: "/settings/org-chart",
         label: "Organization Hub",
@@ -118,6 +120,10 @@ function SidebarUserMenu({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const pathname = usePathname();
+  const resetActive =
+    pathname === "/settings/workspace-reset" ||
+    pathname.startsWith("/settings/workspace-reset/");
 
   useEffect(() => {
     if (!open) return;
@@ -149,6 +155,19 @@ function SidebarUserMenu({
           className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-zinc-800/90 bg-zinc-950/95 p-1 shadow-xl shadow-black/40 ring-1 ring-white/5 backdrop-blur-xl"
           role="menu"
         >
+          <Link
+            href="/settings/workspace-reset"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+              resetActive
+                ? "bg-red-500/10 text-red-200"
+                : "text-red-300/90 hover:bg-red-500/10 hover:text-red-200"
+            }`}
+          >
+            <ShieldAlert className="h-4 w-4 shrink-0 text-red-400/80" />
+            Reset &amp; wipe data
+          </Link>
           <button
             type="button"
             role="menuitem"
@@ -197,15 +216,18 @@ function NavLink({
   isActive,
   unlocked,
   hint,
+  blurGated,
 }: {
   item: NavItem;
   isActive: boolean;
   unlocked: boolean;
   hint: string;
+  blurGated: boolean;
 }) {
   const Icon = item.icon;
+  const showLockHint = blurGated && !unlocked;
 
-  if (!unlocked) {
+  if (!unlocked && !blurGated) {
     return (
       <Link
         href="/settings/integrations"
@@ -242,7 +264,9 @@ function NavLink({
         <Icon className="h-4 w-4" />
       </span>
       <span className="min-w-0 flex-1 text-xs leading-snug">{item.label}</span>
-      {isActive ? (
+      {showLockHint ? (
+        <Lock className="h-3 w-3 shrink-0 text-amber-500/70" title={hint} />
+      ) : isActive ? (
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-violet-300/80" />
       ) : (
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-700 opacity-0 transition group-hover:opacity-100" />
@@ -306,13 +330,16 @@ export function Sidebar() {
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const isActive = isNavItemActive(pathname, item.href);
-                const unlocked = isWorkspaceUnlocked(item.href, config);
+                const blurGated = BLUR_GATED_PATHS.has(item.href);
+                const unlocked =
+                  blurGated || isWorkspaceUnlocked(item.href, config);
                 return (
                   <NavLink
                     key={item.href}
                     item={item}
                     isActive={isActive}
                     unlocked={unlocked}
+                    blurGated={blurGated}
                     hint={integrationHint(item.href)}
                   />
                 );

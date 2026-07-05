@@ -22,6 +22,7 @@ interface EmployeeEditModalProps {
   isSaving?: boolean;
   isDeleting?: boolean;
   allowDelete?: boolean;
+  hideComponentOwnership?: boolean;
 }
 
 export function EmployeeEditModal({
@@ -34,6 +35,7 @@ export function EmployeeEditModal({
   isSaving = false,
   isDeleting = false,
   allowDelete = false,
+  hideComponentOwnership = false,
 }: EmployeeEditModalProps) {
   const onboarding = useContext(OnboardingContext);
   const orgChart = orgChartProp ?? onboarding?.orgChart;
@@ -194,16 +196,18 @@ export function EmployeeEditModal({
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-            <p className="mb-3 text-sm font-medium text-zinc-200">
-              Technical ownership
-            </p>
-            <ComponentMultiSelect
-              components={orgChart.components}
-              selectedIds={componentIds}
-              onChange={setComponentIds}
-            />
-          </div>
+          {!hideComponentOwnership ? (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+              <p className="mb-3 text-sm font-medium text-zinc-200">
+                Technical ownership
+              </p>
+              <ComponentMultiSelect
+                components={orgChart.components}
+                selectedIds={componentIds}
+                onChange={setComponentIds}
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-5 py-4">
