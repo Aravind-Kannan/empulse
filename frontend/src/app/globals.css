@@ -25,8 +25,8 @@
     background: radial-gradient(
       ellipse 80% 60% at 50% 40%,
       transparent 0%,
-      rgba(9, 9, 11, 0.4) 50%,
-      #09090b 100%
+      rgba(9, 9, 11, 0.25) 50%,
+      rgba(5, 5, 6, 0.75) 100%
     );
   }
 
@@ -93,6 +93,14 @@
     animation: landing-dash 1.5s linear infinite;
   }
 
+  .landing-sync-pulse {
+    animation: landing-sync-pulse 2s ease-in-out infinite;
+  }
+
+  .landing-hub-pulse {
+    animation: landing-hub-glow 3s ease-in-out infinite;
+  }
+
   .incident-cards-scroll {
     -ms-overflow-style: none;
     scrollbar-width: none;
@@ -153,5 +161,27 @@
 @keyframes landing-dash {
   to {
     stroke-dashoffset: -16;
+  }
+}
+
+@keyframes landing-sync-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.4);
+  }
+}
+
+@keyframes landing-hub-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 40px rgba(139, 92, 246, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 56px rgba(139, 92, 246, 0.24);
   }
 }
