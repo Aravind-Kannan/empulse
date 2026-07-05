@@ -1,5 +1,6 @@
 "use client";
 
+import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 
 import type {
@@ -282,11 +283,44 @@ function formatDocAge(lastEdit: string | null): string | null {
   return `${days}d ago`;
 }
 
-function formatNotionSourceNames(sources: string[]): string | null {
-  const names = sources
-    .map((source) => source.replace(/^Notion:\s*/i, "").trim())
-    .filter(Boolean);
-  return names.length > 0 ? names.join(", ") : null;
+function NotionDocumentationLinks({
+  sources,
+  urls,
+}: {
+  sources: string[];
+  urls: string[];
+}) {
+  const items = sources
+    .map((source, index) => ({
+      label: source.replace(/^Notion:\s*/i, "").trim() || source,
+      url: urls[index],
+    }))
+    .filter((item) => item.label);
+
+  if (items.length === 0) return null;
+
+  return (
+    <>
+      {items.map((item, index) => (
+        <span key={`${item.label}-${index}`}>
+          {index > 0 && ", "}
+          {item.url ? (
+            <a
+              href={item.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300"
+            >
+              {item.label}
+              <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
+            </a>
+          ) : (
+            item.label
+          )}
+        </span>
+      ))}
+    </>
+  );
 }
 
 function DocCoverageRow({
@@ -294,7 +328,8 @@ function DocCoverageRow({
   componentName,
   statusLabel,
   statusClass,
-  documentationNames,
+  notionSources,
+  notionPageUrls,
   onSelectComponent,
   showStatus = true,
 }: {
@@ -302,10 +337,19 @@ function DocCoverageRow({
   componentName: string;
   statusLabel?: string;
   statusClass?: string;
-  documentationNames?: string | null;
+  notionSources?: string[];
+  notionPageUrls?: string[];
   onSelectComponent: (componentId: string) => void;
   showStatus?: boolean;
 }) {
+  const documentation =
+    notionSources !== undefined ? (
+      <NotionDocumentationLinks
+        sources={notionSources}
+        urls={notionPageUrls ?? []}
+      />
+    ) : undefined;
+
   return (
     <tr className="border-b border-zinc-800/60 hover:bg-zinc-900/40">
       <td className="py-3 pr-3 align-top">
@@ -322,9 +366,9 @@ function DocCoverageRow({
           {statusLabel}
         </td>
       )}
-      {documentationNames !== undefined && (
+      {notionSources !== undefined && (
         <td className="py-3 align-top text-zinc-400">
-          {documentationNames ?? <span className="text-zinc-600">—</span>}
+          {documentation ?? <span className="text-zinc-600">—</span>}
         </td>
       )}
     </tr>
@@ -387,7 +431,8 @@ export function KraDocGapPanel({
                       key={item.component_id}
                       componentId={item.component_id}
                       componentName={item.component_name}
-                      documentationNames={formatNotionSourceNames(item.notion_sources)}
+                      notionSources={item.notion_sources}
+                      notionPageUrls={item.notion_page_urls}
                       onSelectComponent={onSelectComponent}
                       showStatus={false}
                     />
@@ -406,7 +451,8 @@ export function KraDocGapPanel({
                 <thead>
                   <tr className="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500">
                     <th className="pb-2 pr-3 font-medium">Component</th>
-                    <th className="pb-2 font-medium">Status</th>
+                    <th className="pb-2 pr-3 font-medium">Status</th>
+                    <th className="pb-2 font-medium">Documentation</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -425,6 +471,8 @@ export function KraDocGapPanel({
                             }`
                       }
                       statusClass="text-amber-300/90"
+                      notionSources={gap.notion_sources}
+                      notionPageUrls={gap.notion_page_urls}
                       onSelectComponent={onSelectComponent}
                     />
                   ))}
