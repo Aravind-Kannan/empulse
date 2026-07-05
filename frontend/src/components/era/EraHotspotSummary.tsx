@@ -46,7 +46,7 @@ export function EraHotspotSummary({
     };
   }, [employeeId]);
 
-  const sectionTitle = `Critical files — ${employeeName}`;
+  const sectionTitle = "Critical files";
 
   if (loading) {
     return (
@@ -74,9 +74,10 @@ export function EraHotspotSummary({
         title={sectionTitle}
         files={[]}
         compact
+        profileMode
         collapsible
         defaultExpanded={false}
-        emptyMessage={`No critical file silos for ${employeeName} in the last 90 days.`}
+        emptyMessage="No critical file silos in the last 90 days."
       />
     );
   }
@@ -88,6 +89,7 @@ export function EraHotspotSummary({
       quadrantCounts={{ critical: data.critical_count }}
       crossTrainingPriority={data.files}
       compact
+      profileMode
       collapsible
       defaultExpanded={false}
     />

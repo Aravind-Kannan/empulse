@@ -7,7 +7,6 @@ import { EraRiskSparkline, EraTrendChip } from "./EraRiskSparkline";
 
 interface EraKpiStripProps {
   summary: EraTeamSummary;
-  integrationCount: number;
   teamHistory?: EraRiskHistoryPoint[];
   loading?: boolean;
   onOpenP1Issues?: () => void;
@@ -25,7 +24,6 @@ function SkeletonCard() {
 
 export function EraKpiStrip({
   summary,
-  integrationCount,
   teamHistory = [],
   loading = false,
   onOpenP1Issues,
@@ -33,7 +31,7 @@ export function EraKpiStrip({
   if (loading) {
     return (
       <div className="flex gap-3 overflow-x-auto pb-1">
-        {Array.from({ length: 6 }).map((_, index) => (
+        {Array.from({ length: 5 }).map((_, index) => (
           <SkeletonCard key={index} />
         ))}
       </div>
@@ -44,7 +42,7 @@ export function EraKpiStrip({
 
   return (
     <div className="flex gap-3 overflow-x-auto pb-1">
-      <div className="min-w-[9.5rem] flex-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+      <div className="min-w-[10rem] flex-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
         <p className="text-xs uppercase tracking-wide text-zinc-500">Team risk</p>
         <div className="mt-1 flex items-center gap-2">
           <p className="text-2xl font-semibold text-zinc-100">
@@ -52,11 +50,20 @@ export function EraKpiStrip({
           </p>
           <EraTrendChip trend={summary.avg_risk_trend_7d} />
         </div>
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <p className={`text-xs ${driver.text}`}>
-            Top driver: {driver.label}
-          </p>
-          <EraRiskSparkline history={teamHistory} width={72} height={24} />
+        <p
+          className={`mt-2 text-xs ${driver.text}`}
+          title="Which risk dimension scores highest on average across the team"
+        >
+          Top driver: {driver.label}
+        </p>
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <p className="text-[10px] text-zinc-600">30-day trend</p>
+          <EraRiskSparkline
+            history={teamHistory}
+            width={72}
+            height={24}
+            emptyLabel="Building trend…"
+          />
         </div>
       </div>
 
@@ -134,24 +141,6 @@ export function EraKpiStrip({
         </p>
         <p className="mt-1 text-xs text-zinc-500">
           {summary.org_health_caution ? "Small team — interpret with caution" : "team resilience"}
-        </p>
-      </div>
-
-      <div className="min-w-[11rem] flex-[1.2] rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <p className="text-xs uppercase tracking-wide text-zinc-500">
-          Data health
-        </p>
-        <p className="mt-1 text-2xl font-semibold text-zinc-100">
-          {summary.data_health_pct}%
-        </p>
-        <div className="mt-2 h-2 rounded-full bg-zinc-800">
-          <div
-            className="h-full rounded-full bg-emerald-500"
-            style={{ width: `${summary.data_health_pct}%` }}
-          />
-        </div>
-        <p className="mt-1 text-xs text-zinc-500">
-          {integrationCount}/4 integrations synced
         </p>
       </div>
     </div>

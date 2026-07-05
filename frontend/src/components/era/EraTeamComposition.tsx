@@ -48,7 +48,10 @@ export function EraTeamComposition({
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
       <h2 className="text-sm font-medium text-zinc-200">Team composition</h2>
-      <p className="mt-1 text-xs text-zinc-500">
+      <p
+        className={`mt-1 text-xs ${ERA_DIMENSION_COLORS[topRiskDriver].text}`}
+        title="Which risk dimension scores highest on average across the team"
+      >
         Top driver: {ERA_DIMENSION_COLORS[topRiskDriver].label}
       </p>
 
@@ -63,7 +66,12 @@ export function EraTeamComposition({
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
             Avg risk trend (30d)
           </p>
-          <EraRiskSparkline history={teamHistory} width={120} height={32} />
+          <EraRiskSparkline
+            history={teamHistory}
+            width={120}
+            height={32}
+            emptyLabel="Building 30-day trend…"
+          />
         </div>
       </div>
 

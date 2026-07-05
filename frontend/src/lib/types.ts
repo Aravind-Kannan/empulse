@@ -382,6 +382,7 @@ export interface EraRiskHistoryPoint {
   risk_factor_score: number;
   org_health_score?: number | null;
   orphan_file_count?: number | null;
+  dimensions?: EraDimensions | null;
 }
 
 export interface EraManagerRollupReport {
@@ -425,9 +426,15 @@ export interface EraEmployeeDetailResponse {
   backup_candidates: EraBackupCandidate[];
   warnings: string[];
   blast_radius_narrative?: string | null;
+  identity_mappings?: Partial<Record<IntegrationId, EraIdentityMapping>>;
   risk_history_30d?: EraRiskHistoryPoint[];
   mitigations?: EraMitigationItem[];
   open_mitigations_count?: number;
+}
+
+export interface EraIdentityMapping {
+  level: IdentityCoverageLevel;
+  display_label?: string | null;
 }
 
 export interface EraBackupCandidate {

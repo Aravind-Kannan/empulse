@@ -4,6 +4,7 @@ import type {
   EraDimensionSummary,
   EraEmployeeMetrics,
   EraEvidenceItem,
+  EraRiskHistoryPoint,
   IntegrationId,
 } from "@/lib/types";
 
@@ -81,6 +82,34 @@ export function dimensionValue(
   key: EraDimensionKey,
 ): number {
   return employee.dimensions?.[key] ?? 0;
+}
+
+export function highestDimensionKey(
+  employee: EraEmployeeMetrics,
+): EraDimensionKey {
+  return DIMENSION_KEYS.reduce((best, key) =>
+    dimensionValue(employee, key) > dimensionValue(employee, best) ? key : best,
+  );
+}
+
+export function trendDimensionsForChart(
+  employee: EraEmployeeMetrics,
+  filterDimensions: EraDimensionKey[],
+): EraDimensionKey[] {
+  if (filterDimensions.length > 0) {
+    return filterDimensions;
+  }
+  return [highestDimensionKey(employee)];
+}
+
+export function historyForDimension(
+  history: EraRiskHistoryPoint[],
+  dimension: EraDimensionKey,
+): EraRiskHistoryPoint[] {
+  return history.map((point) => ({
+    snapshot_date: point.snapshot_date,
+    risk_factor_score: point.dimensions?.[dimension] ?? 0,
+  }));
 }
 
 export function isDimensionPartial(

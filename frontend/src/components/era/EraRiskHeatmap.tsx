@@ -1,20 +1,38 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { AlertTriangle, ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ChevronDown, X } from "lucide-react";
 
+import {
+  DEFAULT_LIST_PAGE_SIZE,
+  ListPagination,
+  paginateItems,
+} from "@/components/ui/ListPagination";
 import type { EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
 
 import { DIMENSION_KEYS, ERA_DIMENSION_COLORS } from "./era-colors";
 import { EraDimensionCell } from "./EraDimensionCell";
 import { dimensionValue, riskBarClass } from "./era-utils";
 
-type SortMode =
+type SortField =
   | "highest_risk"
   | EraDimensionKey
   | "ownership";
 
+type SortDirection = "asc" | "desc";
 type RiskFilter = "all" | "high" | "medium" | "low";
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
+
+const SORT_FIELD_LABELS: Record<SortField, string> = {
+  highest_risk: "Overall risk score",
+  ownership: "Code ownership %",
+  knowledge: ERA_DIMENSION_COLORS.knowledge.label,
+  operational: ERA_DIMENSION_COLORS.operational.label,
+  documentation: ERA_DIMENSION_COLORS.documentation.label,
+  structural: ERA_DIMENSION_COLORS.structural.label,
+  burnout: ERA_DIMENSION_COLORS.burnout.label,
+};
 
 interface EraRiskHeatmapProps {
   employees: EraEmployeeMetrics[];
@@ -47,11 +65,21 @@ function riskBadge(level: EraEmployeeMetrics["risk_level"], score: number) {
 function HeatmapSkeleton() {
   return (
     <div className="space-y-2 p-4">
-      {Array.from({ length: 8 }).map((_, index) => (
+      {Array.from({ length: DEFAULT_LIST_PAGE_SIZE }).map((_, index) => (
         <div key={index} className="h-10 animate-pulse rounded bg-zinc-800/60" />
       ))}
     </div>
   );
+}
+
+function sortValue(employee: EraEmployeeMetrics, field: SortField): number {
+  if (field === "highest_risk") {
+    return employee.risk_factor_score;
+  }
+  if (field === "ownership") {
+    return employee.codebase_share_pct;
+  }
+  return dimensionValue(employee, field);
 }
 
 export function EraRiskHeatmap({
@@ -61,7 +89,10 @@ export function EraRiskHeatmap({
   onOpenDetailWithDimension,
   loading = false,
 }: EraRiskHeatmapProps) {
-  const [sortMode, setSortMode] = useState<SortMode>("highest_risk");
+  const [sortField, setSortField] = useState<SortField>("highest_risk");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [pageSize, setPageSize] = useState(DEFAULT_LIST_PAGE_SIZE);
+  const [page, setPage] = useState(0);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [teamFilter, setTeamFilter] = useState<string>("all");
   const [identityOnly, setIdentityOnly] = useState(false);
@@ -75,6 +106,12 @@ export function EraRiskHeatmap({
     }
     return Array.from(names).sort();
   }, [employees]);
+
+  const hasActiveFilters =
+    riskFilter !== "all" ||
+    teamFilter !== "all" ||
+    identityOnly ||
+    watchlistOnly;
 
   const filtered = useMemo(() => {
     let rows = employees.filter((employee) => !employee.excluded);
@@ -95,24 +132,56 @@ export function EraRiskHeatmap({
       rows = rows.filter((employee) => employee.departure_watchlist);
     }
     const copy = [...rows];
-    if (sortMode === "highest_risk") {
-      copy.sort((a, b) => b.risk_factor_score - a.risk_factor_score);
-    } else if (sortMode === "ownership") {
-      copy.sort((a, b) => b.codebase_share_pct - a.codebase_share_pct);
-    } else {
-      copy.sort(
-        (a, b) => dimensionValue(b, sortMode) - dimensionValue(a, sortMode),
-      );
-    }
+    const direction = sortDirection === "desc" ? -1 : 1;
+    copy.sort(
+      (a, b) =>
+        direction * (sortValue(a, sortField) - sortValue(b, sortField)),
+    );
     return copy;
   }, [
     employees,
     identityOnly,
     riskFilter,
-    sortMode,
+    sortDirection,
+    sortField,
     teamFilter,
     watchlistOnly,
   ]);
+
+  const paginatedRows = useMemo(
+    () => paginateItems(filtered, page, pageSize),
+    [filtered, page, pageSize],
+  );
+
+  useEffect(() => {
+    setPage(0);
+  }, [
+    riskFilter,
+    teamFilter,
+    identityOnly,
+    watchlistOnly,
+    sortField,
+    sortDirection,
+    pageSize,
+  ]);
+
+  useEffect(() => {
+    const maxPage = Math.max(0, Math.ceil(filtered.length / pageSize) - 1);
+    if (page > maxPage) {
+      setPage(maxPage);
+    }
+  }, [filtered.length, page, pageSize]);
+
+  function clearFilters() {
+    setRiskFilter("all");
+    setTeamFilter("all");
+    setIdentityOnly(false);
+    setWatchlistOnly(false);
+  }
+
+  const rangeStart =
+    filtered.length === 0 ? 0 : page * pageSize + 1;
+  const rangeEnd = Math.min((page + 1) * pageSize, filtered.length);
 
   if (loading) {
     return (
@@ -127,35 +196,87 @@ export function EraRiskHeatmap({
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/30">
-      <div className="flex flex-col gap-3 border-b border-zinc-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Risk heatmap</h2>
+      <div className="flex flex-col gap-3 border-b border-zinc-800 px-4 py-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-sm font-medium text-zinc-200">Risk heatmap</h2>
+          {filtered.length > 0 ? (
+            <p className="text-xs tabular-nums text-zinc-500">
+              Showing {rangeStart}–{rangeEnd} of {filtered.length}
+            </p>
+          ) : null}
+        </div>
+
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={sortMode}
-            onChange={(event) => setSortMode(event.target.value as SortMode)}
-            className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-300"
-          >
-            <option value="highest_risk">Highest risk</option>
-            {DIMENSION_KEYS.map((key) => (
-              <option key={key} value={key}>
-                {ERA_DIMENSION_COLORS[key].label}
-              </option>
-            ))}
-            <option value="ownership">Ownership</option>
-          </select>
+          <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+            Sort by
+            <select
+              value={sortField}
+              onChange={(event) => setSortField(event.target.value as SortField)}
+              className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-300"
+            >
+              <option value="highest_risk">{SORT_FIELD_LABELS.highest_risk}</option>
+              {DIMENSION_KEYS.map((key) => (
+                <option key={key} value={key}>
+                  {SORT_FIELD_LABELS[key]}
+                </option>
+              ))}
+              <option value="ownership">{SORT_FIELD_LABELS.ownership}</option>
+            </select>
+          </label>
+
+          <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+            Order
+            <select
+              value={sortDirection}
+              onChange={(event) =>
+                setSortDirection(event.target.value as SortDirection)
+              }
+              className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-300"
+            >
+              <option value="desc">High → Low</option>
+              <option value="asc">Low → High</option>
+            </select>
+          </label>
+
+          <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+            Show
+            <select
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+              className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-300"
+            >
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size} per page
+                </option>
+              ))}
+            </select>
+          </label>
+
           <button
             type="button"
             onClick={() => setFiltersOpen((open) => !open)}
-            className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300"
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+              hasActiveFilters
+                ? "border-violet-500/40 bg-violet-500/10 text-violet-200"
+                : "border-zinc-700 text-zinc-300"
+            }`}
           >
             Filters
-            <ChevronDown className="h-3.5 w-3.5" />
+            {hasActiveFilters ? (
+              <span className="rounded-full bg-violet-500/30 px-1.5 text-[10px]">
+                on
+              </span>
+            ) : null}
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition ${filtersOpen ? "rotate-180" : ""}`}
+            />
           </button>
         </div>
       </div>
 
       {filtersOpen && (
-        <div className="flex flex-wrap gap-2 border-b border-zinc-800 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-4 py-3">
           <select
             value={riskFilter}
             onChange={(event) => setRiskFilter(event.target.value as RiskFilter)}
@@ -194,8 +315,43 @@ export function EraRiskHeatmap({
             />
             Departure watchlist
           </label>
+          {hasActiveFilters ? (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200"
+            >
+              <X className="h-3 w-3" />
+              Clear filters
+            </button>
+          ) : null}
         </div>
       )}
+
+      {hasActiveFilters && !filtersOpen ? (
+        <div className="flex flex-wrap gap-1.5 border-b border-zinc-800 px-4 py-2">
+          {riskFilter !== "all" ? (
+            <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400">
+              Risk: {riskFilter}
+            </span>
+          ) : null}
+          {teamFilter !== "all" ? (
+            <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400">
+              Team: {teamFilter}
+            </span>
+          ) : null}
+          {identityOnly ? (
+            <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400">
+              Incomplete identity
+            </span>
+          ) : null}
+          {watchlistOnly ? (
+            <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400">
+              Departure watchlist
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[56rem] text-left text-sm">
@@ -214,7 +370,7 @@ export function EraRiskHeatmap({
             </tr>
           </thead>
           <tbody>
-            {filtered.map((employee) => {
+            {paginatedRows.map((employee) => {
               const selected = employee.employee_id === selectedId;
               return (
                 <tr
@@ -282,7 +438,7 @@ export function EraRiskHeatmap({
       </div>
 
       <div className="space-y-2 p-3 md:hidden">
-        {filtered.map((employee) => {
+        {paginatedRows.map((employee) => {
           const selected = employee.employee_id === selectedId;
           return (
             <div
@@ -345,10 +501,17 @@ export function EraRiskHeatmap({
         })}
       </div>
 
-      {filtered.length === 0 && (
+      {filtered.length === 0 ? (
         <p className="p-6 text-center text-sm text-emerald-300">
           No high continuity risks detected for current filters.
         </p>
+      ) : (
+        <ListPagination
+          page={page}
+          pageSize={pageSize}
+          totalItems={filtered.length}
+          onPageChange={setPage}
+        />
       )}
     </div>
   );

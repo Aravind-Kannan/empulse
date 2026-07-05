@@ -10,6 +10,7 @@ from app.models.operational import Assignment, Component, Employee, EmployeeIden
 from app.schemas.era import (
     EraAffectedComponent,
     EraEmployeeMetrics,
+    EraIdentityMapping,
     EraRecoveryEstimate,
     EraTeamSummary,
     EraUnmappedActivityCount,
@@ -59,6 +60,42 @@ def build_identity_coverage(
         else:
             coverage[provider] = "missing"
     return coverage
+
+
+def build_identity_mappings(
+    db: Session,
+    tenant_id,
+    employee_id: str,
+    *,
+    github_connected: bool,
+) -> dict[str, EraIdentityMapping]:
+    rows = (
+        db.query(EmployeeIdentity)
+        .filter(
+            EmployeeIdentity.tenant_id == tenant_id,
+            EmployeeIdentity.employee_id == employee_id,
+        )
+        .all()
+    )
+    saved = {row.provider: row for row in rows}
+    mappings: dict[str, EraIdentityMapping] = {}
+    for provider in PROVIDERS:
+        if provider in saved:
+            row = saved[provider]
+            confidence = row.confidence
+            if confidence in {"confirmed", "high", "medium"}:
+                level = confidence
+            else:
+                level = "missing"
+            mappings[provider] = EraIdentityMapping(
+                level=level,
+                display_label=row.provider_display_label,
+            )
+        elif provider == "github" and github_connected:
+            mappings[provider] = EraIdentityMapping(level="high", display_label=None)
+        else:
+            mappings[provider] = EraIdentityMapping(level="missing", display_label=None)
+    return mappings
 
 
 def compute_data_completeness_pct(identity_coverage: dict[str, str]) -> float:

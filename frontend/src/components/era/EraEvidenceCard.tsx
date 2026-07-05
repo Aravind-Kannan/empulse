@@ -11,6 +11,7 @@ import { ERA_DIMENSION_COLORS } from "./era-colors";
 interface EraEvidenceCardProps {
   item: EraEvidenceItem;
   compact?: boolean;
+  minimal?: boolean;
   full?: boolean;
 }
 
@@ -28,6 +29,7 @@ function severityLabel(severity: EraEvidenceItem["severity"]) {
 export function EraEvidenceCard({
   item,
   compact = false,
+  minimal = false,
   full = false,
 }: EraEvidenceCardProps) {
   const [expanded, setExpanded] = useState(false);
@@ -37,6 +39,22 @@ export function EraEvidenceCard({
     full && !expanded && longDescription
       ? `${item.description.slice(0, 140)}…`
       : item.description;
+
+  if (minimal) {
+    return (
+      <div className="rounded border border-zinc-800/70 bg-zinc-950/40 px-2 py-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {severityIcon(item.severity)}
+          <p className="min-w-0 flex-1 truncate text-[10px] leading-tight text-zinc-300">
+            {item.title}
+          </p>
+          <span className="shrink-0 text-[9px] tabular-nums text-zinc-500">
+            {Math.round(item.impact_points)}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

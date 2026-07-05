@@ -6,22 +6,46 @@ interface EraRiskSparklineProps {
   history: EraRiskHistoryPoint[];
   width?: number;
   height?: number;
+  fluid?: boolean;
   strokeClassName?: string;
+  strokeColor?: string;
   className?: string;
+  emptyLabel?: string;
+}
+
+const FLUID_VIEW_WIDTH = 240;
+const FLUID_VIEW_HEIGHT = 32;
+const FLUID_MULTI_VIEW_HEIGHT = 40;
+
+function scoreRange(histories: EraRiskHistoryPoint[][]): {
+  min: number;
+  max: number;
+  range: number;
+} {
+  const scores = histories.flatMap((history) =>
+    history.map((point) => point.risk_factor_score),
+  );
+  if (scores.length === 0) {
+    return { min: 0, max: 100, range: 100 };
+  }
+  const min = Math.min(...scores, 0);
+  const max = Math.max(...scores, 100);
+  const range = max - min || 1;
+  return { min, max, range };
 }
 
 function buildPath(
   history: EraRiskHistoryPoint[],
   width: number,
   height: number,
+  scale?: { min: number; range: number },
 ): string {
   if (history.length === 0) {
     return "";
   }
   const scores = history.map((point) => point.risk_factor_score);
-  const min = Math.min(...scores, 0);
-  const max = Math.max(...scores, 100);
-  const range = max - min || 1;
+  const min = scale?.min ?? Math.min(...scores, 0);
+  const range = scale?.range ?? ((Math.max(...scores, 100) - min) || 1);
   const step = history.length > 1 ? width / (history.length - 1) : 0;
 
   return history
@@ -33,54 +57,140 @@ function buildPath(
     .join(" ");
 }
 
-export function EraRiskSparkline({
-  history,
-  width = 96,
-  height = 28,
-  strokeClassName = "stroke-violet-400",
+export interface SparklineSeries {
+  id: string;
+  history: EraRiskHistoryPoint[];
+  strokeColor: string;
+}
+
+interface EraMultiRiskSparklineProps {
+  series: SparklineSeries[];
+  fluid?: boolean;
+  className?: string;
+  emptyLabel?: string;
+}
+
+export function EraMultiRiskSparkline({
+  series,
+  fluid = false,
   className = "",
-}: EraRiskSparklineProps) {
-  if (history.length < 2) {
+  emptyLabel = "No trend yet",
+}: EraMultiRiskSparklineProps) {
+  const chartWidth = FLUID_VIEW_WIDTH;
+  const chartHeight = FLUID_MULTI_VIEW_HEIGHT;
+  const histories = series.map((item) => item.history);
+  const hasEnoughData = histories.some((history) => history.length >= 2);
+
+  if (!hasEnoughData) {
     return (
       <div
-        className={`flex items-center text-[10px] text-zinc-600 ${className}`}
-        style={{ width, height }}
+        className={`flex items-center text-[10px] text-zinc-600 ${
+          fluid ? "h-10 w-full" : ""
+        } ${className}`}
       >
-        No trend yet
+        {emptyLabel}
       </div>
     );
   }
 
-  const path = buildPath(history, width, height);
-  const latest = history[history.length - 1]?.risk_factor_score ?? 0;
+  const scale = scoreRange(histories);
 
   return (
     <svg
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      className={className}
+      width={fluid ? "100%" : chartWidth}
+      height={chartHeight}
+      viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+      preserveAspectRatio={fluid ? "none" : undefined}
+      className={`${fluid ? "h-10 w-full" : ""} ${className}`}
+      aria-hidden
+    >
+      {series.map((item) => {
+        if (item.history.length < 2) {
+          return null;
+        }
+        const path = buildPath(item.history, chartWidth, chartHeight, scale);
+        const latest = item.history[item.history.length - 1]?.risk_factor_score ?? 0;
+        const latestY =
+          chartHeight - ((latest - scale.min) / scale.range) * chartHeight;
+        return (
+          <g key={item.id}>
+            <path
+              d={path}
+              fill="none"
+              stroke={item.strokeColor}
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx={chartWidth} cy={latestY} r="2" fill={item.strokeColor} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+export function EraRiskSparkline({
+  history,
+  width = 96,
+  height = 28,
+  fluid = false,
+  strokeClassName = "stroke-violet-400",
+  strokeColor,
+  className = "",
+  emptyLabel = "No trend yet",
+}: EraRiskSparklineProps) {
+  const chartWidth = fluid ? FLUID_VIEW_WIDTH : width;
+  const chartHeight = fluid ? FLUID_VIEW_HEIGHT : height;
+
+  if (history.length < 2) {
+    return (
+      <div
+        className={`flex items-center text-[10px] text-zinc-600 ${
+          fluid ? "h-8 w-full" : ""
+        } ${className}`}
+        style={fluid ? undefined : { width, height }}
+      >
+        {emptyLabel}
+      </div>
+    );
+  }
+
+  const path = buildPath(history, chartWidth, chartHeight);
+  const latest = history[history.length - 1]?.risk_factor_score ?? 0;
+  const scores = history.map((point) => point.risk_factor_score);
+  const min = Math.min(...scores, 0);
+  const max = Math.max(...scores, 100);
+  const range = max - min || 1;
+  const latestY =
+    chartHeight - ((latest - min) / range) * chartHeight;
+  const pathStrokeProps = strokeColor
+    ? { stroke: strokeColor }
+    : { className: strokeClassName };
+
+  return (
+    <svg
+      width={fluid ? "100%" : width}
+      height={chartHeight}
+      viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+      preserveAspectRatio={fluid ? "none" : undefined}
+      className={`${fluid ? "h-8 w-full" : ""} ${className}`}
       aria-hidden
     >
       <path
         d={path}
         fill="none"
-        className={strokeClassName}
         strokeWidth="1.75"
         strokeLinecap="round"
         strokeLinejoin="round"
+        {...pathStrokeProps}
       />
       <circle
-        cx={width}
-        cy={
-          height -
-          ((latest - Math.min(...history.map((p) => p.risk_factor_score), 0)) /
-            (Math.max(...history.map((p) => p.risk_factor_score), 100) -
-              Math.min(...history.map((p) => p.risk_factor_score), 0) || 1)) *
-            height
-        }
+        cx={chartWidth}
+        cy={latestY}
         r="2"
-        className={strokeClassName.replace("stroke-", "fill-")}
+        fill={strokeColor ?? undefined}
+        className={strokeColor ? undefined : strokeClassName.replace("stroke-", "fill-")}
       />
     </svg>
   );

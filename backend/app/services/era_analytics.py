@@ -50,6 +50,7 @@ from app.services.era.engine import score_employee
 from app.services.era.metadata import (
     build_affected_components,
     build_identity_coverage,
+    build_identity_mappings,
     build_sync_freshness,
     build_team_summary,
     build_unmapped_activity,
@@ -876,6 +877,9 @@ def get_era_employee_detail(
     coverage = build_identity_coverage(
         db, tenant.id, employee.id, github_connected=github_connected
     )
+    identity_mappings = build_identity_mappings(
+        db, tenant.id, employee.id, github_connected=github_connected
+    )
     affected = build_affected_components(employee, github_connected=github_connected)
     metric = _score_result_to_metrics(
         signals,
@@ -922,6 +926,7 @@ def get_era_employee_detail(
         backup_candidates=backup_candidates,
         warnings=detail_warnings,
         blast_radius_narrative=blast_radius_narrative,
+        identity_mappings=identity_mappings,
         risk_history_30d=risk_history,
         mitigations=mitigations,
         open_mitigations_count=count_open_mitigations(mitigations),

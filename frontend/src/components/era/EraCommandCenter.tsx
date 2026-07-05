@@ -7,21 +7,19 @@ import { Loader2 } from "lucide-react";
 
 import { fetchEraMetrics } from "@/lib/api";
 import { useWorkspace } from "@/context/WorkspaceContext";
-import type { EraAnalyticsResponse, EraAlertItem, EraDimensionKey, EraEmployeeMetrics } from "@/lib/types";
+import type { EraAnalyticsResponse, EraAlertItem, EraDimensionKey } from "@/lib/types";
 
 import { EraAlertsSettingsDrawer } from "./EraAlertsSettingsDrawer";
 import { EraCommandHeader } from "./EraCommandHeader";
 import { EraNotificationsDrawer } from "./EraNotificationsDrawer";
 import { EraOpenP1Drawer } from "./EraOpenP1Drawer";
 import { EraDetailDrawer } from "./EraDetailDrawer";
-import { EraEmployeePreview } from "./EraEmployeePreview";
 import { EraEvidenceFeed } from "./EraEvidenceFeed";
 import { EraKpiStrip } from "./EraKpiStrip";
 import { EraRiskHeatmap } from "./EraRiskHeatmap";
 import { EraTeamComposition } from "./EraTeamComposition";
 import {
   buildTeamEvidenceFeed,
-  connectedIntegrationCount,
   totalUnmappedCount,
 } from "./era-utils";
 
@@ -153,15 +151,6 @@ export function EraCommandCenter() {
     [employees],
   );
 
-  const selectedEmployee: EraEmployeeMetrics | null = useMemo(() => {
-    if (!selectedId) return activeEmployees[0] ?? null;
-    return (
-      activeEmployees.find((employee) => employee.employee_id === selectedId) ??
-      activeEmployees[0] ??
-      null
-    );
-  }, [activeEmployees, selectedId]);
-
   const teamEvidence = useMemo(
     () => buildTeamEvidenceFeed(activeEmployees, data?.team_evidence ?? []),
     [activeEmployees, data?.team_evidence],
@@ -187,7 +176,6 @@ export function EraCommandCenter() {
             orphan_file_count: 0,
             orphan_delta_90d: 0,
           }}
-          integrationCount={0}
           loading
         />
         <EraRiskHeatmap
@@ -236,7 +224,6 @@ export function EraCommandCenter() {
     );
   }
 
-  const integrationCount = connectedIntegrationCount(data.sync_freshness);
   const unmappedCount = totalUnmappedCount(data.unmapped_activity);
 
   return (
@@ -270,7 +257,6 @@ export function EraCommandCenter() {
 
       <EraKpiStrip
         summary={data.team_summary}
-        integrationCount={integrationCount}
         teamHistory={data.team_risk_history_30d ?? []}
         onOpenP1Issues={() => setOpenP1DrawerOpen(true)}
       />
@@ -288,29 +274,20 @@ export function EraCommandCenter() {
       />
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <EraEmployeePreview
-          employee={selectedEmployee}
-          onOpenDetail={
-            selectedEmployee
-              ? () => openDrawer(selectedEmployee.employee_id)
-              : undefined
-          }
-        />
         <EraTeamComposition
           employees={employees}
           topRiskDriver={data.team_summary.top_risk_driver}
           teamHistory={data.team_risk_history_30d ?? []}
         />
+        <EraEvidenceFeed
+          items={teamEvidence}
+          selectedId={selectedId}
+          onSelectEmployee={(employeeId) => {
+            setSelectedId(employeeId);
+            openDrawer(employeeId);
+          }}
+        />
       </div>
-
-      <EraEvidenceFeed
-        items={teamEvidence}
-        selectedId={selectedId}
-        onSelectEmployee={(employeeId) => {
-          setSelectedId(employeeId);
-          openDrawer(employeeId);
-        }}
-      />
 
       {openP1DrawerOpen && (
         <EraOpenP1Drawer
@@ -341,6 +318,7 @@ export function EraCommandCenter() {
         <EraAlertsSettingsDrawer
           open={alertsSettingsOpen}
           onClose={closeAlertsSettings}
+          demoMode={data.demo_mode}
         />
       )}
 

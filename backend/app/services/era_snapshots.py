@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.operational import Employee, EraRiskSnapshot, EraTeamHealthSnapshot
 from app.schemas.era import (
+    EraDimensions,
     EraEmployeeMetrics,
     EraManagerRollupReport,
     EraManagerRollupResponse,
@@ -257,6 +258,19 @@ def team_avg_trend_7d(
     return trend_7d(current_avg, scores)
 
 
+def _dimensions_from_json(dimensions_json: dict | None) -> EraDimensions | None:
+    if not dimensions_json:
+        return None
+    return EraDimensions(
+        knowledge=float(dimensions_json.get("knowledge", 0)),
+        operational=float(dimensions_json.get("operational", 0)),
+        documentation=float(dimensions_json.get("documentation", 0)),
+        structural=float(dimensions_json.get("structural", 0)),
+        burnout=float(dimensions_json.get("burnout", 0)),
+        partial=dimensions_json.get("partial") or {},
+    )
+
+
 def get_employee_risk_history(
     db: Session,
     tenant_id: uuid.UUID,
@@ -279,6 +293,7 @@ def get_employee_risk_history(
         EraRiskHistoryPoint(
             snapshot_date=row.snapshot_date.isoformat(),
             risk_factor_score=row.risk_factor_score,
+            dimensions=_dimensions_from_json(row.dimensions_json),
         )
         for row in rows
     ]

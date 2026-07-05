@@ -80,6 +80,7 @@ interface FileRiskMatrixProps {
   quadrantCounts?: Record<string, number>;
   crossTrainingPriority?: FileRiskItem[];
   compact?: boolean;
+  profileMode?: boolean;
   title?: string;
   collapsible?: boolean;
   defaultExpanded?: boolean;
@@ -90,21 +91,26 @@ function fileRiskBucket(quadrant: FileRiskQuadrant): FileRiskBucket {
   return RISK_QUADRANTS.includes(quadrant) ? "needs_attention" : "healthy";
 }
 
-function ownershipSignal(file: FileRiskItem): string | null {
-  if (!file.primary_owner_name) {
+function ownershipSignal(
+  file: FileRiskItem,
+  profileMode = false,
+): string | null {
+  if (!file.primary_owner_name && file.primary_owner_doa_pct == null) {
     return null;
   }
   if (file.primary_owner_doa_pct != null) {
-    return `${file.primary_owner_name} owns ${file.primary_owner_doa_pct.toFixed(0)}%`;
+    return profileMode
+      ? `Ownership ${file.primary_owner_doa_pct.toFixed(0)}%`
+      : `${file.primary_owner_name} owns ${file.primary_owner_doa_pct.toFixed(0)}%`;
   }
-  return `${file.primary_owner_name} is primary owner`;
+  return profileMode ? "Primary owner" : `${file.primary_owner_name} is primary owner`;
 }
 
-function fileRiskSummary(file: FileRiskItem): string | null {
+function fileRiskSummary(file: FileRiskItem, profileMode = false): string | null {
   if (file.quadrant === "healthy" || file.quadrant === "active_shared") {
     return null;
   }
-  return ownershipSignal(file);
+  return ownershipSignal(file, profileMode);
 }
 
 function bucketCount(
@@ -133,15 +139,54 @@ function formatFileLabel(path: string): { name: string; folder: string | null } 
 function FileRiskRow({
   file,
   emphasize = false,
+  profileMode = false,
 }: {
   file: FileRiskItem;
   emphasize?: boolean;
+  profileMode?: boolean;
 }) {
   const { name, folder } = formatFileLabel(file.file_path);
   const bucket = fileRiskBucket(file.quadrant);
   const bucketMeta = BUCKET_META[bucket];
   const quadrantMeta = QUADRANT_META[file.quadrant];
-  const summary = fileRiskSummary(file);
+  const summary = fileRiskSummary(file, profileMode);
+
+  if (profileMode) {
+    return (
+      <li className="flex items-center justify-between gap-2 rounded border border-zinc-800/60 bg-zinc-950/30 px-2.5 py-1.5">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate font-mono text-xs text-zinc-300">{name}</p>
+            <span
+              title={quadrantMeta.tooltip}
+              className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-medium uppercase ${quadrantMeta.badgeClass}`}
+            >
+              {quadrantMeta.shortLabel}
+            </span>
+            {summary ? (
+              <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
+                {summary}
+              </span>
+            ) : null}
+          </div>
+          {folder ? (
+            <p className="truncate text-[10px] text-zinc-600">{folder}/</p>
+          ) : null}
+        </div>
+        {file.github_url ? (
+          <a
+            href={file.github_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-zinc-500 hover:text-sky-300"
+            aria-label={`View ${name} on GitHub`}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        ) : null}
+      </li>
+    );
+  }
 
   return (
     <li
@@ -230,6 +275,7 @@ export function FileRiskMatrix({
   quadrantCounts = {},
   crossTrainingPriority = [],
   compact = false,
+  profileMode = false,
   title = "File ownership risk",
   collapsible = false,
   defaultExpanded = false,
@@ -348,20 +394,26 @@ export function FileRiskMatrix({
     );
     const heading = (
       <div className="min-w-0 flex-1 text-left">
-        <h3 className="text-sm font-medium text-zinc-200">
+        <h3 className={`font-medium text-zinc-200 ${profileMode ? "text-sm" : "text-sm"}`}>
           {title}
-          <span className="ml-2 font-normal tabular-nums text-zinc-500">
-            ({fileCount} {fileCount === 1 ? "file" : "files"})
+          <span className="ml-1.5 font-normal tabular-nums text-zinc-500">
+            ({fileCount})
           </span>
         </h3>
-        <p className="mt-1 text-xs text-zinc-500">
-          Files where this person is the main owner.
-        </p>
+        {!profileMode && (
+          <p className="mt-1 text-xs text-zinc-500">
+            Files where this person is the main owner.
+          </p>
+        )}
       </div>
     );
 
     return (
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+      <section
+        className={`rounded-xl border border-zinc-800 bg-zinc-900/30 ${
+          profileMode ? "p-3" : "p-4"
+        }`}
+      >
         {collapsible ? (
           <button
             type="button"
@@ -380,13 +432,22 @@ export function FileRiskMatrix({
           <div className="mb-3">{heading}</div>
         )}
         {(!collapsible || expanded) && (
-          <div className={collapsible ? "mt-3 border-t border-zinc-800 pt-3" : undefined}>
-            <ul className="space-y-2">
+          <div
+            className={
+              collapsible
+                ? profileMode
+                  ? "mt-2 border-t border-zinc-800/80 pt-2"
+                  : "mt-3 border-t border-zinc-800 pt-3"
+                : undefined
+            }
+          >
+            <ul className={profileMode ? "space-y-1.5" : "space-y-2"}>
               {paginatedPriorityFiles.map((file) => (
                 <FileRiskRow
                   key={`${file.component_id}-${file.file_path}`}
                   file={file}
                   emphasize
+                  profileMode={profileMode}
                 />
               ))}
             </ul>

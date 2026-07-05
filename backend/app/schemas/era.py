@@ -182,6 +182,7 @@ class EraRiskHistoryPoint(BaseModel):
     risk_factor_score: float = Field(ge=0, le=100)
     org_health_score: float | None = Field(default=None, ge=0, le=100)
     orphan_file_count: int | None = Field(default=None, ge=0)
+    dimensions: EraDimensions | None = None
 
 
 class EraManagerRollupReport(BaseModel):
@@ -203,6 +204,11 @@ class EraManagerRollupResponse(BaseModel):
     reports: list[EraManagerRollupReport] = Field(default_factory=list)
 
 
+class EraIdentityMapping(BaseModel):
+    level: IdentityCoverageLevel
+    display_label: str | None = None
+
+
 class EraEmployeeDetailResponse(BaseModel):
     computed_at: datetime
     employee: EraEmployeeMetrics
@@ -213,6 +219,7 @@ class EraEmployeeDetailResponse(BaseModel):
     backup_candidates: list[EraBackupCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blast_radius_narrative: str | None = None
+    identity_mappings: dict[str, EraIdentityMapping] = Field(default_factory=dict)
     risk_history_30d: list[EraRiskHistoryPoint] = Field(default_factory=list)
     mitigations: list[EraMitigationItem] = Field(default_factory=list)
     open_mitigations_count: int = Field(default=0, ge=0)

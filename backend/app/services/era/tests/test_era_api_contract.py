@@ -2,19 +2,32 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.database import get_db
 from app.main import app
-from app.models.operational import Assignment, Component
+from app.models.operational import Assignment, Component, EmployeeIdentity
 from app.services.era_analytics import get_era_metrics, get_era_employee_detail
+from app.tenancy import TENANT_HEADER
 
 from tests.conftest import add_employee
 
 
 @pytest.fixture()
-def client():
-    return TestClient(app)
+def client(db):
+    def _override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = _override_get_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def _tenant_headers(tenant_id: uuid.UUID) -> dict[str, str]:
+    return {TENANT_HEADER: str(tenant_id)}
 
 
 def _seed_component(db, tenant_id, *, component_id: str, name: str) -> None:
@@ -65,6 +78,16 @@ def test_v2_employee_has_dimensions_and_evidence(db, tenant):
             codebase_share_pct=80.0,
         )
     )
+    db.add(
+        EmployeeIdentity(
+            tenant_id=tenant.id,
+            employee_id=employee.id,
+            provider="github",
+            provider_username_or_id="era-engineer",
+            provider_display_label="era-engineer",
+            confidence="confirmed",
+        )
+    )
     db.commit()
 
     response = get_era_metrics(db, tenant)
@@ -97,14 +120,29 @@ def test_employee_detail_endpoint_returns_full_evidence(client, db, tenant):
             codebase_share_pct=70.0,
         )
     )
+    db.add(
+        EmployeeIdentity(
+            tenant_id=tenant.id,
+            employee_id=employee.id,
+            provider="github",
+            provider_username_or_id="detail-engineer",
+            provider_display_label="detail-engineer",
+            confidence="confirmed",
+        )
+    )
     db.commit()
 
-    http_response = client.get(f"/api/analytics/era/{employee.id}")
+    http_response = client.get(
+        f"/api/analytics/era/{employee.id}",
+        headers=_tenant_headers(tenant.id),
+    )
     assert http_response.status_code == 200
     payload = http_response.json()
     assert payload["employee"]["employee_id"] == employee.id
     assert "evidence" in payload
     assert payload["evidence_total_count"] >= len(payload["evidence"])
+    assert payload["identity_mappings"]["github"]["level"] == "confirmed"
+    assert payload["identity_mappings"]["github"]["display_label"] == "detail-engineer"
 
 
 def test_employee_detail_not_found(client):

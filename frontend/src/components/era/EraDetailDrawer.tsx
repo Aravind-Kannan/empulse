@@ -1,7 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, X } from "lucide-react";
 
 import { fetchEraEmployeeDetail } from "@/lib/api";
@@ -11,21 +11,15 @@ import type {
   EraEmployeeDetailResponse,
 } from "@/lib/types";
 
-import { EraAffectedComponentsGraph } from "./EraAffectedComponentsGraph";
+import { EraDetailCompactInsights } from "./EraDetailCompactInsights";
 import { EraBackupCandidates } from "./EraBackupCandidates";
-import { EraDataQualityStrip } from "./EraDataQualityStrip";
 import { EraHotspotSummary } from "./EraHotspotSummary";
 import { EraReviewNetwork } from "./EraReviewNetwork";
 import { EraMitigationChecklist } from "./EraMitigationChecklist";
 import { EraDetailFooter } from "./EraDetailFooter";
 import { EraDetailHero } from "./EraDetailHero";
-import { EraDetailHistoryChart } from "./EraDetailHistoryChart";
-import { EraDimensionFactorWaterfall } from "./EraDimensionFactorWaterfall";
-import { EraDimensionGrid } from "./EraDimensionGrid";
-import { EraDimensionRadar } from "./EraDimensionRadar";
-import { EraEvidenceList } from "./EraEvidenceList";
-import { EraRiskChart } from "./EraRiskChart";
-import { buildCompositeRiskSentence, dimensionValue } from "./era-utils";
+import { EraContinuityRiskVisual } from "./EraContinuityRiskVisual";
+import { trendDimensionsForChart } from "./era-utils";
 
 interface EraDetailDrawerProps {
   employeeId: string;
@@ -33,18 +27,6 @@ interface EraDetailDrawerProps {
   demoMode: boolean;
   initialDimensionFilter?: EraDimensionKey | null;
   onClose: () => void;
-}
-
-function defaultDimensions(detail: EraEmployeeDetailResponse) {
-  const employee = detail.employee;
-  return {
-    knowledge: dimensionValue(employee, "knowledge"),
-    operational: dimensionValue(employee, "operational"),
-    documentation: dimensionValue(employee, "documentation"),
-    structural: dimensionValue(employee, "structural"),
-    burnout: dimensionValue(employee, "burnout"),
-    partial: employee.dimensions?.partial,
-  };
 }
 
 export function EraDetailDrawer({
@@ -55,9 +37,10 @@ export function EraDetailDrawer({
   onClose,
 }: EraDetailDrawerProps) {
   const [detail, setDetail] = useState<EraEmployeeDetailResponse | null>(null);
-  const [selectedDimensions, setSelectedDimensions] = useState<EraDimensionKey[]>(
+  const [filterDimensions, setFilterDimensions] = useState<EraDimensionKey[]>(
     initialDimensionFilter ? [initialDimensionFilter] : [],
   );
+  const [expandedFactorId, setExpandedFactorId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -102,21 +85,30 @@ export function EraDetailDrawer({
   }, [employeeId]);
 
   useEffect(() => {
-    setSelectedDimensions(initialDimensionFilter ? [initialDimensionFilter] : []);
+    setFilterDimensions(initialDimensionFilter ? [initialDimensionFilter] : []);
+    setExpandedFactorId(null);
   }, [employeeId, initialDimensionFilter]);
 
-  function toggleDimension(key: EraDimensionKey) {
-    setSelectedDimensions((current) =>
-      current.includes(key)
-        ? current.filter((item) => item !== key)
-        : [...current, key],
-    );
+  const trendDimensions = useMemo(() => {
+    if (!detail?.employee) {
+      return initialDimensionFilter ? [initialDimensionFilter] : ["knowledge"];
+    }
+    return trendDimensionsForChart(detail.employee, filterDimensions);
+  }, [detail?.employee, filterDimensions, initialDimensionFilter]);
+
+  function handleGaugeClick(key: EraDimensionKey) {
+    setFilterDimensions((current) => {
+      if (current.includes(key)) {
+        return current.filter((item) => item !== key);
+      }
+      return current.length === 0 ? [key] : [...current, key];
+    });
+    setExpandedFactorId(null);
   }
 
-  const filterLabel =
-    selectedDimensions.length > 0
-      ? ` (${selectedDimensions.length} selected)`
-      : "";
+  function handleFactorClick(rowId: string) {
+    setExpandedFactorId((current) => (current === rowId ? null : rowId));
+  }
 
   useEffect(() => {
     void loadDetail();
@@ -214,7 +206,7 @@ export function EraDetailDrawer({
           )}
 
           {!loading && !error && detail && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {detail.employee.excluded ? (
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 text-center">
                   <h3 className="text-lg font-medium text-zinc-100">
@@ -233,57 +225,22 @@ export function EraDetailDrawer({
                 <>
                   <EraDetailHero
                     employee={detail.employee}
-                    blastRadiusNarrative={detail.blast_radius_narrative}
+                    identityMappings={detail.identity_mappings}
                   />
-                  <p className="text-sm leading-relaxed text-zinc-400">
-                    {buildCompositeRiskSentence(detail.employee)}
-                  </p>
-                  <EraDataQualityStrip employee={detail.employee} />
-                  <EraDimensionGrid
+                  <EraContinuityRiskVisual
                     employee={detail.employee}
-                    selectedDimensions={selectedDimensions}
-                    onToggleDimension={toggleDimension}
+                    evidence={detail.evidence}
+                    evidenceTotalCount={detail.evidence_total_count}
+                    filterDimensions={filterDimensions}
+                    expandedFactorId={expandedFactorId}
+                    onGaugeClick={handleGaugeClick}
+                    onFactorClick={handleFactorClick}
                   />
-                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
-                    <h3 className="mb-3 text-sm font-medium text-zinc-200">
-                      Score drivers{filterLabel}
-                    </h3>
-                    <EraDimensionFactorWaterfall
-                      employee={detail.employee}
-                      dimensions={selectedDimensions}
-                    />
-                  </div>
-                  <EraEvidenceList
-                    items={detail.evidence}
-                    totalCount={detail.evidence_total_count}
-                    employeeName={detail.employee.name}
-                    filterDimensions={selectedDimensions}
-                    defaultCollapsed
-                  />
-                  <EraDetailHistoryChart
+                  <EraDetailCompactInsights
                     history={detail.risk_history_30d ?? []}
-                    employeeName={detail.employee.name}
+                    trendDimensions={trendDimensions}
+                    components={detail.employee.affected_components ?? []}
                   />
-
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
-                      <h3 className="mb-2 text-sm font-medium text-zinc-200">
-                        Risk radar
-                      </h3>
-                      <EraDimensionRadar
-                        dimensions={detail.employee.dimensions ?? defaultDimensions(detail)}
-                        size={220}
-                      />
-                    </div>
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
-                      <h3 className="mb-2 text-sm font-medium text-zinc-200">
-                        Weighted breakdown
-                      </h3>
-                      <EraRiskChart employee={detail.employee} compact />
-                    </div>
-                  </div>
-
-                  <EraAffectedComponentsGraph employee={detail.employee} />
                   <EraHotspotSummary
                     employeeId={detail.employee.employee_id}
                     employeeName={detail.employee.name}
