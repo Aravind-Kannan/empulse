@@ -243,16 +243,10 @@ export function EraCommandCenter() {
       )}
 
       <EraCommandHeader
-        recovery={data.team_summary.estimated_recovery_weeks}
         syncFreshness={data.sync_freshness}
-        warnings={data.warnings}
-        unmappedCount={unmappedCount}
-        alertsRefreshKey={alertsRefreshKey}
         employees={activeEmployees}
-        highRiskCount={data.team_summary.high_risk_count}
         refreshing={refreshing}
         onRefresh={() => void load(true)}
-        onOpenNotifications={() => setNotificationsOpen(true)}
         onOpenAlertsSettings={() => setAlertsSettingsOpen(true)}
       />
 
