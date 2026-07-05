@@ -175,6 +175,7 @@ export function EraCommandCenter() {
             org_health_score: 0,
             orphan_file_count: 0,
             orphan_delta_90d: 0,
+            unacknowledged_alert_count: 0,
           }}
           loading
         />
@@ -257,8 +258,9 @@ export function EraCommandCenter() {
 
       <EraKpiStrip
         summary={data.team_summary}
-        teamHistory={data.team_risk_history_30d ?? []}
+        unmappedCount={unmappedCount}
         onOpenP1Issues={() => setOpenP1DrawerOpen(true)}
+        onOpenNotifications={() => setNotificationsOpen(true)}
       />
 
       <EraRiskHeatmap

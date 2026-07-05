@@ -1,27 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, Loader2, X } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 
 import { fetchEraOpenP1Issues } from "@/lib/api";
 import { formatLocalDate } from "@/lib/datetime";
 import type { EraOpenP1IssuesResponse } from "@/lib/types";
+
+import { EraSidePanel } from "./EraSidePanel";
+import { getInitials } from "./era-utils";
 
 interface EraOpenP1DrawerProps {
   open: boolean;
   onClose: () => void;
 }
 
-function priorityClass(priority: string) {
+function priorityBadgeClass(priority: string): string {
   if (priority === "Critical") {
-    return "border-red-500/40 bg-red-500/10 text-red-200";
+    return "border-red-500/30 bg-red-500/15 text-red-200";
   }
   if (priority === "Highest" || priority === "High") {
-    return "border-amber-500/40 bg-amber-500/10 text-amber-200";
+    return "border-amber-500/30 bg-amber-500/15 text-amber-200";
   }
-  return "border-zinc-600 bg-zinc-800/50 text-zinc-300";
+  return "border-zinc-600/40 bg-zinc-500/15 text-zinc-300";
 }
 
 function formatUpdatedAt(iso: string | null | undefined) {
@@ -88,147 +90,137 @@ export function EraOpenP1Drawer({ open, onClose }: EraOpenP1DrawerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, handleClose]);
 
-  if (!mounted || !open) return null;
+  if (!mounted) return null;
 
-  const content = (
-    <>
-      <button
-        type="button"
-        aria-label="Close open P1 issues"
-        className="fixed inset-0 z-40 bg-black/50"
-        onClick={handleClose}
-      />
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label="Open P1 Jira issues"
-        className={`fixed right-0 top-0 z-50 flex h-full w-full max-w-lg flex-col border-l border-zinc-800 bg-slate-950 shadow-2xl transition-transform duration-200 ease-out ${
-          visible ? "translate-x-0" : "translate-x-full"
-        }`}
-      >
-        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-zinc-500">ERA</p>
-            <h2 className="text-lg font-semibold text-zinc-100">Open P1 issues</h2>
-          </div>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={handleClose}
-            className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800"
-          >
-            <X className="h-5 w-5" />
-          </button>
+  return (
+    <EraSidePanel
+      open={open}
+      visible={visible}
+      onClose={handleClose}
+      eyebrow="Operational signals"
+      title="Open P1 issues"
+      subtitle={
+        data?.jira_synced
+          ? `${data.issues.length} issue${data.issues.length === 1 ? "" : "s"} from Jira`
+          : "Critical, highest, and high priority"
+      }
+      ariaLabel="Open P1 Jira issues"
+      closeButtonRef={closeButtonRef}
+    >
+      {loading ? (
+        <div className="flex items-center gap-2 py-8 text-[11px] text-zinc-500">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading Jira issues…
         </div>
+      ) : null}
 
-        <div className="flex-1 overflow-y-auto px-5 py-5">
-          {loading ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-zinc-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading Jira issues…
-            </div>
+      {error ? (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
+          {error}
+        </div>
+      ) : null}
+
+      {!loading && data && !data.jira_synced ? (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-6 text-center">
+          <p className="text-[11px] text-zinc-400">Jira has not been synced yet.</p>
+          <Link
+            href="/settings/integrations"
+            className="mt-2 inline-flex text-[11px] text-violet-300 hover:text-violet-200"
+          >
+            Connect and sync Jira →
+          </Link>
+        </div>
+      ) : null}
+
+      {!loading && data?.jira_synced && data.issues.length === 0 ? (
+        <p className="py-8 text-center text-[11px] text-zinc-500">
+          No open Critical, Highest, or High priority issues in the latest sync.
+        </p>
+      ) : null}
+
+      {!loading && data?.jira_synced && data.issues.length > 0 ? (
+        <div className="space-y-3">
+          {data.filters_note ? (
+            <p className="text-[10px] text-zinc-600">{data.filters_note}</p>
           ) : null}
+          <ul className="space-y-1.5">
+            {data.issues.map((issue) => {
+              const assigneeLabel =
+                issue.assignee_name ??
+                (issue.assignee_unmapped ? "Unmapped" : "Unassigned");
 
-          {error ? (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-              {error}
-            </div>
-          ) : null}
-
-          {!loading && data && !data.jira_synced ? (
-            <div className="space-y-3 py-4 text-sm text-zinc-400">
-              <p>Jira has not been synced yet.</p>
-              <Link
-                href="/settings/integrations"
-                className="inline-flex text-violet-300 hover:text-violet-200"
-              >
-                Connect and sync Jira →
-              </Link>
-            </div>
-          ) : null}
-
-          {!loading && data?.jira_synced && data.issues.length === 0 ? (
-            <p className="py-8 text-center text-sm text-zinc-500">
-              No open Critical, Highest, or High priority issues in the latest sync.
-            </p>
-          ) : null}
-
-          {!loading && data?.jira_synced && data.issues.length > 0 ? (
-            <div className="space-y-3">
-              <p className="text-xs text-zinc-500">{data.filters_note}</p>
-              {data.issues.map((issue) => (
-                <article
+              return (
+                <li
                   key={issue.issue_key}
-                  className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4"
+                  className="flex items-start justify-between gap-2 rounded border border-zinc-800/60 bg-zinc-950/30 px-2.5 py-2"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-xs text-zinc-400">
-                          {issue.issue_key}
-                        </span>
-                        <span
-                          className={`rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${priorityClass(issue.priority)}`}
-                        >
-                          {issue.priority}
-                        </span>
-                        <span className="text-[10px] uppercase text-zinc-500">
-                          {issue.status}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm font-medium text-zinc-100">
-                        {issue.summary || "—"}
-                      </p>
-                    </div>
-                    {issue.issue_url ? (
-                      <a
-                        href={issue.issue_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="shrink-0 rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                        title="Open in Jira"
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="shrink-0 font-mono text-[11px] text-zinc-400">
+                        {issue.issue_key}
+                      </span>
+                      <span
+                        className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-medium uppercase ${priorityBadgeClass(issue.priority)}`}
                       >
-                        <ExternalLink className="h-4 w-4" />
-                      </a>
+                        {issue.priority}
+                      </span>
+                      <span className="shrink-0 text-[9px] uppercase text-zinc-600">
+                        {issue.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] leading-snug text-zinc-200">
+                      {issue.summary || "—"}
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9px] text-zinc-500">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 ${
+                          issue.assignee_unmapped
+                            ? "border-amber-500/25 bg-amber-500/5 text-amber-300"
+                            : "border-zinc-700/80 bg-zinc-900/60 text-zinc-400"
+                        }`}
+                      >
+                        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-zinc-800 text-[8px] font-medium text-zinc-300">
+                          {getInitials(assigneeLabel)}
+                        </span>
+                        <span className="max-w-[6rem] truncate">{assigneeLabel}</span>
+                      </span>
+                      {issue.component_name ? (
+                        <>
+                          <span>·</span>
+                          <span className="truncate text-zinc-400">
+                            {issue.component_name}
+                          </span>
+                        </>
+                      ) : null}
+                      <span>·</span>
+                      <span>{formatUpdatedAt(issue.updated_at)}</span>
+                    </div>
+                    {issue.assignee_unmapped ? (
+                      <Link
+                        href="/settings/org-chart?tab=identity"
+                        className="mt-1.5 inline-block text-[10px] text-amber-300 hover:text-amber-200"
+                      >
+                        Map assignee →
+                      </Link>
                     ) : null}
                   </div>
-                  <dl className="mt-3 grid gap-1 text-xs text-zinc-500">
-                    <div className="flex gap-2">
-                      <dt className="shrink-0">Assignee</dt>
-                      <dd className="text-zinc-300">
-                        {issue.assignee_name ??
-                          (issue.assignee_unmapped
-                            ? "Unmapped"
-                            : "Unassigned")}
-                      </dd>
-                    </div>
-                    {issue.component_name ? (
-                      <div className="flex gap-2">
-                        <dt className="shrink-0">Component</dt>
-                        <dd className="text-zinc-300">{issue.component_name}</dd>
-                      </div>
-                    ) : null}
-                    <div className="flex gap-2">
-                      <dt className="shrink-0">Updated</dt>
-                      <dd>{formatUpdatedAt(issue.updated_at)}</dd>
-                    </div>
-                  </dl>
-                  {issue.assignee_unmapped ? (
-                    <Link
-                      href="/settings/org-chart?tab=identity"
-                      className="mt-2 inline-block text-xs text-amber-300 hover:text-amber-200"
+                  {issue.issue_url ? (
+                    <a
+                      href={issue.issue_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-0.5 shrink-0 text-zinc-500 hover:text-sky-300"
+                      aria-label={`Open ${issue.issue_key} in Jira`}
                     >
-                      Map assignee in identity settings
-                    </Link>
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
                   ) : null}
-                </article>
-              ))}
-            </div>
-          ) : null}
+                </li>
+              );
+            })}
+          </ul>
         </div>
-      </aside>
-    </>
+      ) : null}
+    </EraSidePanel>
   );
-
-  return createPortal(content, document.body);
 }

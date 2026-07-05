@@ -5,6 +5,8 @@ import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink } from "lucide-rea
 
 import type { FileRiskItem, FileRiskQuadrant } from "@/lib/types";
 
+import { getInitials } from "@/components/era/era-utils";
+
 type FileRiskBucket = "needs_attention" | "healthy";
 
 const RISK_QUADRANTS: FileRiskQuadrant[] = ["critical", "stable_niche"];
@@ -69,8 +71,8 @@ const RISK_QUADRANT_ORDER: Record<FileRiskQuadrant, number> = {
   healthy: 3,
 };
 
-/** FileRiskRow height incl. space-y-2 gap — keeps list area stable across buckets */
-const FILE_ROW_HEIGHT_PX = 76;
+/** Compact feed row height incl. space-y-1.5 gap */
+const FILE_ROW_HEIGHT_PX = 48;
 const LIST_BODY_PADDING_PX = 24;
 const PAGINATION_HEIGHT_PX = 44;
 const FILES_PER_PAGE = 5;
@@ -155,14 +157,24 @@ function FileRiskRow({
     return (
       <li className="flex items-center justify-between gap-2 rounded border border-zinc-800/60 bg-zinc-950/30 px-2.5 py-1.5">
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate font-mono text-xs text-zinc-300">{name}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <p className="truncate font-mono text-xs text-zinc-300" title={file.file_path}>
+              {name}
+            </p>
             <span
               title={quadrantMeta.tooltip}
               className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-medium uppercase ${quadrantMeta.badgeClass}`}
             >
               {quadrantMeta.shortLabel}
             </span>
+            {file.primary_owner_name ? (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded border border-zinc-700/80 bg-zinc-900/60 px-1.5 py-0.5 text-[9px] text-zinc-400">
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-zinc-800 text-[8px] font-medium text-zinc-300">
+                  {getInitials(file.primary_owner_name)}
+                </span>
+                <span className="max-w-[5rem] truncate">{file.primary_owner_name}</span>
+              </span>
+            ) : null}
             {summary ? (
               <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
                 {summary}
@@ -254,7 +266,7 @@ function FileListPagination({
         <ChevronLeft className="h-3.5 w-3.5" />
         Previous
       </button>
-      <span className="text-xs tabular-nums text-zinc-500">
+      <span className="text-[10px] tabular-nums text-zinc-500">
         {rangeStart}–{rangeEnd} of {totalItems}
       </span>
       <button
@@ -463,63 +475,71 @@ export function FileRiskMatrix({
   }
 
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 sm:p-5">
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-zinc-200">{title}</h3>
-      </div>
-
-      <div className="mb-4 grid gap-3 sm:grid-cols-2">
-        {BUCKET_PRIORITY.map((bucket) => {
-          const meta = BUCKET_META[bucket];
-          const count = bucketCount(bucket, quadrantCounts, byBucket);
-          const isSelected = selectedBucket === bucket;
-          return (
-            <button
-              key={bucket}
-              type="button"
-              onClick={() => setSelectedBucket(bucket)}
-              className={`rounded-lg border px-3 py-3 text-left transition-colors hover:brightness-110 ${
-                meta.borderClass
-              } ${isSelected ? "ring-2 ring-zinc-400/50" : ""}`}
-            >
-              <p className={`text-[11px] font-medium uppercase tracking-wide ${meta.accentClass}`}>
-                {meta.shortLabel}
-              </p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-100">
-                {count}
-              </p>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className={`rounded-xl border ${BUCKET_META[selectedBucket].borderClass}`}>
-        <div
-          className="flex flex-col px-3 py-3"
-          style={{ minHeight: listBodyMinHeightPx }}
-        >
-          {selectedFiles.length > 0 ? (
-            <>
-              <ul className="space-y-2">
-                {paginatedFiles.map((file) => (
-                  <FileRiskRow
-                    key={`${file.component_id}-${file.file_path}`}
-                    file={file}
-                  />
-                ))}
-              </ul>
-              <FileListPagination
-                page={page}
-                totalItems={selectedFiles.length}
-                onPageChange={setPage}
-              />
-            </>
-          ) : (
-            <p className="flex flex-1 items-center justify-center text-sm text-zinc-500">
-              No files in this category.
-            </p>
-          )}
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-[9px] font-medium uppercase tracking-wide text-zinc-500">
+            File ownership
+          </p>
+          <h3 className="mt-0.5 text-base font-semibold text-zinc-100">
+            {title}
+            <span className="ml-1.5 text-sm font-normal tabular-nums text-zinc-500">
+              ({files.length})
+            </span>
+          </h3>
         </div>
+        <div className="flex flex-wrap gap-1">
+          {BUCKET_PRIORITY.map((bucket) => {
+            const meta = BUCKET_META[bucket];
+            const count = bucketCount(bucket, quadrantCounts, byBucket);
+            const isSelected = selectedBucket === bucket;
+            return (
+              <button
+                key={bucket}
+                type="button"
+                onClick={() => setSelectedBucket(bucket)}
+                className={`rounded-md border px-2 py-0.5 text-[10px] transition ${
+                  isSelected
+                    ? "border-zinc-600 bg-zinc-800 text-zinc-100"
+                    : "border-zinc-800 bg-zinc-950/50 text-zinc-500 hover:border-zinc-700"
+                }`}
+              >
+                <span className={isSelected ? meta.accentClass : ""}>
+                  {meta.shortLabel}
+                </span>
+                <span className="ml-1 tabular-nums text-zinc-500">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div
+        className="mt-3 flex flex-col"
+        style={{ minHeight: listBodyMinHeightPx }}
+      >
+        {selectedFiles.length > 0 ? (
+          <>
+            <ul className="min-h-0 flex-1 space-y-1.5">
+              {paginatedFiles.map((file) => (
+                <FileRiskRow
+                  key={`${file.component_id}-${file.file_path}`}
+                  file={file}
+                  profileMode
+                />
+              ))}
+            </ul>
+            <FileListPagination
+              page={page}
+              totalItems={selectedFiles.length}
+              onPageChange={setPage}
+            />
+          </>
+        ) : (
+          <p className="flex flex-1 items-center justify-center py-8 text-[11px] text-zinc-500">
+            No files in this category.
+          </p>
+        )}
       </div>
     </section>
   );
