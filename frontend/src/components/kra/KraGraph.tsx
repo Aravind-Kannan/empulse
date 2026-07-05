@@ -36,8 +36,10 @@ const MIN_GRAPH_HEIGHT = 280;
 const SCROLL_VIEWPORT_MAX = 560;
 const GRAPH_PADDING_TOP = 40;
 const GRAPH_PADDING_BOTTOM = 36;
-const COLUMN_INSET = 140;
-const COMPACT_COLUMN_INSET = 72;
+const EDGE_MARGIN = 16;
+const COMPACT_EDGE_MARGIN = 12;
+const ZONE_INNER_PAD = 12;
+const COLUMN_DIVIDER_GAP = 8;
 const ENGINEER_MIN_GAP = 92;
 const COMPONENT_MIN_GAP = 84;
 const ENGINEER_RADIUS = 22;
@@ -77,9 +79,9 @@ function layoutGraph(
 ): GraphLayout {
   const engineers = graph.nodes.filter((node) => node.type === "engineer");
   const components = graph.nodes.filter((node) => node.type === "component");
-  const inset = compact ? COMPACT_COLUMN_INSET : COLUMN_INSET;
-  const engineerX = inset;
-  const componentX = graphWidth - inset;
+  const edgeMargin = compact ? COMPACT_EDGE_MARGIN : EDGE_MARGIN;
+  const engineerX = edgeMargin + ZONE_INNER_PAD + ENGINEER_RADIUS;
+  const componentX = graphWidth - edgeMargin - ZONE_INNER_PAD - COMPONENT_HALF_W;
 
   const engineerSpan =
     engineers.length <= 1 ? 0 : (engineers.length - 1) * ENGINEER_MIN_GAP;
@@ -246,11 +248,14 @@ export function KraGraph({
     return layout.width / 2;
   }, [layout.nodes, layout.width]);
 
-  const zoneInset = detailOpen ? COMPACT_COLUMN_INSET : COLUMN_INSET;
-  const engineerZoneLeft = zoneInset - ENGINEER_RADIUS - 12;
-  const engineerZoneWidth = Math.max(columnDividerX - engineerZoneLeft - 8, 48);
-  const componentZoneX = columnDividerX + 8;
-  const componentZoneWidth = Math.max(graphWidth - componentZoneX - 16, 48);
+  const edgeMargin = detailOpen ? COMPACT_EDGE_MARGIN : EDGE_MARGIN;
+  const engineerZoneLeft = edgeMargin;
+  const engineerZoneWidth = Math.max(
+    columnDividerX - engineerZoneLeft - COLUMN_DIVIDER_GAP,
+    48,
+  );
+  const componentZoneX = columnDividerX + COLUMN_DIVIDER_GAP;
+  const componentZoneWidth = Math.max(graphWidth - componentZoneX - edgeMargin, 48);
 
   return (
     <section
@@ -302,7 +307,7 @@ export function KraGraph({
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           className="block w-full"
           style={{ height: layout.height }}
-          preserveAspectRatio="xMidYMid meet"
+          preserveAspectRatio="xMinYMid meet"
         >
           <defs>
             <pattern
