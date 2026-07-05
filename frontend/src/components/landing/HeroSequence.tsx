@@ -2,19 +2,27 @@
 
 import Link from "next/link";
 import { motion, MotionConfig } from "framer-motion";
-import { BrainCircuit } from "lucide-react";
 
 import { GlassCtaButton } from "@/components/landing/GlassCtaButton";
-import { LandingHeroBackdrop } from "@/components/landing/LandingHeroBackdrop";
 import { REVEAL_EASE } from "@/components/landing/ScrollReveal";
 
 const item = {
-  hidden: { opacity: 0, y: 32, scale: 0.98 },
+  hidden: { opacity: 0, y: 40, filter: "blur(8px)" },
+  show: {
+    opacity: 1,
+    y: 0,
+    filter: "blur(0px)",
+    transition: { duration: 0.9, ease: REVEAL_EASE },
+  },
+};
+
+const headline = {
+  hidden: { opacity: 0, y: 56, scale: 0.96 },
   show: {
     opacity: 1,
     y: 0,
     scale: 1,
-    transition: { duration: 0.8, ease: REVEAL_EASE },
+    transition: { duration: 1, ease: REVEAL_EASE },
   },
 };
 
@@ -45,7 +53,7 @@ export function HeroSequence({ onMouseMove, heroRef }: HeroSequenceProps) {
     <motion.section
       ref={heroRef}
       onMouseMove={onMouseMove}
-      className="landing-hero-spotlight relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-slate-950 px-6 pt-24"
+      className="landing-hero-spotlight relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-6 pt-24"
       initial="hidden"
       animate="show"
       variants={{
@@ -55,8 +63,6 @@ export function HeroSequence({ onMouseMove, heroRef }: HeroSequenceProps) {
         },
       }}
     >
-      <LandingHeroBackdrop />
-
       <motion.div
         className="landing-hero-vignette pointer-events-none absolute inset-0"
         variants={{
@@ -66,23 +72,15 @@ export function HeroSequence({ onMouseMove, heroRef }: HeroSequenceProps) {
       />
 
       <div className="relative z-10 mx-auto max-w-4xl text-center">
-        <motion.div
-          variants={item}
-          className="mb-6 inline-flex items-center gap-2 rounded-full border border-zinc-800/80 bg-slate-900/40 px-4 py-1.5 text-xs text-zinc-400 backdrop-blur-md"
-        >
-          <BrainCircuit className="h-3.5 w-3.5 text-violet-400" />
-          Cognee dual-DB · PostgreSQL + knowledge graph
-        </motion.div>
-
         <motion.h1
-          variants={item}
+          variants={headline}
           className="text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl"
         >
           Engineering Intelligence.
         </motion.h1>
 
         <motion.p
-          variants={item}
+          variants={headline}
           className="landing-metallic-text mt-2 text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl"
         >
           Deciphered.
@@ -90,19 +88,12 @@ export function HeroSequence({ onMouseMove, heroRef }: HeroSequenceProps) {
 
         <motion.p
           variants={item}
-          className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-zinc-400"
+          className="mx-auto mt-8 max-w-xl text-lg leading-relaxed text-zinc-400"
         >
-          Engineering Intelligence Powered by Cognee: Unifying organization
-          knowledge graphs, live triage, and automated offboarding into a single
-          cockpit.
-        </motion.p>
-
-        <motion.p
-          variants={item}
-          className="mx-auto mt-3 max-w-xl text-sm text-zinc-500"
-        >
-          Cross-system multi-hop traversal across Slack threads, Jira tickets,
-          and Notion documents — scoped per tenant with live GitHub ingestion.
+          Turn cross-tool data chaos into a unified graph of truth. 
+          <span className="block text-zinc-500">
+          Smarter engineering decisions for Managers, seamless offboarding for HR.
+          </span>
         </motion.p>
 
         <motion.div variants={item}>
@@ -129,29 +120,21 @@ function HeroStatic({ onMouseMove, heroRef }: HeroSequenceProps) {
     <section
       ref={heroRef}
       onMouseMove={onMouseMove}
-      className="landing-hero-spotlight relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-slate-950 px-6 pt-24"
+      className="landing-hero-spotlight relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-6 pt-24"
     >
-      <LandingHeroBackdrop />
       <div className="landing-hero-vignette pointer-events-none absolute inset-0" />
       <div className="relative z-10 mx-auto max-w-4xl text-center">
-        <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-zinc-800/80 bg-slate-900/40 px-4 py-1.5 text-xs text-zinc-400 backdrop-blur-md">
-          <BrainCircuit className="h-3.5 w-3.5 text-violet-400" />
-          Cognee dual-DB · PostgreSQL + knowledge graph
-        </div>
         <h1 className="text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">
           Engineering Intelligence.
         </h1>
         <p className="landing-metallic-text mt-2 text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">
           Deciphered.
         </p>
-        <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-zinc-400">
-          Engineering Intelligence Powered by Cognee: Unifying organization
-          knowledge graphs, live triage, and automated offboarding into a single
-          cockpit.
-        </p>
-        <p className="mx-auto mt-3 max-w-xl text-sm text-zinc-500">
-          Cross-system multi-hop traversal across Slack threads, Jira tickets,
-          and Notion documents — scoped per tenant with live GitHub ingestion.
+        <p className="mx-auto mt-8 max-w-xl text-lg leading-relaxed text-zinc-400">
+          See the risk. Keep the knowledge.
+          <span className="block text-zinc-500">
+            One live graph — built for managers and HR.
+          </span>
         </p>
         <HeroCtas />
       </div>
