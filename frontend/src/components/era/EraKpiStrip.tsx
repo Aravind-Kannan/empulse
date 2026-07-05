@@ -5,8 +5,8 @@ import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
   Bell,
-  Building2,
   FileWarning,
+  Fingerprint,
   GitBranch,
   Network,
   PanelRightOpen,
@@ -53,7 +53,7 @@ function ActionIndicator({ action }: { action: SignalAction }) {
   if (action === "kra") {
     return <Network className={className} aria-hidden />;
   }
-  return <Building2 className={className} aria-hidden />;
+  return <Fingerprint className={className} aria-hidden />;
 }
 
 function toneStyles(tone: SignalTone, active: boolean): {
