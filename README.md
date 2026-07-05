@@ -55,22 +55,30 @@ Built for the **[Cognee Hackathon](https://www.cognee.ai/)**, Empulse does not r
 
 | Route | Module | What it does |
 |-------|--------|--------------|
-| `/dashboard` | Manager cockpit | Team health at a glance |
-| `/era` | **Employee Risk Assessment** | Five-dimension continuity risk per employee with linked evidence |
+| `/dashboard` | Manager cockpit | Setup checklist, team health, and digest metrics |
+| `/era` | **Employee Risk Assessment** | Command center + employee drill-down; five-dimension continuity risk with linked evidence |
 | `/kra` | **Knowledge Risk Assessment** | Critical SPOFs, doc coverage gaps, file-risk matrix, blast-radius narratives |
 | `/investigation` | Incident investigation | Multi-hop graph traversal during outage analysis |
-| `/exit` | Employee exit | Handover pack pre-filled from graph context |
-| `/settings` | Platform | Integrations, org chart, identity mapping, ERA alerts, dataset reset |
+| `/exit` | Employee knowledge handover | Handover pack pre-filled from graph context |
+| `/settings/integrations` | Integrations | Connect GitHub, Jira, Notion, Slack; token verified on save; sync jobs with live progress |
+| `/settings/org-chart` | **Organization Hub** | People (drag-and-drop org chart), components, and identity mapping in one workspace |
+| `/settings/workspace-reset` | Workspace reset | Wipe tenant graph, vectors, and optional sync ledger (user menu) |
+| `/onboarding` | Onboarding | Two-step wizard: integrations → org chart |
 
 ### Platform capabilities
 
-- **Multi-tenant workspaces** with JWT auth and optional Google / GitHub OAuth
-- **Identity mapping** — link `alice@co.com`, `gh-alice`, Slack IDs, and Jira users to one employee record
+- **Multi-tenant workspaces** with JWT auth, tenant switcher, and optional Google / GitHub OAuth
+- **Organization Hub** — unified people org chart, component provisioning, and identity mapping (`?tab=identity`)
+- **Identity mapping** — link `alice@co.com`, `gh-alice`, Slack IDs, and Jira users to one employee record; unmapped activity is quarantined, never guessed
+- **Integration token verification** — GitHub, Jira, Slack, and Notion tokens validated on save via `/api/integrations/verify-token`
 - **Integration sync jobs** — background ingest with live progress, history, and duration tracking
+- **Component path attribution** — `docs/features/` folders provision org-chart components and map source paths for blame/PR ingest
 - **Structured Cognee ontology** — `Person`, `Component`, `CodeArtifact`, `ChangeEvent`, `WorkItem`, `Document`, `Discussion` with typed relations (`owns`, `reportsTo`, `authored`, `documents`, `blocks`, `touches`, `resolves`, …)
+- **ERA v2 scoring** — five-dimension engine behind `ERA_V2_SCORING`; command-center UI behind `NEXT_PUBLIC_ERA_COMMAND_CENTER`
 - **GitHub depth** — PRs, reviews, branch commits, blame (multi-author), repo sync, code ownership (DOA); optional full file-body ingest
 - **Cognee Cloud mode** — Kuzu staging graph → `cognee.push(preserve)` → hosted search & LLM (no Neo4j/Ollama on the host)
-- **Dataset reset** — wipe tenant graph + vectors and optionally sync ledger / telemetry for a clean re-ingest
+- **Workspace reset** — wipe tenant graph + vectors and optionally sync ledger / telemetry for a clean re-ingest
+- **Integration-gated analytics** — ERA/KRA/investigation/exit show in-page blur until required connectors are connected
 - **Production cold-start UX** — `/health/db` Postgres warmup + landing-page banner for free-tier hosts
 
 ---
@@ -181,13 +189,14 @@ ollama pull nomic-embed-text
 
 ### Demo walkthrough
 
-1. **Sign up** → onboarding: company name, org chart (drag-and-drop or CSV)
-2. **Settings → Integrations** → connect GitHub (and optionally Jira, Notion, Slack)
-3. **Sync** → run integration sync; watch job progress in the UI
-4. **ERA** → `/era` — per-employee risk with evidence
-5. **KRA** → `/kra` — SPOFs, documentation coverage panel, file-risk matrix
-6. **Investigation** → `/investigation` — graph-backed incident analysis
-7. **Exit** → `/exit` — handover pack from graph context
+1. **Sign up** → onboarding step 1: connect integrations (tokens verified on save)
+2. **Onboarding step 2** → org chart: drag-and-drop people, import members from connected sources
+3. **Sync** → run integration sync from Integrations or dashboard; watch job progress in the UI
+4. **Organization Hub** → `/settings/org-chart` — refine people, components, and identity mappings
+5. **ERA** → `/era` — command center and per-employee risk with evidence; configure alerts in-page
+6. **KRA** → `/kra` — SPOFs, documentation coverage panel, file-risk matrix
+7. **Investigation** → `/investigation` — graph-backed incident analysis
+8. **Exit** → `/exit` — handover pack from graph context
 
 ---
 
@@ -207,6 +216,9 @@ ollama pull nomic-embed-text
 | `COGNEE_API_KEY` | — | Cloud API key |
 | `COGNEE_GRAPH_DB_PROVIDER` | `neo4j` | `kuzu` for embedded graph (production) |
 | `GITHUB_INGEST_FILE_CONTENT` | off | Store full file bodies on `CodeArtifact` nodes |
+| `ERA_V2_SCORING` | `true` | Five-dimension ERA scoring engine |
+| `COGNIFY_ENRICHMENT_ENABLED` | auto | LLM narrative pass after structured cognify (skipped for Ollama unless set) |
+| `INTERNAL_DEBUG_KEY` | blank | Optional guard for `/api/internal/*` debug routes |
 | `JWT_SECRET` | change me | Auth signing key |
 | `FRONTEND_URL` / `BACKEND_URL` | localhost | CORS + OAuth redirects |
 | `GOOGLE_CLIENT_*` / `GITHUB_CLIENT_*` | blank | Optional social login |
@@ -223,6 +235,7 @@ See [`backend/.env.example`](backend/.env.example) for the full list.
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend API base URL |
 | `NEXT_PUBLIC_FRONTEND_URL` | `http://localhost:3000` | Public app URL |
 | `NEXT_PUBLIC_APP_ENV` | `development` | `production` → Postgres warmup banner on landing |
+| `NEXT_PUBLIC_ERA_COMMAND_CENTER` | `true` | Set `false` for classic ERA dashboard layout |
 
 See [`frontend/.env.example`](frontend/.env.example).
 
@@ -286,8 +299,8 @@ Cloud mode skips heavy graph/vector migrations and `remember()` provisioning at 
 empulse/
 ├── frontend/                 Next.js App Router UI
 │   └── src/
-│       ├── app/              Routes (/era, /kra, /investigation, …)
-│       ├── components/       Feature UI by module
+│       ├── app/              Routes (/era, /kra, /onboarding, /settings/…)
+│       ├── components/       Feature UI by module (era, kra, org-workspace, …)
 │       └── lib/              API client, types, env helpers
 ├── backend/
 │   └── app/
@@ -295,10 +308,11 @@ empulse/
 │       ├── services/         Business logic, Cognee ingest, sync jobs
 │       ├── ontology/         Typed DataPoints for structured graph ingest
 │       └── models/           SQLAlchemy tables
+├── docs/features/            Feature READMEs + GitHub path→component attribution
 ├── design-docs/              ERA specification and implementation notes
-├── notion-docs/              Importable product + runbook pack
+├── notion-docs/design/       Product design summaries per module
 ├── docker-compose.yml        PostgreSQL + optional Neo4j
-└── prompts/                  Original build prompts (reference)
+└── cursor.md                 Developer / agent project guide
 ```
 
 ---
@@ -311,7 +325,7 @@ source .venv/bin/activate
 pytest -q
 ```
 
-67+ backend test modules cover ERA scoring, integration sync, ontology ingest, Cognee cloud mode, GitHub commits/blame, and incident investigation.
+74+ backend test modules cover ERA scoring, integration sync, ontology ingest, Cognee cloud mode, GitHub commits/blame, identity mapping, and incident investigation.
 
 ---
 
@@ -319,11 +333,12 @@ pytest -q
 
 | Path | Contents |
 |------|----------|
-| [notion-docs/](notion-docs/README.md) | Product overview, runbooks, module design |
+| [docs/features/](docs/features/README.md) | Feature map, component provisioning, path attribution |
+| [notion-docs/design/](notion-docs/design/00-platform-overview.md) | Product design summaries per module |
 | [design-docs/era/](design-docs/era/README.md) | Full ERA specification |
 | [cursor.md](cursor.md) | Developer / agent project guide |
-| [notion-docs/runbooks/01-local-development.md](notion-docs/runbooks/01-local-development.md) | Detailed local setup |
-| [notion-docs/runbooks/02-integration-sync.md](notion-docs/runbooks/02-integration-sync.md) | Connector sync behavior |
+| [docs/features/integration-sync/](docs/features/integration-sync/README.md) | Connector sync behavior |
+| [backend/docs/](backend/docs/) | Neo4j tenant queries, investigation notes |
 
 ---
 
@@ -336,7 +351,7 @@ pytest -q
 | **Notion** | Pages, documentation edges to components |
 | **Slack** | Thread discussions linked to incidents and work |
 
-All connectors share a unified **identity mapping** layer so external identities resolve to real employees in your org chart.
+All connectors share a unified **identity mapping** layer (Organization Hub → Identity tab) so external identities resolve to real employees in your org chart. Tokens are verified on save before credentials are stored.
 
 ---
 
