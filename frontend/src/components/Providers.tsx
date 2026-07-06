@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { startBackendWarmup } from "@/lib/backend-warmup";
@@ -18,9 +18,9 @@ function AuthGuardBoundary({ children }: { children: React.ReactNode }) {
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  if (typeof window !== "undefined") {
+  useEffect(() => {
     startBackendWarmup();
-  }
+  }, []);
 
   return (
     <AuthProvider>
