@@ -50,6 +50,8 @@ export type ApiFetchInit = RequestInit & {
   timeoutMs?: number;
   /** When true, failed responses do not emit a global error toast. */
   skipErrorToast?: boolean;
+  /** When true, omit Authorization / X-Tenant-ID (public probes). */
+  skipAuth?: boolean;
 };
 
 async function parseResponseError(
@@ -106,17 +108,20 @@ export function apiFetch(url: string, init?: ApiFetchInit): Promise<Response> {
     timeoutMs = 20_000,
     signal: externalSignal,
     skipErrorToast = false,
+    skipAuth = false,
     ...rest
   } = init ?? {};
   const headers = new Headers(rest.headers);
-  const token = getAccessToken();
-  const tenantId = getActiveTenantId();
 
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-  if (tenantId) {
-    headers.set("X-Tenant-ID", tenantId);
+  if (!skipAuth) {
+    const token = getAccessToken();
+    const tenantId = getActiveTenantId();
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+    if (tenantId) {
+      headers.set("X-Tenant-ID", tenantId);
+    }
   }
 
   const runFetch = async (): Promise<Response> => {

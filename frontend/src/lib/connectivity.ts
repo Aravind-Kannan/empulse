@@ -75,13 +75,20 @@ export function getAuthUnavailableMessage(
   return "Sorry — we couldn't reach the server just now. It may still be waking up. Please wait a moment and try again.";
 }
 
+const PUBLIC_PROBE_INIT = {
+  skipErrorToast: true,
+  skipAuth: true,
+  credentials: "omit" as const,
+  cache: "no-store" as const,
+};
+
 export async function probeBackendReachable(
   timeoutMs = 10_000,
 ): Promise<boolean> {
   try {
     const response = await apiFetch(`${API_BASE}/`, {
+      ...PUBLIC_PROBE_INIT,
       timeoutMs,
-      skipErrorToast: true,
     });
     return response.ok;
   } catch {

@@ -9,9 +9,10 @@ import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { notifyBackendServicesReady, probeBackendServicesStatus } from "@/lib/backend-warmup";
 import { SUPPORT_GITHUB_ISSUES_URL } from "@/lib/support";
 
-const POLL_INTERVAL_MS = 6_000;
-const PING_TIMEOUT_MS = 4_000;
 const MAX_WARMUP_ATTEMPTS = 10;
+/** Spread 10 attempts over ~120s (first immediate, then 9 gaps). */
+const POLL_INTERVAL_MS = 120_000 / (MAX_WARMUP_ATTEMPTS - 1);
+const PING_TIMEOUT_MS = 4_000;
 
 type DialogState = "probing" | "ready" | "exhausted";
 type PingPhase = "pinging" | "waiting";

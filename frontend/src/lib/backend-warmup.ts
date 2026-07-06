@@ -28,11 +28,18 @@ export function notifyBackendServicesReady(): void {
   markReady();
 }
 
+const PUBLIC_PROBE_INIT = {
+  skipErrorToast: true,
+  skipAuth: true,
+  credentials: "omit" as const,
+  cache: "no-store" as const,
+};
+
 async function pingBackend(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
   try {
     const response = await apiFetch(`${API_BASE}/`, {
+      ...PUBLIC_PROBE_INIT,
       timeoutMs,
-      skipErrorToast: true,
     });
     return response.ok;
   } catch {
@@ -43,8 +50,8 @@ async function pingBackend(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
 async function pingDatabase(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
   try {
     const response = await apiFetch(`${API_BASE}/health/db`, {
+      ...PUBLIC_PROBE_INIT,
       timeoutMs,
-      skipErrorToast: true,
     });
     return response.ok;
   } catch {
