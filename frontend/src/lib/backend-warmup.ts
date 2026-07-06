@@ -5,10 +5,13 @@ import {
 } from "./backend-warmup-state";
 import { isProductionApp } from "./env";
 
-const WARMUP_TIMEOUT_MS = 30_000;
+/** No client abort — Render/Postgres cold start can exceed 60s. */
+const COLD_START_PROBE_TIMEOUT_MS = 0;
+
 const RETRY_INTERVAL_MS = 15_000;
 
 let started = false;
+let warmupInFlight = false;
 let retryTimer: ReturnType<typeof setInterval> | null = null;
 
 function clearRetry() {
@@ -35,7 +38,9 @@ const PUBLIC_PROBE_INIT = {
   cache: "no-store" as const,
 };
 
-async function pingBackend(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
+async function pingBackend(
+  timeoutMs = COLD_START_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
   try {
     const response = await apiFetch(`${API_BASE}/`, {
       ...PUBLIC_PROBE_INIT,
@@ -47,7 +52,9 @@ async function pingBackend(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
   }
 }
 
-async function pingDatabase(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
+async function pingDatabase(
+  timeoutMs = COLD_START_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
   try {
     const response = await apiFetch(`${API_BASE}/health/db`, {
       ...PUBLIC_PROBE_INIT,
@@ -59,9 +66,17 @@ async function pingDatabase(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
   }
 }
 
-async function attemptWarmup(timeoutMs = WARMUP_TIMEOUT_MS): Promise<boolean> {
-  const status = await probeBackendServicesStatus(timeoutMs);
-  return status.api && status.database;
+async function attemptWarmup(
+  timeoutMs = COLD_START_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
+  if (warmupInFlight) return false;
+  warmupInFlight = true;
+  try {
+    const status = await probeBackendServicesStatus(timeoutMs);
+    return status.api && status.database;
+  } finally {
+    warmupInFlight = false;
+  }
 }
 
 export type BackendProbeStatus = {
@@ -71,7 +86,7 @@ export type BackendProbeStatus = {
 
 /** Probe Render API first, then Postgres — only checks DB after API is up. */
 export async function probeBackendServicesStatus(
-  timeoutMs = WARMUP_TIMEOUT_MS,
+  timeoutMs = COLD_START_PROBE_TIMEOUT_MS,
 ): Promise<BackendProbeStatus> {
   const api = await pingBackend(timeoutMs);
   if (!api) {

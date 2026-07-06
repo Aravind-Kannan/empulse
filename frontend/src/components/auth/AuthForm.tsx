@@ -75,7 +75,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   async function needsColdStartDialog(): Promise<boolean> {
     if (!isProductionApp) return false;
     if (isBackendWarmupActive()) return true;
-    return !(await pingBackendServices(800));
+    return !(await pingBackendServices(3_000));
   }
 
   async function runWithColdStartIfNeeded(

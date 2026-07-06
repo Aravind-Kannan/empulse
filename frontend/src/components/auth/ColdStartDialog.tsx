@@ -12,7 +12,6 @@ import { SUPPORT_GITHUB_ISSUES_URL } from "@/lib/support";
 const MAX_WARMUP_ATTEMPTS = 10;
 /** Spread 10 attempts over ~120s (first immediate, then 9 gaps). */
 const POLL_INTERVAL_MS = 120_000 / (MAX_WARMUP_ATTEMPTS - 1);
-const PING_TIMEOUT_MS = 4_000;
 
 type DialogState = "probing" | "ready" | "exhausted";
 type PingPhase = "pinging" | "waiting";
@@ -82,7 +81,7 @@ export function ColdStartDialog({ open, onCancel, onReady }: ColdStartDialogProp
 
       probing = true;
       try {
-        const status = await probeBackendServicesStatus(PING_TIMEOUT_MS);
+        const status = await probeBackendServicesStatus();
         if (cancelled || readyRef.current) return;
 
         setApiReached(status.api);
