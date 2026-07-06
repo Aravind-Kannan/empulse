@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 
 import { AuthGuard } from "@/components/auth/AuthGuard";
+import { startBackendWarmup } from "@/lib/backend-warmup";
 import { AuthProvider } from "@/context/AuthContext";
 import { IntegrationsProvider } from "@/context/IntegrationsContext";
 import { ToastProvider } from "@/context/ToastContext";
@@ -17,6 +18,10 @@ function AuthGuardBoundary({ children }: { children: React.ReactNode }) {
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  if (typeof window !== "undefined") {
+    startBackendWarmup();
+  }
+
   return (
     <AuthProvider>
       <ToastProvider>

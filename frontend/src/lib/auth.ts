@@ -4,6 +4,7 @@ import {
   clearAuthCredentials,
   setAuthCredentials,
 } from "./api-client";
+import { throwIfAuthUnavailable } from "./connectivity";
 
 export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
 
@@ -246,7 +247,7 @@ export async function signUpWithPassword(payload: {
     skipErrorToast: true,
   });
   if (!response.ok) {
-    throw new Error(await parseAuthError(response, "Sign up failed"));
+    await throwIfAuthUnavailable(response, "Sign up failed");
   }
   const data = (await response.json()) as AuthApiResponse;
   const applied = applySessionCredentials(data.user, data.access_token);
@@ -269,7 +270,7 @@ export async function loginWithPassword(payload: {
     skipErrorToast: true,
   });
   if (!response.ok) {
-    throw new Error(await parseAuthError(response, "Login failed"));
+    await throwIfAuthUnavailable(response, "Login failed");
   }
   const data = (await response.json()) as AuthApiResponse;
   const applied = applySessionCredentials(data.user, data.access_token);

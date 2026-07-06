@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
@@ -22,7 +21,6 @@ import {
 } from "@/components/landing/HeroSequence";
 import { IntegrationsHub } from "@/components/landing/IntegrationsHub";
 import { MinimalLandingNav } from "@/components/landing/MinimalLandingNav";
-import { PostgresWarmupBanner } from "@/components/landing/PostgresWarmupBanner";
 import {
   ParallaxLayer,
   ScrollReveal,
@@ -111,8 +109,6 @@ const FEATURES = [
 export function LandingPage() {
   const { ref: heroRef, onMouseMove } = useMouseSpotlight<HTMLElement>();
   const reducedMotion = useReducedMotion();
-  const [bannerVisible, setBannerVisible] = useState(false);
-  const navTopOffset = bannerVisible ? 44 : 0;
 
   return (
     <LandingMotionConfig>
@@ -120,8 +116,7 @@ export function LandingPage() {
         <GraphCanvasBackground />
 
         <div className="relative z-10">
-          <PostgresWarmupBanner onVisibleChange={setBannerVisible} />
-          <MinimalLandingNav topOffset={navTopOffset} />
+          <MinimalLandingNav />
 
           <HeroShell
             heroRef={heroRef}

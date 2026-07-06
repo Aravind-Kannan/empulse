@@ -7,6 +7,11 @@ import { Loader2 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useAuthErrorFromUrl } from "@/hooks/useAuthErrorFromUrl";
 import { oauthLoginUrl } from "@/lib/auth";
+import {
+  getAuthUnavailableMessage,
+  isAuthServiceUnavailable,
+} from "@/lib/connectivity";
+import { isBackendWarmupActive } from "@/lib/backend-warmup-state";
 
 const INPUT_CLASS =
   "w-full rounded-xl border border-zinc-700/80 bg-black/40 px-4 py-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-sky-500/60 focus:ring-2 focus:ring-sky-500/20";
@@ -23,6 +28,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [password, setPassword] = useState("");
   const [company, setCompany] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
   const [oauthDismissed, setOauthDismissed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const isSignup = mode === "signup";
@@ -43,8 +49,13 @@ export function AuthForm({ mode }: AuthFormProps) {
     }
   }
 
-  function handleGoogleSignIn() {
+  function clearMessages() {
     setFormError(null);
+    setFormNotice(null);
+  }
+
+  function handleGoogleSignIn() {
+    clearMessages();
     setOauthDismissed(true);
     window.location.href = oauthLoginUrl("google", oauthNextPath);
   }
@@ -52,7 +63,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     dismissOAuthError();
-    setFormError(null);
+    clearMessages();
 
     if (!email.trim()) {
       setFormError("Email is required.");
@@ -69,6 +80,11 @@ export function AuthForm({ mode }: AuthFormProps) {
 
     setSubmitting(true);
     try {
+      if (isBackendWarmupActive()) {
+        setFormNotice(getAuthUnavailableMessage(true));
+        return;
+      }
+
       if (isSignup) {
         if (!name.trim()) {
           setFormError("Name is required.");
@@ -88,10 +104,8 @@ export function AuthForm({ mode }: AuthFormProps) {
       }
       await login({ email: email.trim(), password });
     } catch (err) {
-      if (err instanceof TypeError && err.message === "Failed to fetch") {
-        setFormError(
-          "Cannot reach the API server. Ensure the backend is running on port 8000.",
-        );
+      if (isAuthServiceUnavailable(err)) {
+        setFormNotice(getAuthUnavailableMessage(isBackendWarmupActive()));
       } else {
         setFormError(
           err instanceof Error ? err.message : "Authentication failed.",
@@ -117,6 +131,12 @@ export function AuthForm({ mode }: AuthFormProps) {
             : "Access your engineering intelligence cockpit."}
         </p>
       </div>
+
+      {formNotice ? (
+        <p className="mb-4 rounded-lg border border-zinc-700/70 bg-zinc-900/50 px-3 py-2.5 text-sm leading-relaxed text-zinc-300">
+          {formNotice}
+        </p>
+      ) : null}
 
       {displayError ? (
         <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
@@ -154,7 +174,7 @@ export function AuthForm({ mode }: AuthFormProps) {
               onChange={(event) => {
                 dismissOAuthError();
                 setName(event.target.value);
-                setFormError(null);
+                clearMessages();
               }}
               placeholder="Alice Chen"
               autoComplete="name"
@@ -173,7 +193,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             onChange={(event) => {
               dismissOAuthError();
               setEmail(event.target.value);
-              setFormError(null);
+              clearMessages();
             }}
             placeholder="alice@acme.com"
             autoComplete="email"
@@ -191,7 +211,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             onChange={(event) => {
               dismissOAuthError();
               setPassword(event.target.value);
-              setFormError(null);
+              clearMessages();
             }}
             placeholder={isSignup ? "At least 8 characters" : "Your password"}
             autoComplete={isSignup ? "new-password" : "current-password"}
@@ -209,7 +229,7 @@ export function AuthForm({ mode }: AuthFormProps) {
               onChange={(event) => {
                 dismissOAuthError();
                 setCompany(event.target.value);
-                setFormError(null);
+                clearMessages();
               }}
               placeholder="Acme Corp"
               autoComplete="organization"
