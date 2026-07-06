@@ -5,6 +5,9 @@ import {
   setAuthCredentials,
 } from "./api-client";
 import { throwIfAuthUnavailable } from "./connectivity";
+import { isProductionApp } from "./env";
+
+const AUTH_REQUEST_TIMEOUT_MS = isProductionApp ? 90_000 : 20_000;
 
 export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
 
@@ -245,6 +248,7 @@ export async function signUpWithPassword(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     skipErrorToast: true,
+    timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
   });
   if (!response.ok) {
     await throwIfAuthUnavailable(response, "Sign up failed");
@@ -268,6 +272,7 @@ export async function loginWithPassword(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
     skipErrorToast: true,
+    timeoutMs: AUTH_REQUEST_TIMEOUT_MS,
   });
   if (!response.ok) {
     await throwIfAuthUnavailable(response, "Login failed");

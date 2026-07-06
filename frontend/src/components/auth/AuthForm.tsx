@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 
+import { ColdStartDialog } from "@/components/auth/ColdStartDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useAuth } from "@/context/AuthContext";
 import { useAuthErrorFromUrl } from "@/hooks/useAuthErrorFromUrl";
 import { oauthLoginUrl } from "@/lib/auth";
-import {
-  getAuthUnavailableMessage,
-  isAuthServiceUnavailable,
-} from "@/lib/connectivity";
+import { pingBackendServices } from "@/lib/backend-warmup";
 import { isBackendWarmupActive } from "@/lib/backend-warmup-state";
+import {
+  isAuthServiceUnavailable,
+  probeGoogleOAuthReady,
+} from "@/lib/connectivity";
+import { isProductionApp } from "@/lib/env";
 
 const INPUT_CLASS =
   "w-full rounded-xl border border-zinc-700/80 bg-black/40 px-4 py-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-sky-500/60 focus:ring-2 focus:ring-sky-500/20";
@@ -28,9 +32,12 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [password, setPassword] = useState("");
   const [company, setCompany] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
-  const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [coldStartOpen, setColdStartOpen] = useState(false);
+  const [oauthConfigDialogOpen, setOauthConfigDialogOpen] = useState(false);
   const [oauthDismissed, setOauthDismissed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [oauthChecking, setOauthChecking] = useState(false);
+  const pendingActionRef = useRef<(() => void | Promise<void>) | null>(null);
   const isSignup = mode === "signup";
   const oauthNextPath = isSignup ? "/onboarding" : "/dashboard";
 
@@ -51,17 +58,70 @@ export function AuthForm({ mode }: AuthFormProps) {
 
   function clearMessages() {
     setFormError(null);
-    setFormNotice(null);
   }
 
-  function handleGoogleSignIn() {
-    clearMessages();
-    setOauthDismissed(true);
-    window.location.href = oauthLoginUrl("google", oauthNextPath);
+  function openColdStartDialog(action: () => void | Promise<void>) {
+    pendingActionRef.current = action;
+    setColdStartOpen(true);
   }
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  function closeColdStartDialog() {
+    setColdStartOpen(false);
+    pendingActionRef.current = null;
+    setSubmitting(false);
+    setOauthChecking(false);
+  }
+
+  async function needsColdStartDialog(): Promise<boolean> {
+    if (!isProductionApp) return false;
+    if (isBackendWarmupActive()) return true;
+    return !(await pingBackendServices(800));
+  }
+
+  async function runWithColdStartIfNeeded(
+    action: () => void | Promise<void>,
+  ): Promise<void> {
+    if (!(await needsColdStartDialog())) {
+      await action();
+      return;
+    }
+    openColdStartDialog(action);
+  }
+
+  function handleColdStartReady() {
+    setColdStartOpen(false);
+    const action = pendingActionRef.current;
+    pendingActionRef.current = null;
+    void action?.();
+  }
+
+  async function submitCredentialsCore() {
+    setSubmitting(true);
+    try {
+      if (isSignup) {
+        await signUp({
+          name: name.trim(),
+          email: email.trim(),
+          password,
+          company: company.trim(),
+        });
+        return;
+      }
+      await login({ email: email.trim(), password });
+    } catch (err) {
+      if (isAuthServiceUnavailable(err)) {
+        openColdStartDialog(() => submitCredentialsCore());
+        return;
+      }
+      setFormError(
+        err instanceof Error ? err.message : "Authentication failed.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitCredentials() {
     dismissOAuthError();
     clearMessages();
 
@@ -78,42 +138,47 @@ export function AuthForm({ mode }: AuthFormProps) {
       return;
     }
 
-    setSubmitting(true);
-    try {
-      if (isBackendWarmupActive()) {
-        setFormNotice(getAuthUnavailableMessage(true));
+    if (isSignup) {
+      if (!name.trim()) {
+        setFormError("Name is required.");
         return;
       }
-
-      if (isSignup) {
-        if (!name.trim()) {
-          setFormError("Name is required.");
-          return;
-        }
-        if (!company.trim()) {
-          setFormError("Company name is required.");
-          return;
-        }
-        await signUp({
-          name: name.trim(),
-          email: email.trim(),
-          password,
-          company: company.trim(),
-        });
+      if (!company.trim()) {
+        setFormError("Company name is required.");
         return;
       }
-      await login({ email: email.trim(), password });
-    } catch (err) {
-      if (isAuthServiceUnavailable(err)) {
-        setFormNotice(getAuthUnavailableMessage(isBackendWarmupActive()));
-      } else {
-        setFormError(
-          err instanceof Error ? err.message : "Authentication failed.",
-        );
-      }
-    } finally {
-      setSubmitting(false);
     }
+
+    await runWithColdStartIfNeeded(() => submitCredentialsCore());
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    await submitCredentials();
+  }
+
+  async function proceedToGoogle() {
+    setOauthChecking(true);
+    try {
+      const status = await probeGoogleOAuthReady(5_000);
+      if (status === "ready") {
+        window.location.href = oauthLoginUrl("google", oauthNextPath);
+        return;
+      }
+      if (status === "not_configured") {
+        setOauthConfigDialogOpen(true);
+        return;
+      }
+      openColdStartDialog(() => proceedToGoogle());
+    } finally {
+      setOauthChecking(false);
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    clearMessages();
+    setOauthDismissed(true);
+    await runWithColdStartIfNeeded(() => proceedToGoogle());
   }
 
   return (
@@ -132,12 +197,6 @@ export function AuthForm({ mode }: AuthFormProps) {
         </p>
       </div>
 
-      {formNotice ? (
-        <p className="mb-4 rounded-lg border border-zinc-700/70 bg-zinc-900/50 px-3 py-2.5 text-sm leading-relaxed text-zinc-300">
-          {formNotice}
-        </p>
-      ) : null}
-
       {displayError ? (
         <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
           {displayError}
@@ -147,10 +206,15 @@ export function AuthForm({ mode }: AuthFormProps) {
       <div className="mb-6 space-y-2.5">
         <button
           type="button"
-          onClick={handleGoogleSignIn}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700/80 bg-black/30 px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-black/50"
+          onClick={() => void handleGoogleSignIn()}
+          disabled={oauthChecking || submitting || coldStartOpen}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700/80 bg-black/30 px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-zinc-600 hover:bg-black/50 disabled:opacity-60"
         >
-          <GoogleIcon />
+          {oauthChecking ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <GoogleIcon />
+          )}
           Continue with Google
         </button>
         <div className="relative py-2">
@@ -240,7 +304,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || oauthChecking || coldStartOpen}
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-black transition hover:bg-white disabled:opacity-60"
         >
           {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -271,6 +335,22 @@ export function AuthForm({ mode }: AuthFormProps) {
           </>
         )}
       </p>
+
+      <ColdStartDialog
+        open={coldStartOpen}
+        onCancel={closeColdStartDialog}
+        onReady={handleColdStartReady}
+      />
+
+      <ConfirmDialog
+        open={oauthConfigDialogOpen}
+        title="Google sign-in unavailable"
+        description="Google sign-in isn't configured on this deployment yet. Use email and password instead."
+        cancelLabel="Close"
+        confirmLabel="OK"
+        onCancel={() => setOauthConfigDialogOpen(false)}
+        onConfirm={() => setOauthConfigDialogOpen(false)}
+      />
     </>
   );
 }
